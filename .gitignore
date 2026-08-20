@@ -1,1 +1,5 @@
 *.mp4
+__pycache__/
+*.py[cod]
+python3/download/
+python3/.douyin-browser-profile/
