@@ -18,6 +18,9 @@ venv/bin/python douyin_downloader.py
 需要的资源；文件会保存到 `python3/download/`，并同步到
 `/mnt/Android/douyin_download/`。
 
+下载目录默认按中国时区（`Asia/Shanghai`）命名。如需改用其他时区，可在运行
+前设置环境变量，例如 `DOWNLOAD_TIMEZONE=UTC ./run`。
+
 ## 原理
 
 抖音分享页不再向普通 HTTP 客户端提供作品详情。本脚本在 HTTP 解析失败后，

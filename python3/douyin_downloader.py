@@ -17,12 +17,14 @@ import shutil
 import subprocess
 import tempfile
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from requests.packages import urllib3
 urllib3.disable_warnings()
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BROWSER_PROFILE_DIR = os.path.join(SCRIPT_DIR, ".douyin-browser-profile")
+DEFAULT_TIMEZONE = "Asia/Shanghai"
 
 TYPE_PREFIX = {"video": "video", "image": "img", "bgm": "bgm", "bgm_direct": "bgm"}
 
@@ -312,6 +314,11 @@ def _pick_url(value, preferred_extensions=()):
     return urls[0] if urls else None
 
 
+def _image_quality(url):
+    match = re.search(r'[:_-]q(\d+)(?:[._:?]|$)', url, re.IGNORECASE)
+    return f"q{match.group(1)}" if match else None
+
+
 def _douyin_video_urls(video):
     bitrate_urls = []
     for bitrate in video.get("bitRateList") or video.get("bit_rate") or []:
@@ -352,6 +359,9 @@ def _douyin_items_from_detail(detail, browser_headers=None):
                 "type": "image",
                 "addr": url,
                 "ext": _guess_ext(url),
+                "width": image.get("width"),
+                "height": image.get("height"),
+                "quality": _image_quality(url),
                 "referer": "https://www.douyin.com/",
                 "headers": item_headers,
             })
@@ -576,6 +586,17 @@ def _make_filename(item_type, ext, counter):
     return f"{prefix}_{counter}.{ext}"
 
 
+def _download_folder_name():
+    """默认使用中国时区，允许通过 DOWNLOAD_TIMEZONE 覆盖。"""
+    timezone_name = os.environ.get("DOWNLOAD_TIMEZONE", DEFAULT_TIMEZONE)
+    try:
+        now = datetime.now(ZoneInfo(timezone_name))
+    except ZoneInfoNotFoundError:
+        print(f"  未找到时区 {timezone_name}，改用系统时间")
+        now = datetime.now()
+    return now.strftime("%Y-%m-%d_%H-%M-%S")
+
+
 def _download_stream(resp, file_obj, desc):
     """流式写入文件，实时刷新下载进度（0%-100%）"""
     try:
@@ -753,7 +774,25 @@ if __name__ == '__main__':
             for tp in DISPLAY_ORDER:
                 if tp in type_count:
                     label = TYPE_LABELS.get(tp, tp)
-                    print(f"  [{idx}] {label} ×{type_count[tp]}")
+                    details = ""
+                    if tp == "image":
+                        image_items = [item for item in items if item["type"] == tp]
+                        dimensions = {
+                            f"{item['width']}×{item['height']}"
+                            for item in image_items
+                            if item.get("width") and item.get("height")
+                        }
+                        qualities = {
+                            item["quality"] for item in image_items if item.get("quality")
+                        }
+                        detail_parts = []
+                        if len(dimensions) == 1:
+                            detail_parts.append(next(iter(dimensions)))
+                        if len(qualities) == 1:
+                            detail_parts.append(f"网页端 {next(iter(qualities))}")
+                        if detail_parts:
+                            details = f"（{'，'.join(detail_parts)}）"
+                    print(f"  [{idx}] {label} ×{type_count[tp]}{details}")
                     idx_map[str(idx)] = tp
                     available_types.append(tp)
                     idx += 1
@@ -781,7 +820,7 @@ if __name__ == '__main__':
             print()
 
             # ── 下载 ──
-            folder = os.path.join(SCRIPT_DIR, "download", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+            folder = os.path.join(SCRIPT_DIR, "download", _download_folder_name())
             counters = {}
 
             for item in items:
