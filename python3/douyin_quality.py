@@ -299,3 +299,33 @@ def choose_video_variant(item, input_fn=input, output_fn=print):
             result["selected_variant"] = selected
             return result
         output_fn("输入无效，请输入列表中的编号。")
+
+
+def choose_video_download_mode(item, input_fn=input, output_fn=print):
+    """选择视频、音频分轨和无损合成的保存方式。"""
+    if not item.get("audio_addrs"):
+        result = dict(item)
+        result["download_mode"] = "video_only"
+        output_fn("当前作品没有独立音频轨，将直接保存视频文件。")
+        return result
+
+    modes = {
+        "1": ("merge_keep", "视频 + 音频 + 合成，并保留三个文件"),
+        "2": ("tracks", "视频 + 音频分轨，不合成"),
+        "3": ("video_only", "仅视频轨"),
+        "4": ("audio_only", "仅音频轨"),
+    }
+    output_fn("\n请选择视频下载方式（默认合成并保留分轨）：")
+    for key, (_, label) in modes.items():
+        suffix = "（默认）" if key == "1" else ""
+        output_fn(f"  [{key}] {label}{suffix}")
+
+    while True:
+        choice = input_fn("请选择下载方式，直接回车使用默认方式：").strip()
+        if not choice:
+            choice = "1"
+        if choice in modes:
+            result = dict(item)
+            result["download_mode"] = modes[choice][0]
+            return result
+        output_fn("输入无效，请输入 1、2、3 或 4。")

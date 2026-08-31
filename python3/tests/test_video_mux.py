@@ -51,8 +51,15 @@ class VideoMuxTests(unittest.TestCase):
                 "audio_addrs": ["audio"],
                 "referer": "https://www.douyin.com/",
             }
+            item["download_mode"] = "merge_keep"
             with mock.patch.object(douyin_downloader, "download_file", fake_download):
-                douyin_downloader.download_video(item, output, {})
+                paths = douyin_downloader.download_video(item, output, {})
+
+            video_track = os.path.join(folder, "result_video.mp4")
+            audio_track = os.path.join(folder, "result_audio.m4a")
+            self.assertEqual(paths, [video_track, audio_track, output])
+            self.assertTrue(os.path.isfile(video_track))
+            self.assertTrue(os.path.isfile(audio_track))
 
             probe = subprocess.run(
                 [
@@ -64,6 +71,66 @@ class VideoMuxTests(unittest.TestCase):
                 check=True,
             )
             self.assertEqual(set(probe.stdout.split()), {"video", "audio"})
+
+    def test_tracks_mode_does_not_create_merged_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            video_source = os.path.join(folder, "source-video.mp4")
+            audio_source = os.path.join(folder, "source-audio.m4a")
+            output = os.path.join(folder, "result.mp4")
+            with open(video_source, "wb") as file_obj:
+                file_obj.write(b"video")
+            with open(audio_source, "wb") as file_obj:
+                file_obj.write(b"audio")
+
+            def fake_download(item, filepath, _headers):
+                source = audio_source if item["addr"] == "audio" else video_source
+                shutil.copyfile(source, filepath)
+                return filepath
+
+            item = {
+                "addr": "video",
+                "addrs": ["video"],
+                "audio_addrs": ["audio"],
+                "referer": "https://www.douyin.com/",
+                "download_mode": "tracks",
+            }
+            with mock.patch.object(douyin_downloader, "download_file", fake_download):
+                paths = douyin_downloader.download_video(item, output, {})
+
+            self.assertEqual(
+                paths,
+                [
+                    os.path.join(folder, "result_video.mp4"),
+                    os.path.join(folder, "result_audio.m4a"),
+                ],
+            )
+            self.assertFalse(os.path.exists(output))
+
+    def test_missing_ffmpeg_keeps_both_tracks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = os.path.join(folder, "result.mp4")
+
+            def fake_download(item, filepath, _headers):
+                with open(filepath, "wb") as file_obj:
+                    file_obj.write(item["addr"].encode())
+                return filepath
+
+            item = {
+                "addr": "video",
+                "addrs": ["video"],
+                "audio_addrs": ["audio"],
+                "referer": "https://www.douyin.com/",
+                "download_mode": "merge_keep",
+            }
+            with (
+                mock.patch.object(douyin_downloader, "download_file", fake_download),
+                mock.patch.object(douyin_downloader, "_has_ffmpeg", return_value=False),
+            ):
+                paths = douyin_downloader.download_video(item, output, {})
+
+            self.assertEqual(len(paths), 2)
+            self.assertTrue(all(os.path.isfile(path) for path in paths))
+            self.assertFalse(os.path.exists(output))
 
 
 if __name__ == "__main__":

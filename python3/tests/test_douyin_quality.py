@@ -9,6 +9,7 @@ if PYTHON_DIR not in sys.path:
     sys.path.insert(0, PYTHON_DIR)
 
 from douyin_quality import (  # noqa: E402
+    choose_video_download_mode,
     choose_video_variant,
     extract_audio_urls,
     extract_image_urls,
@@ -87,6 +88,29 @@ class VideoVariantTests(unittest.TestCase):
 
         self.assertEqual(selected["addr"], "https://cdn.example/720.mp4")
         self.assertEqual(selected["selected_variant"]["height"], 1280)
+
+    def test_download_mode_defaults_to_merge_and_keep_tracks(self):
+        output = []
+        item = {"audio_addrs": ["https://cdn.example/audio.m4a"]}
+
+        selected = choose_video_download_mode(
+            item,
+            input_fn=lambda _prompt: "",
+            output_fn=output.append,
+        )
+
+        self.assertEqual(selected["download_mode"], "merge_keep")
+
+    def test_download_mode_supports_audio_only(self):
+        item = {"audio_addrs": ["https://cdn.example/audio.m4a"]}
+
+        selected = choose_video_download_mode(
+            item,
+            input_fn=lambda _prompt: "4",
+            output_fn=lambda _message: None,
+        )
+
+        self.assertEqual(selected["download_mode"], "audio_only")
 
 
 class ImageVariantTests(unittest.TestCase):

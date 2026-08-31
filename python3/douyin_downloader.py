@@ -20,6 +20,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from douyin_quality import (
+    choose_video_download_mode,
     choose_video_variant,
     extract_audio_urls,
     extract_image_urls,
@@ -728,28 +729,16 @@ def download_file(item, filepath, headers):
 
 
 def download_video(item, filepath, headers):
-    """下载最高质量视频；DASH 分离流使用 ffmpeg 无损封装音视频。"""
+    """按用户选择保存视频/音频分轨，可无损合并并永久保留分轨。"""
     audio_addresses = item.get("audio_addrs") or []
     if not audio_addresses:
-        return download_file(item, filepath, headers)
-
-    if not _has_ffmpeg():
-        raise Exception(
-            "该清晰度是分离式音视频流，需要 ffmpeg 无损合并；"
-            "请执行：apt install ffmpeg"
-        )
+        return [download_file(item, filepath, headers)]
 
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    video_temp = tempfile.NamedTemporaryFile(
-        suffix=".video.mp4", delete=False, dir=os.path.dirname(filepath)
-    )
-    audio_temp = tempfile.NamedTemporaryFile(
-        suffix=".audio.m4a", delete=False, dir=os.path.dirname(filepath)
-    )
-    video_path = video_temp.name
-    audio_path = audio_temp.name
-    video_temp.close()
-    audio_temp.close()
+    stem, extension = os.path.splitext(filepath)
+    video_path = f"{stem}_video{extension or '.mp4'}"
+    audio_path = f"{stem}_audio.m4a"
+    mode = item.get("download_mode") or "merge_keep"
 
     audio_item = {
         **item,
@@ -757,32 +746,45 @@ def download_video(item, filepath, headers):
         "addrs": audio_addresses,
         "audio_addrs": [],
     }
-    try:
+    paths = []
+    if mode in {"merge_keep", "tracks", "video_only"}:
         download_file(item, video_path, headers)
+        paths.append(video_path)
+    if mode in {"merge_keep", "tracks", "audio_only"}:
         download_file(audio_item, audio_path, headers)
-        print("正在无损合并最高质量音视频……")
-        process = subprocess.run(
-            [
-                "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
-                "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
-                "-movflags", "+faststart", filepath,
-            ],
-            capture_output=True,
-            text=True,
+        paths.append(audio_path)
+
+    if mode != "merge_keep":
+        return paths
+
+    if not _has_ffmpeg():
+        print("未找到 ffmpeg，已保留视频和音频分轨，但没有生成合成文件")
+        return paths
+
+    print("正在无损合并最高质量音视频（分轨文件会保留）……")
+    process = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
+            "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
+            "-movflags", "+faststart", filepath,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if process.returncode != 0:
+        message = process.stderr.strip().splitlines()
+        print(
+            "ffmpeg 合并音视频失败，视频和音频分轨已保留："
+            + (message[-1] if message else "未知错误")
         )
-        if process.returncode != 0:
-            message = process.stderr.strip().splitlines()
-            raise Exception(
-                "ffmpeg 合并音视频失败："
-                + (message[-1] if message else "未知错误")
-            )
-        return filepath
-    finally:
-        for temp_path in (video_path, audio_path):
-            try:
-                os.unlink(temp_path)
-            except FileNotFoundError:
-                pass
+        try:
+            os.unlink(filepath)
+        except FileNotFoundError:
+            pass
+        return paths
+
+    paths.append(filepath)
+    return paths
 
 
 def download_bgm(item, filepath, headers):
@@ -940,6 +942,7 @@ if __name__ == '__main__':
                         continue
                     selected = choose_video_variant(item)
                     if selected is not None:
+                        selected = choose_video_download_mode(selected)
                         selected_items.append(selected)
                         variant = selected.get("selected_variant")
                         if variant:
@@ -975,7 +978,9 @@ if __name__ == '__main__':
                     path = download_file(item, filepath, headers)
 
                 if path:
-                    print(f"  -> {path}")
+                    paths = path if isinstance(path, list) else [path]
+                    for saved_path in paths:
+                        print(f"  -> {saved_path}")
 
             # 同步到 Android 目录
             target = os.path.join("/mnt/Android/douyin_download", os.path.basename(folder))
