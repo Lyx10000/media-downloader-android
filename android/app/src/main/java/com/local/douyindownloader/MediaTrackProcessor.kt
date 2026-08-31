@@ -1,0 +1,112 @@
+package com.local.douyindownloader
+
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMuxer
+import java.io.File
+import java.nio.ByteBuffer
+
+object MediaTrackProcessor {
+    fun extractVideo(source: File, output: File) = copySingleTrack(source, output, "video/")
+
+    fun extractAudio(source: File, output: File) = copySingleTrack(source, output, "audio/")
+
+    fun mux(videoSource: File, audioSource: File, output: File) {
+        output.parentFile?.mkdirs()
+        val video = selectedExtractor(videoSource, "video/")
+        val audio = selectedExtractor(audioSource, "audio/")
+        val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        try {
+            val videoOutputTrack = muxer.addTrack(video.format)
+            val audioOutputTrack = muxer.addTrack(audio.format)
+            muxer.start()
+            copySamples(video.extractor, videoOutputTrack, muxer, video.format)
+            copySamples(audio.extractor, audioOutputTrack, muxer, audio.format)
+        } finally {
+            video.extractor.release()
+            audio.extractor.release()
+            runCatching { muxer.stop() }
+            muxer.release()
+        }
+    }
+
+    fun probe(source: File): List<Map<String, Any>> {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(source.absolutePath)
+            (0 until extractor.trackCount).map { index ->
+                val format = extractor.getTrackFormat(index)
+                buildMap {
+                    put("index", index)
+                    put("mime", format.getString(MediaFormat.KEY_MIME).orEmpty())
+                    if (format.containsKey(MediaFormat.KEY_WIDTH)) put("width", format.getInteger(MediaFormat.KEY_WIDTH))
+                    if (format.containsKey(MediaFormat.KEY_HEIGHT)) put("height", format.getInteger(MediaFormat.KEY_HEIGHT))
+                    if (format.containsKey(MediaFormat.KEY_BIT_RATE)) put("bitrate", format.getInteger(MediaFormat.KEY_BIT_RATE))
+                }
+            }
+        } finally {
+            extractor.release()
+        }
+    }
+
+    private fun copySingleTrack(source: File, output: File, mimePrefix: String) {
+        output.parentFile?.mkdirs()
+        val selected = selectedExtractor(source, mimePrefix)
+        val muxer = MediaMuxer(output.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        try {
+            val outputTrack = muxer.addTrack(selected.format)
+            muxer.start()
+            copySamples(selected.extractor, outputTrack, muxer, selected.format)
+        } finally {
+            selected.extractor.release()
+            runCatching { muxer.stop() }
+            muxer.release()
+        }
+    }
+
+    private fun selectedExtractor(source: File, mimePrefix: String): SelectedTrack {
+        val extractor = MediaExtractor()
+        extractor.setDataSource(source.absolutePath)
+        for (index in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(index)
+            if (format.getString(MediaFormat.KEY_MIME)?.startsWith(mimePrefix) == true) {
+                extractor.selectTrack(index)
+                return SelectedTrack(extractor, format)
+            }
+        }
+        extractor.release()
+        error("源文件没有${if (mimePrefix == "audio/") "音频" else "视频"}轨")
+    }
+
+    private fun copySamples(
+        extractor: MediaExtractor,
+        outputTrack: Int,
+        muxer: MediaMuxer,
+        format: MediaFormat,
+    ) {
+        val maxSize = if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+            format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(1024 * 1024)
+        } else {
+            8 * 1024 * 1024
+        }
+        val buffer = ByteBuffer.allocateDirect(maxSize)
+        val info = android.media.MediaCodec.BufferInfo()
+        while (true) {
+            buffer.clear()
+            val size = extractor.readSampleData(buffer, 0)
+            if (size < 0) break
+            info.offset = 0
+            info.size = size
+            info.presentationTimeUs = extractor.sampleTime
+            info.flags = extractor.sampleFlags
+            muxer.writeSampleData(outputTrack, buffer, info)
+            extractor.advance()
+        }
+    }
+
+    private data class SelectedTrack(
+        val extractor: MediaExtractor,
+        val format: MediaFormat,
+    )
+}
+
