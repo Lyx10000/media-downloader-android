@@ -17,6 +17,29 @@ import douyin_downloader  # noqa: E402
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "需要 ffmpeg")
 class VideoMuxTests(unittest.TestCase):
+    def _make_muxed_source(self, filepath):
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                "color=c=black:s=64x64:d=0.2", "-f", "lavfi", "-i",
+                "sine=frequency=1000:duration=0.2", "-c:v", "libx264",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", filepath,
+            ],
+            check=True,
+        )
+
+    def _stream_types(self, filepath):
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0", filepath,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return set(probe.stdout.split())
+
     def test_dash_video_and_audio_are_stream_copied_into_one_mp4(self):
         with tempfile.TemporaryDirectory() as folder:
             video_source = os.path.join(folder, "source-video.mp4")
@@ -131,6 +154,67 @@ class VideoMuxTests(unittest.TestCase):
             self.assertEqual(len(paths), 2)
             self.assertTrue(all(os.path.isfile(path) for path in paths))
             self.assertFalse(os.path.exists(output))
+
+    def test_muxed_source_default_keeps_source_and_extracts_both_tracks(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = os.path.join(folder, "source.mp4")
+            output = os.path.join(folder, "result.mp4")
+            self._make_muxed_source(source)
+
+            def fake_download(_item, filepath, _headers):
+                shutil.copyfile(source, filepath)
+                return filepath
+
+            item = {
+                "addr": "muxed",
+                "addrs": ["muxed"],
+                "audio_addrs": [],
+                "referer": "https://www.douyin.com/",
+                "download_mode": "merge_keep",
+            }
+            with mock.patch.object(douyin_downloader, "download_file", fake_download):
+                paths = douyin_downloader.download_video(item, output, {})
+
+            video_track = os.path.join(folder, "result_video.mp4")
+            audio_track = os.path.join(folder, "result_audio.m4a")
+            self.assertEqual(paths, [video_track, audio_track, output])
+            self.assertEqual(self._stream_types(output), {"video", "audio"})
+            self.assertEqual(self._stream_types(video_track), {"video"})
+            self.assertEqual(self._stream_types(audio_track), {"audio"})
+
+    def test_muxed_source_supports_tracks_video_and_audio_modes(self):
+        for mode, expected_names in (
+            ("tracks", ["result_video.mp4", "result_audio.m4a"]),
+            ("video_only", ["result_video.mp4"]),
+            ("audio_only", ["result_audio.m4a"]),
+        ):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder:
+                source = os.path.join(folder, "source.mp4")
+                output = os.path.join(folder, "result.mp4")
+                self._make_muxed_source(source)
+
+                def fake_download(_item, filepath, _headers):
+                    shutil.copyfile(source, filepath)
+                    return filepath
+
+                item = {
+                    "addr": "muxed",
+                    "addrs": ["muxed"],
+                    "audio_addrs": [],
+                    "referer": "https://www.douyin.com/",
+                    "download_mode": mode,
+                }
+                with mock.patch.object(douyin_downloader, "download_file", fake_download):
+                    paths = douyin_downloader.download_video(item, output, {})
+
+                self.assertEqual(
+                    paths,
+                    [os.path.join(folder, name) for name in expected_names],
+                )
+                self.assertFalse(os.path.exists(output))
+                for path in paths:
+                    expected_type = "audio" if path.endswith(".m4a") else "video"
+                    self.assertEqual(self._stream_types(path), {expected_type})
 
 
 if __name__ == "__main__":

@@ -112,6 +112,20 @@ class VideoVariantTests(unittest.TestCase):
 
         self.assertEqual(selected["download_mode"], "audio_only")
 
+    def test_download_mode_is_available_for_muxed_source(self):
+        output = []
+        item = {"audio_addrs": []}
+
+        selected = choose_video_download_mode(
+            item,
+            input_fn=lambda _prompt: "4",
+            output_fn=output.append,
+        )
+
+        self.assertEqual(selected["download_mode"], "audio_only")
+        self.assertTrue(any("音视频合一" in message for message in output))
+        self.assertTrue(any("[4]" in message for message in output))
+
 
 class ImageVariantTests(unittest.TestCase):
     def test_origin_url_precedes_compressed_cdn_variants(self):

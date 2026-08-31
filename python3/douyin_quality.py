@@ -267,7 +267,7 @@ def format_video_variant(variant):
     if variant.get("codec"):
         parts.append(variant["codec"])
     if variant.get("size"):
-        parts.append(f"约 {variant['size'] / 1048576:.1f} MB（不含音频）")
+        parts.append(f"约 {variant['size'] / 1048576:.1f} MB")
     return " / ".join(parts)
 
 
@@ -303,19 +303,24 @@ def choose_video_variant(item, input_fn=input, output_fn=print):
 
 def choose_video_download_mode(item, input_fn=input, output_fn=print):
     """选择视频、音频分轨和无损合成的保存方式。"""
-    if not item.get("audio_addrs"):
-        result = dict(item)
-        result["download_mode"] = "video_only"
-        output_fn("当前作品没有独立音频轨，将直接保存视频文件。")
-        return result
-
-    modes = {
-        "1": ("merge_keep", "视频 + 音频 + 合成，并保留三个文件"),
-        "2": ("tracks", "视频 + 音频分轨，不合成"),
-        "3": ("video_only", "仅视频轨"),
-        "4": ("audio_only", "仅音频轨"),
-    }
-    output_fn("\n请选择视频下载方式（默认合成并保留分轨）：")
+    if item.get("audio_addrs"):
+        prompt = "\n请选择视频下载方式（默认合成并保留分轨）："
+        modes = {
+            "1": ("merge_keep", "视频 + 音频 + 合成，并保留三个文件"),
+            "2": ("tracks", "视频 + 音频分轨，不合成"),
+            "3": ("video_only", "仅视频轨"),
+            "4": ("audio_only", "仅音频轨"),
+        }
+    else:
+        output_fn("\n当前档位是音视频合一文件，将用 ffmpeg 无损拆轨。")
+        prompt = "\n请选择视频下载方式（默认保留原始文件和拆分轨）："
+        modes = {
+            "1": ("merge_keep", "原始音视频 + 视频分轨 + 音频分轨，保留三个文件"),
+            "2": ("tracks", "仅保存拆分后的视频轨 + 音频轨"),
+            "3": ("video_only", "仅保存拆分后的视频轨"),
+            "4": ("audio_only", "仅保存拆分后的音频轨"),
+        }
+    output_fn(prompt)
     for key, (_, label) in modes.items():
         suffix = "（默认）" if key == "1" else ""
         output_fn(f"  [{key}] {label}{suffix}")

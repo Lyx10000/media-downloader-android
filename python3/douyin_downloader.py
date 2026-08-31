@@ -732,7 +732,7 @@ def download_video(item, filepath, headers):
     """按用户选择保存视频/音频分轨，可无损合并并永久保留分轨。"""
     audio_addresses = item.get("audio_addrs") or []
     if not audio_addresses:
-        return [download_file(item, filepath, headers)]
+        return _download_muxed_video(item, filepath, headers)
 
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     stem, extension = os.path.splitext(filepath)
@@ -785,6 +785,87 @@ def download_video(item, filepath, headers):
 
     paths.append(filepath)
     return paths
+
+
+def _extract_muxed_track(source_path, output_path, stream_selector, label):
+    """从音视频合一文件中 stream copy 单条轨道，不重新编码。"""
+    process = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", source_path,
+            "-map", stream_selector, "-c", "copy", output_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if process.returncode == 0:
+        return True
+
+    try:
+        os.unlink(output_path)
+    except FileNotFoundError:
+        pass
+    message = process.stderr.strip().splitlines()
+    print(
+        f"ffmpeg 提取{label}失败："
+        + (message[-1] if message else "源文件可能没有该轨道")
+    )
+    return False
+
+
+def _download_muxed_video(item, filepath, headers):
+    """下载音视频合一源文件，并按选择用 stream copy 无损拆轨。"""
+    mode = item.get("download_mode") or "merge_keep"
+    stem, extension = os.path.splitext(filepath)
+    extension = extension or ".mp4"
+    video_path = f"{stem}_video{extension}"
+    audio_path = f"{stem}_audio.m4a"
+
+    if not _has_ffmpeg():
+        if mode == "merge_keep":
+            download_file(item, filepath, headers)
+            print("未找到 ffmpeg，无法拆轨；已保留原始音视频文件")
+            return [filepath]
+        raise Exception(
+            "当前档位是音视频合一文件，所选模式需要 ffmpeg 无损拆轨；"
+            "请先安装 ffmpeg"
+        )
+
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    keep_source = mode == "merge_keep"
+    if keep_source:
+        source_path = filepath
+    else:
+        temporary = tempfile.NamedTemporaryFile(
+            prefix=f".{os.path.basename(stem)}_source_",
+            suffix=extension,
+            dir=os.path.dirname(filepath),
+            delete=False,
+        )
+        source_path = temporary.name
+        temporary.close()
+
+    try:
+        download_file(item, source_path, headers)
+        print("正在从原始音视频文件无损拆分轨道……")
+        paths = []
+        if mode in {"merge_keep", "tracks", "video_only"}:
+            if _extract_muxed_track(source_path, video_path, "0:v:0", "视频轨"):
+                paths.append(video_path)
+        if mode in {"merge_keep", "tracks", "audio_only"}:
+            if _extract_muxed_track(source_path, audio_path, "0:a:0", "音频轨"):
+                paths.append(audio_path)
+
+        if keep_source:
+            paths.append(filepath)
+        if not paths:
+            raise Exception("原始文件中没有找到所选轨道")
+        return paths
+    finally:
+        if not keep_source:
+            try:
+                os.unlink(source_path)
+            except FileNotFoundError:
+                pass
 
 
 def download_bgm(item, filepath, headers):
