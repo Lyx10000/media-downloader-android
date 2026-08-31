@@ -19,6 +19,15 @@ import tempfile
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from douyin_quality import (
+    choose_video_variant,
+    extract_audio_urls,
+    extract_image_urls,
+    extract_video_variants,
+    fetch_douyin_detail,
+    format_video_variant,
+)
+
 from requests.packages import urllib3
 urllib3.disable_warnings()
 
@@ -50,6 +59,19 @@ def parse_douyin(url, headers):
         raise Exception(f"请求失败，状态码：{res.status_code}")
 
     html = res.text
+    item_id, item_kind = _douyin_item_target(res.url, url)
+    browser_error = None
+
+    # 完整详情 API 才能给出所有分辨率/码率档位，因此对可识别作品优先
+    # 进入浏览器：浏览器提供安全 Cookie，签名 API 提供完整媒体元数据。
+    if item_id:
+        print("正在读取抖音完整质量档位……")
+        try:
+            detail, browser_headers = _parse_douyin_with_browser(item_id, item_kind)
+            return _douyin_items_from_detail(detail, browser_headers)
+        except Exception as exc:
+            browser_error = exc
+
     aweme_match = re.search(r'"aweme_type"\s*:\s*(\d+)', html)
     aweme_type = int(aweme_match.group(1)) if aweme_match else None
 
@@ -64,13 +86,10 @@ def parse_douyin(url, headers):
         except Exception:
             pass
 
-    item_id, item_kind = _douyin_item_target(res.url, url)
     if not item_id:
         raise Exception("抖音链接已打开，但无法从跳转地址识别作品 ID")
 
-    print("分享页未包含作品数据，正在启动 Chromium 解析……")
-    detail, browser_headers = _parse_douyin_with_browser(item_id, item_kind)
-    return _douyin_items_from_detail(detail, browser_headers)
+    raise browser_error or Exception("抖音作品解析失败")
 
 
 def _douyin_item_target(*urls):
@@ -229,6 +248,16 @@ def _parse_douyin_with_browser(item_id, item_kind):
         })
         driver.get(page_url)
 
+        # 页面访问会生成 __ac_signature、ttwid、odin_tt 等安全 Cookie。
+        # 用这些 Cookie 调签名详情 API，可获得播放器没有请求的全部质量档位。
+        try:
+            api_detail = fetch_douyin_detail(item_id, driver.get_cookies())
+            if api_detail:
+                print("已取得抖音完整质量档位")
+                return api_detail, {"User-Agent": user_agent}
+        except Exception as exc:
+            print(f"完整质量接口不可用，改用网页播放器兜底：{exc}")
+
         def find_detail(current_driver):
             page_data = current_driver.execute_script(
                 """
@@ -262,12 +291,24 @@ def _parse_douyin_with_browser(item_id, item_kind):
                 media_urls = page_data["mediaUrls"]
                 tagged_urls = [url for url in media_urls if item_id in url]
                 if tagged_urls or media_urls:
+                    selected_urls = tagged_urls or media_urls
+                    video_urls = [
+                        url for url in selected_urls
+                        if "media-audio" not in url and "ies-music" not in url
+                    ]
+                    audio_urls = [
+                        url for url in selected_urls
+                        if "media-audio" in url or "ies-music" in url
+                    ]
                     return {
                         "awemeId": item_id,
                         "video": {
                             "playAddr": [
-                                {"src": url} for url in (tagged_urls or media_urls)
-                            ]
+                                {"src": url} for url in video_urls
+                            ],
+                            "bitRateAudio": [{
+                                "audioMeta": {"urlList": audio_urls}
+                            }] if audio_urls else [],
                         },
                     }
 
@@ -334,7 +375,10 @@ def _douyin_video_urls(video):
             urls.extend(candidates)
 
     urls.extend(_url_candidates(video.get("playAddr") or video.get("play_addr")))
-    urls = [url.replace("/playwm/", "/play/") for url in urls]
+    urls = [
+        url.replace("/playwm/", "/play/") for url in urls
+        if "media-audio" not in url and "ies-music" not in url
+    ]
     return list(dict.fromkeys(urls))
 
 
@@ -351,13 +395,14 @@ def _douyin_items_from_detail(detail, browser_headers=None):
 
     if images:
         for image in images:
-            image_urls = image.get("urlList") or image.get("url_list") or image
-            url = _pick_url(image_urls, ("jpeg", "jpg", "png", "webp"))
-            if not url:
+            image_urls = extract_image_urls(image)
+            if not image_urls:
                 continue
+            url = image_urls[0]
             results.append({
                 "type": "image",
                 "addr": url,
+                "addrs": image_urls,
                 "ext": _guess_ext(url),
                 "width": image.get("width"),
                 "height": image.get("height"),
@@ -377,12 +422,18 @@ def _douyin_items_from_detail(detail, browser_headers=None):
                 "headers": item_headers,
             })
     else:
-        video_urls = _douyin_video_urls(detail.get("video") or {})
-        if video_urls:
+        video = detail.get("video") or {}
+        variants = extract_video_variants(video)
+        if variants:
+            highest = variants[0]
+            audio_urls = extract_audio_urls(video)
             results.append({
                 "type": "video",
-                "addr": video_urls[0],
-                "addrs": video_urls,
+                "addr": highest["addrs"][0],
+                "addrs": highest["addrs"],
+                "variants": variants,
+                "selected_variant": highest,
+                "audio_addrs": audio_urls,
                 "ext": "mp4",
                 "referer": "https://www.douyin.com/",
                 "headers": item_headers,
@@ -676,6 +727,64 @@ def download_file(item, filepath, headers):
     return filepath
 
 
+def download_video(item, filepath, headers):
+    """下载最高质量视频；DASH 分离流使用 ffmpeg 无损封装音视频。"""
+    audio_addresses = item.get("audio_addrs") or []
+    if not audio_addresses:
+        return download_file(item, filepath, headers)
+
+    if not _has_ffmpeg():
+        raise Exception(
+            "该清晰度是分离式音视频流，需要 ffmpeg 无损合并；"
+            "请执行：apt install ffmpeg"
+        )
+
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    video_temp = tempfile.NamedTemporaryFile(
+        suffix=".video.mp4", delete=False, dir=os.path.dirname(filepath)
+    )
+    audio_temp = tempfile.NamedTemporaryFile(
+        suffix=".audio.m4a", delete=False, dir=os.path.dirname(filepath)
+    )
+    video_path = video_temp.name
+    audio_path = audio_temp.name
+    video_temp.close()
+    audio_temp.close()
+
+    audio_item = {
+        **item,
+        "addr": audio_addresses[0],
+        "addrs": audio_addresses,
+        "audio_addrs": [],
+    }
+    try:
+        download_file(item, video_path, headers)
+        download_file(audio_item, audio_path, headers)
+        print("正在无损合并最高质量音视频……")
+        process = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", video_path, "-i", audio_path,
+                "-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
+                "-movflags", "+faststart", filepath,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if process.returncode != 0:
+            message = process.stderr.strip().splitlines()
+            raise Exception(
+                "ffmpeg 合并音视频失败："
+                + (message[-1] if message else "未知错误")
+            )
+        return filepath
+    finally:
+        for temp_path in (video_path, audio_path):
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+
+
 def download_bgm(item, filepath, headers):
     """下载幻灯片视频，用 ffmpeg 提取音频轨"""
     if not _has_ffmpeg():
@@ -792,6 +901,11 @@ if __name__ == '__main__':
                             detail_parts.append(f"网页端 {next(iter(qualities))}")
                         if detail_parts:
                             details = f"（{'，'.join(detail_parts)}）"
+                    elif tp == "video":
+                        video_item = next(item for item in items if item["type"] == tp)
+                        variants = video_item.get("variants") or []
+                        if variants:
+                            details = f"（最高：{format_video_variant(variants[0])}）"
                     print(f"  [{idx}] {label} ×{type_count[tp]}{details}")
                     idx_map[str(idx)] = tp
                     available_types.append(tp)
@@ -817,6 +931,27 @@ if __name__ == '__main__':
                 print("未选择任何资源\n")
                 continue
 
+            # 视频资源被选中后，再让用户选质量档位；默认直接使用最高档。
+            if "video" in selected_types:
+                selected_items = []
+                for item in items:
+                    if item["type"] != "video":
+                        selected_items.append(item)
+                        continue
+                    selected = choose_video_variant(item)
+                    if selected is not None:
+                        selected_items.append(selected)
+                        variant = selected.get("selected_variant")
+                        if variant:
+                            print(f"已选择：{format_video_variant(variant)}")
+                    else:
+                        selected_types.discard("video")
+                items = selected_items
+
+            if not selected_types:
+                print("未选择任何资源\n")
+                continue
+
             print()
 
             # ── 下载 ──
@@ -832,7 +967,9 @@ if __name__ == '__main__':
                 filename = _make_filename(tp, item["ext"], counters[tp])
                 filepath = os.path.join(folder, filename)
 
-                if tp == "bgm":
+                if tp == "video":
+                    path = download_video(item, filepath, headers)
+                elif tp == "bgm":
                     path = download_bgm(item, filepath, headers)
                 else:
                     path = download_file(item, filepath, headers)
