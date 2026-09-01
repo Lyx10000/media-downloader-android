@@ -68,77 +68,133 @@ class DownloadExecutor @Inject constructor(
             ?: error("没有可下载的视频档位")
         val mode = spec.mode
         val audioUrls = spec.result.audioUrls
-        return if (audioUrls.isNotEmpty()) {
-            val videoTrack = File(folder, "video_1_video.mp4")
-            val audioTrack = File(folder, "video_1_audio.m4a")
-            val merged = File(folder, "video_1.mp4")
-            val files = mutableListOf<Pair<File, String>>()
-            if (mode in setOf(DownloadMode.MERGE_KEEP, DownloadMode.TRACKS, DownloadMode.VIDEO_ONLY)) {
-                progress("下载视频轨", 10, true)
-                download(taskId, variant.urls, videoTrack, progress)
-            }
-            if (mode in setOf(DownloadMode.MERGE_KEEP, DownloadMode.TRACKS, DownloadMode.AUDIO_ONLY)) {
-                progress("下载音频轨", 48, true)
-                download(taskId, audioUrls, audioTrack, progress)
-            }
-            when (mode) {
-                DownloadMode.MERGE_KEEP -> {
-                    progress("无损合并音视频", 82, true)
-                    logger.event(taskId, "MEDIA_PROCESS", "MUX_STARTED")
-                    MediaTrackProcessor.mux(videoTrack, audioTrack, merged)
-                    logger.saveMediaProbe(taskId, MediaTrackProcessor.probe(merged).toString())
-                    files += videoTrack to videoTrack.name
-                    files += audioTrack to audioTrack.name
-                    files += merged to merged.name
-                }
-                DownloadMode.TRACKS -> {
-                    files += videoTrack to videoTrack.name
-                    files += audioTrack to audioTrack.name
-                }
-                DownloadMode.VIDEO_ONLY -> files += videoTrack to videoTrack.name
-                DownloadMode.AUDIO_ONLY -> files += audioTrack to audioTrack.name
-            }
-            publishAll(taskId, spec, files, progress)
-        } else {
-            val source = File(folder, "video_1.mp4")
-            val videoTrack = File(folder, "video_1_video.mp4")
-            val audioTrack = File(folder, "video_1_audio.m4a")
-            progress("下载原始音视频", 15, true)
-            download(taskId, variant.urls, source, progress)
-            val probe = MediaTrackProcessor.probe(source).toString()
-            logger.event(
-                taskId,
-                "MEDIA_PROCESS",
-                "SOURCE_PROBED",
-                JSONObject().put("tracks", probe),
+        val source = File(folder, "video_1_source.mp4")
+        val videoTrack = File(folder, "video_1_video.mp4")
+        val audioTrack = File(folder, "video_1_audio.m4a")
+        val merged = File(folder, "video_1.mp4")
+
+        progress("下载原始视频", 15, true)
+        download(taskId, variant.urls, source, progress)
+        progress("分析音视频轨道", 72, true)
+        val sourceProbe = MediaTrackProcessor.probe(source)
+        val probeText = sourceProbe.toString()
+        val hasEmbeddedAudio = sourceProbe.any { track ->
+            (track["mime"] as? String)?.startsWith("audio/") == true
+        }
+        val audioSource = chooseVideoAudioSource(
+            hasEmbeddedAudio = hasEmbeddedAudio,
+            hasSeparateAudio = audioUrls.isNotEmpty(),
+        )
+        logger.event(
+            taskId,
+            "MEDIA_PROCESS",
+            "SOURCE_PROBED",
+            JSONObject().apply {
+                put("tracks", probeText)
+                put("embedded_audio", hasEmbeddedAudio)
+                put("separate_audio_urls", audioUrls.size)
+                put("selected_audio_source", audioSource.name.lowercase())
+            },
+        )
+        logger.saveMediaProbe(taskId, probeText)
+
+        val files = when (audioSource) {
+            VideoAudioSource.EMBEDDED -> processEmbeddedAudio(
+                source = source,
+                videoTrack = videoTrack,
+                audioTrack = audioTrack,
+                mode = mode,
+                progress = progress,
             )
-            logger.saveMediaProbe(taskId, probe)
-            val files = mutableListOf<Pair<File, String>>()
-            progress("无损拆分轨道", 78, true)
-            when (mode) {
-                DownloadMode.MERGE_KEEP -> {
-                    MediaTrackProcessor.extractVideo(source, videoTrack)
-                    MediaTrackProcessor.extractAudio(source, audioTrack)
-                    files += videoTrack to videoTrack.name
-                    files += audioTrack to audioTrack.name
-                    files += source to source.name
+            VideoAudioSource.SEPARATE -> processSeparateAudio(
+                taskId = taskId,
+                source = source,
+                videoTrack = videoTrack,
+                audioTrack = audioTrack,
+                merged = merged,
+                audioUrls = audioUrls,
+                mode = mode,
+                progress = progress,
+            )
+            VideoAudioSource.MISSING -> {
+                if (mode != DownloadMode.VIDEO_ONLY) {
+                    error("视频文件没有音频轨，也没有可用的独立音频地址")
                 }
-                DownloadMode.TRACKS -> {
-                    MediaTrackProcessor.extractVideo(source, videoTrack)
-                    MediaTrackProcessor.extractAudio(source, audioTrack)
-                    files += videoTrack to videoTrack.name
-                    files += audioTrack to audioTrack.name
-                }
-                DownloadMode.VIDEO_ONLY -> {
-                    MediaTrackProcessor.extractVideo(source, videoTrack)
-                    files += videoTrack to videoTrack.name
-                }
-                DownloadMode.AUDIO_ONLY -> {
-                    MediaTrackProcessor.extractAudio(source, audioTrack)
-                    files += audioTrack to audioTrack.name
-                }
+                listOf(source to videoTrack.name)
             }
-            publishAll(taskId, spec, files, progress)
+        }
+        return publishAll(taskId, spec, files, progress)
+    }
+
+    private suspend fun processEmbeddedAudio(
+        source: File,
+        videoTrack: File,
+        audioTrack: File,
+        mode: DownloadMode,
+        progress: DownloadProgress,
+    ): List<Pair<File, String>> {
+        progress("使用视频内置原始音频", 78, true)
+        return when (mode) {
+            DownloadMode.MERGE_KEEP -> {
+                MediaTrackProcessor.extractVideo(source, videoTrack)
+                MediaTrackProcessor.extractAudio(source, audioTrack)
+                listOf(
+                    videoTrack to videoTrack.name,
+                    audioTrack to audioTrack.name,
+                    source to "video_1.mp4",
+                )
+            }
+            DownloadMode.TRACKS -> {
+                MediaTrackProcessor.extractVideo(source, videoTrack)
+                MediaTrackProcessor.extractAudio(source, audioTrack)
+                listOf(videoTrack to videoTrack.name, audioTrack to audioTrack.name)
+            }
+            DownloadMode.VIDEO_ONLY -> {
+                MediaTrackProcessor.extractVideo(source, videoTrack)
+                listOf(videoTrack to videoTrack.name)
+            }
+            DownloadMode.AUDIO_ONLY -> {
+                MediaTrackProcessor.extractAudio(source, audioTrack)
+                listOf(audioTrack to audioTrack.name)
+            }
+        }
+    }
+
+    private suspend fun processSeparateAudio(
+        taskId: String,
+        source: File,
+        videoTrack: File,
+        audioTrack: File,
+        merged: File,
+        audioUrls: List<String>,
+        mode: DownloadMode,
+        progress: DownloadProgress,
+    ): List<Pair<File, String>> {
+        if (mode == DownloadMode.VIDEO_ONLY) {
+            return listOf(source to videoTrack.name)
+        }
+
+        progress("下载独立音频轨", 76, true)
+        download(taskId, audioUrls, audioTrack, progress)
+        return when (mode) {
+            DownloadMode.MERGE_KEEP -> {
+                progress("无损合并音视频", 86, true)
+                logger.event(taskId, "MEDIA_PROCESS", "MUX_STARTED")
+                MediaTrackProcessor.mux(source, audioTrack, merged)
+                val mergedProbe = MediaTrackProcessor.probe(merged).toString()
+                logger.saveMediaProbe(taskId, mergedProbe)
+                listOf(
+                    source to videoTrack.name,
+                    audioTrack to audioTrack.name,
+                    merged to merged.name,
+                )
+            }
+            DownloadMode.TRACKS -> listOf(
+                source to videoTrack.name,
+                audioTrack to audioTrack.name,
+            )
+            DownloadMode.AUDIO_ONLY -> listOf(audioTrack to audioTrack.name)
+            DownloadMode.VIDEO_ONLY -> error("不可达的视频下载模式")
         }
     }
 

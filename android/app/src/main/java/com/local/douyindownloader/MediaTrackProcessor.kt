@@ -21,8 +21,15 @@ object MediaTrackProcessor {
             val videoOutputTrack = muxer.addTrack(video.format)
             val audioOutputTrack = muxer.addTrack(audio.format)
             muxer.start()
-            copySamples(video.extractor, videoOutputTrack, muxer, video.format)
-            copySamples(audio.extractor, audioOutputTrack, muxer, audio.format)
+            discardNegativeSamples(video.extractor)
+            discardNegativeSamples(audio.extractor)
+            copyInterleavedSamples(
+                video = video,
+                videoOutputTrack = videoOutputTrack,
+                audio = audio,
+                audioOutputTrack = audioOutputTrack,
+                muxer = muxer,
+            )
         } finally {
             video.extractor.release()
             audio.extractor.release()
@@ -57,6 +64,7 @@ object MediaTrackProcessor {
         try {
             val outputTrack = muxer.addTrack(selected.format)
             muxer.start()
+            discardNegativeSamples(selected.extractor)
             copySamples(selected.extractor, outputTrack, muxer, selected.format)
         } finally {
             selected.extractor.release()
@@ -111,6 +119,81 @@ object MediaTrackProcessor {
             muxer.writeSampleData(outputTrack, buffer, info)
             extractor.advance()
         }
+    }
+
+    private fun copyInterleavedSamples(
+        video: SelectedTrack,
+        videoOutputTrack: Int,
+        audio: SelectedTrack,
+        audioOutputTrack: Int,
+        muxer: MediaMuxer,
+    ) {
+        val videoBuffer = ByteBuffer.allocateDirect(maxInputSize(video.format))
+        val audioBuffer = ByteBuffer.allocateDirect(maxInputSize(audio.format))
+        val videoInfo = MediaCodec.BufferInfo()
+        val audioInfo = MediaCodec.BufferInfo()
+        while (true) {
+            val wroteSample = when (
+                nextMuxTrack(video.extractor.sampleTime, audio.extractor.sampleTime)
+            ) {
+                MuxTrack.VIDEO -> writeCurrentSample(
+                    video.extractor,
+                    videoOutputTrack,
+                    muxer,
+                    videoBuffer,
+                    videoInfo,
+                )
+                MuxTrack.AUDIO -> writeCurrentSample(
+                    audio.extractor,
+                    audioOutputTrack,
+                    muxer,
+                    audioBuffer,
+                    audioInfo,
+                )
+                MuxTrack.NONE -> return
+            }
+            if (!wroteSample) return
+        }
+    }
+
+    private fun writeCurrentSample(
+        extractor: MediaExtractor,
+        outputTrack: Int,
+        muxer: MediaMuxer,
+        buffer: ByteBuffer,
+        info: MediaCodec.BufferInfo,
+    ): Boolean {
+        buffer.clear()
+        val size = extractor.readSampleData(buffer, 0)
+        if (size < 0) return false
+        info.set(0, size, extractor.sampleTime, codecFlags(extractor.sampleFlags))
+        muxer.writeSampleData(outputTrack, buffer, info)
+        extractor.advance()
+        return true
+    }
+
+    private fun discardNegativeSamples(extractor: MediaExtractor) {
+        while (extractor.sampleTime != -1L && extractor.sampleTime < 0L) {
+            extractor.advance()
+        }
+    }
+
+    private fun maxInputSize(format: MediaFormat): Int =
+        if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+            format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE).coerceAtLeast(1024 * 1024)
+        } else {
+            8 * 1024 * 1024
+        }
+
+    private fun codecFlags(sampleFlags: Int): Int {
+        var flags = 0
+        if (sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+            flags = flags or MediaCodec.BUFFER_FLAG_KEY_FRAME
+        }
+        if (sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0) {
+            flags = flags or MediaCodec.BUFFER_FLAG_PARTIAL_FRAME
+        }
+        return flags
     }
 
     private data class SelectedTrack(
