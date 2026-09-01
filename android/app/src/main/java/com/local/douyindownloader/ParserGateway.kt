@@ -3,8 +3,11 @@ package com.local.douyindownloader
 import com.chaquo.python.Python
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
-class ParserGateway {
+@Singleton
+class ParserGateway @Inject constructor() {
     suspend fun parse(shareText: String, cookieHeader: String): ParseResult =
         withContext(Dispatchers.IO) {
             try {
@@ -20,4 +23,3 @@ class ParserGateway {
             }
         }
 }
-

@@ -11,6 +11,9 @@ import java.io.File
 import java.io.FileInputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
 object Redactor {
     private val secret = Regex(
@@ -24,7 +27,10 @@ object Redactor {
         .take(16_384)
 }
 
-class DiagnosticLogger(private val context: Context) {
+@Singleton
+class DiagnosticLogger @Inject constructor(
+    @ApplicationContext private val context: Context,
+) {
     private val root = File(context.filesDir, "diagnostics").apply { mkdirs() }
 
     @Synchronized

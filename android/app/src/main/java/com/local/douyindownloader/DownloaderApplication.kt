@@ -5,8 +5,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import androidx.work.Configuration
+import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
-class DownloaderApplication : Application() {
+@HiltAndroidApp
+class DownloaderApplication : Application(), Configuration.Provider {
+    @Inject lateinit var workerFactory: AppWorkerFactory
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
+
     override fun onCreate() {
         super.onCreate()
         if (!Python.isStarted()) Python.start(AndroidPlatform(this))
@@ -18,4 +27,3 @@ class DownloaderApplication : Application() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 }
-

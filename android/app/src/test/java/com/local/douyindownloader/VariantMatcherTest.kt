@@ -45,13 +45,17 @@ class VariantMatcherTest {
 
     @Test
     fun retrySourceUsesStableWorkIdInsteadOfExpiredShortLink() {
-        val result = ParseResult(ok = true, awemeId = "7670820885931028910", kind = "image")
+        val result = ParseResult(
+            ok = true,
+            awemeId = "7670820885931028910",
+            kind = MediaKind.IMAGE,
+        )
         val spec = TaskSpec(
             taskId = "task-id",
             createdAt = 1_700_000_000_000,
             result = result,
             variantIndex = 0,
-            mode = "merge_keep",
+            mode = DownloadMode.MERGE_KEEP,
             sourceText = "https://v.douyin.com/expired/",
         )
 

@@ -13,11 +13,22 @@
         android:name=".DownloaderApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
-        android:label="抖音下载器"
+        android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.DouyinDownloader"
         android:usesCleartextTraffic="false">
+
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
         <activity
             android:name=".MainActivity"

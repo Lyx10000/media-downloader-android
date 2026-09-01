@@ -100,14 +100,14 @@ object MediaTrackProcessor {
             info.size = size
             info.presentationTimeUs = extractor.sampleTime
             val sampleFlags = extractor.sampleFlags
-            info.flags = buildList {
-                if (sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
-                    add(MediaCodec.BUFFER_FLAG_KEY_FRAME)
-                }
-                if (sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0) {
-                    add(MediaCodec.BUFFER_FLAG_PARTIAL_FRAME)
-                }
-            }.fold(0, Int::or)
+            var codecFlags = 0
+            if (sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                codecFlags = codecFlags or MediaCodec.BUFFER_FLAG_KEY_FRAME
+            }
+            if (sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0) {
+                codecFlags = codecFlags or MediaCodec.BUFFER_FLAG_PARTIAL_FRAME
+            }
+            info.flags = codecFlags
             muxer.writeSampleData(outputTrack, buffer, info)
             extractor.advance()
         }

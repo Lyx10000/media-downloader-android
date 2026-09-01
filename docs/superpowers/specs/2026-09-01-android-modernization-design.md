@@ -1,7 +1,7 @@
 # Android 全面现代化重构设计
 
 日期：2026-09-01
-状态：已批准，待实施
+状态：已实施（2026-09-01）
 
 ## 背景
 
@@ -111,7 +111,8 @@ Room 数据库继续使用文件名 `downloads.db`，新版本为 3。
 
 - 新安装直接创建版本 3 的 `tasks` 表。
 - `1 -> 2` 增加 `file_status TEXT NOT NULL DEFAULT 'UNKNOWN'`，与当前迁移一致。
-- `2 -> 3` 不删除或重写业务列，只由 Room 校验现有表并建立自身 schema identity。
+- `2 -> 3` 重建结构等价的任务表，为旧主键补上 Room 要求的显式 `NOT NULL`，原样复制
+  全部业务列，然后由 Room 校验 schema 并建立自身 identity。
 - 不允许 destructive migration。
 - 表名、主键、所有现有列、默认值和排序语义保持不变。
 

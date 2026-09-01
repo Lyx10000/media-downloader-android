@@ -10,9 +10,9 @@ import java.io.File
 
 object PublicStorage {
     fun ensureDestination(context: Context, spec: TaskSpec) {
-        val mode = effectiveMode(context, spec)
+        val mode = effectiveMode(spec)
         if (mode == StorageMode.SAF) {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(effectiveRoot(context, spec)))
+            val root = DocumentFile.fromTreeUri(context, Uri.parse(effectiveRoot(spec)))
                 ?.takeIf { it.exists() && it.canWrite() }
                 ?: error("自定义保存目录授权已经失效")
             root.findFile(spec.taskFolder) ?: root.createDirectory(spec.taskFolder)
@@ -26,10 +26,10 @@ object PublicStorage {
     }
 
     fun publish(context: Context, source: File, spec: TaskSpec, displayName: String): TaskOutput {
-        if (effectiveMode(context, spec) == StorageMode.SAF) {
+        if (effectiveMode(spec) == StorageMode.SAF) {
             val uri = publishToTree(
                 context,
-                Uri.parse(effectiveRoot(context, spec)),
+                Uri.parse(effectiveRoot(spec)),
                 source,
                 spec.taskFolder,
                 displayName,
@@ -85,12 +85,9 @@ object PublicStorage {
         return target.uri
     }
 
-    private fun effectiveMode(context: Context, spec: TaskSpec): String =
+    private fun effectiveMode(spec: TaskSpec): StorageMode =
         if (spec.storageMode != StorageMode.LEGACY) spec.storageMode
-        else if (effectiveRoot(context, spec).isNotBlank()) StorageMode.SAF else StorageMode.DEFAULT
+        else if (effectiveRoot(spec).isNotBlank()) StorageMode.SAF else StorageMode.DEFAULT
 
-    private fun effectiveRoot(context: Context, spec: TaskSpec): String = spec.storageRoot.ifBlank {
-        context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-            .getString("custom_tree_uri", "").orEmpty()
-    }
+    private fun effectiveRoot(spec: TaskSpec): String = spec.storageRoot
 }

@@ -7,9 +7,15 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
-class StorageInspector(private val context: Context) {
-    fun inspect(task: TaskRecord, spec: TaskSpec?): String {
+@Singleton
+class StorageInspector @Inject constructor(
+    @ApplicationContext private val context: Context,
+) {
+    fun inspect(task: TaskRecord, spec: TaskSpec?): FileState {
         if (task.fileState == FileState.DELETE_FAILED) return FileState.DELETE_FAILED
         if (spec?.storageMode == StorageMode.SAF && !isTreeAvailable(spec.storageRoot)) {
             return FileState.STORAGE_UNAVAILABLE
@@ -77,7 +83,7 @@ class StorageInspector(private val context: Context) {
     }
 }
 
-internal fun fileStateForExistence(exists: List<Boolean>): String = when {
+internal fun fileStateForExistence(exists: List<Boolean>): FileState = when {
     exists.isEmpty() -> FileState.UNKNOWN
     exists.all { it } -> FileState.AVAILABLE
     exists.none { it } -> FileState.MISSING

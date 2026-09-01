@@ -7,19 +7,73 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
-object StorageMode {
-    const val DEFAULT = "DEFAULT"
-    const val SAF = "SAF"
-    const val LEGACY = "LEGACY"
+enum class StorageMode(val wireValue: String) {
+    DEFAULT("DEFAULT"),
+    SAF("SAF"),
+    LEGACY("LEGACY");
+
+    companion object {
+        fun fromWire(value: String): StorageMode = entries.firstOrNull { it.wireValue == value }
+            ?: LEGACY
+    }
 }
 
-object FileState {
-    const val UNKNOWN = "UNKNOWN"
-    const val AVAILABLE = "AVAILABLE"
-    const val PARTIAL = "PARTIAL"
-    const val MISSING = "MISSING"
-    const val STORAGE_UNAVAILABLE = "STORAGE_UNAVAILABLE"
-    const val DELETE_FAILED = "DELETE_FAILED"
+enum class FileState(val wireValue: String) {
+    UNKNOWN("UNKNOWN"),
+    AVAILABLE("AVAILABLE"),
+    PARTIAL("PARTIAL"),
+    MISSING("MISSING"),
+    STORAGE_UNAVAILABLE("STORAGE_UNAVAILABLE"),
+    DELETE_FAILED("DELETE_FAILED");
+
+    companion object {
+        fun fromWire(value: String): FileState = entries.firstOrNull { it.wireValue == value }
+            ?: UNKNOWN
+    }
+}
+
+@JvmInline
+value class TaskStatus private constructor(val wireValue: String) {
+    companion object {
+        val QUEUED = TaskStatus("QUEUED")
+        val RUNNING = TaskStatus("RUNNING")
+        val COMPLETE = TaskStatus("COMPLETE")
+        val FAILED = TaskStatus("FAILED")
+        val CANCELLED = TaskStatus("CANCELLED")
+        val DELETING = TaskStatus("DELETING")
+
+        fun fromWire(value: String): TaskStatus = when (value) {
+            QUEUED.wireValue -> QUEUED
+            RUNNING.wireValue -> RUNNING
+            COMPLETE.wireValue -> COMPLETE
+            FAILED.wireValue -> FAILED
+            CANCELLED.wireValue -> CANCELLED
+            DELETING.wireValue -> DELETING
+            else -> TaskStatus(value)
+        }
+    }
+}
+
+enum class DownloadMode(val wireValue: String) {
+    MERGE_KEEP("merge_keep"),
+    TRACKS("tracks"),
+    VIDEO_ONLY("video_only"),
+    AUDIO_ONLY("audio_only");
+
+    companion object {
+        fun fromWire(value: String): DownloadMode = entries.firstOrNull { it.wireValue == value }
+            ?: MERGE_KEEP
+    }
+}
+
+enum class MediaKind(val wireValue: String) {
+    VIDEO("video"),
+    IMAGE("image");
+
+    companion object {
+        fun fromWire(value: String): MediaKind = entries.firstOrNull { it.wireValue == value }
+            ?: VIDEO
+    }
 }
 
 data class MediaVariant(
@@ -63,7 +117,7 @@ data class MediaVariant(
 data class ParseResult(
     val ok: Boolean,
     val awemeId: String = "",
-    val kind: String = "video",
+    val kind: MediaKind = MediaKind.VIDEO,
     val author: String = "",
     val description: String = "",
     val coverUrl: String = "",
@@ -77,6 +131,35 @@ data class ParseResult(
     val message: String = "",
     val rawJson: String = "{}",
 ) {
+    fun toJson(): JSONObject {
+        val preserved = runCatching { JSONObject(rawJson) }.getOrNull()
+        if (preserved?.has("ok") == true) return preserved
+        return JSONObject().apply {
+                put("ok", ok)
+                put("aweme_id", awemeId)
+                put("kind", kind.wireValue)
+                put("author", author)
+                put("description", description)
+                put("cover_url", coverUrl)
+                put("variants", JSONArray().apply { variants.forEach { put(it.toJson()) } })
+                put("audio_urls", JSONArray(audioUrls))
+                put("image_urls", JSONArray(imageUrls))
+                put(
+                    "image_candidates",
+                    JSONArray().apply {
+                        imageCandidates.forEach { candidates -> put(JSONArray(candidates)) }
+                    },
+                )
+                put("music_urls", JSONArray(musicUrls))
+                put(
+                    "response_shape",
+                    runCatching { JSONObject(responseShape) }.getOrElse { JSONObject() },
+                )
+                put("error_code", errorCode)
+                put("message", message)
+        }
+    }
+
     companion object {
         fun fromJson(text: String): ParseResult {
             val root = JSONObject(text)
@@ -110,7 +193,7 @@ data class ParseResult(
             return ParseResult(
                 ok = true,
                 awemeId = root.optString("aweme_id"),
-                kind = root.optString("kind", "video"),
+                kind = MediaKind.fromWire(root.optString("kind", MediaKind.VIDEO.wireValue)),
                 author = root.optString("author"),
                 description = root.optString("description"),
                 coverUrl = root.optString("cover_url"),
@@ -131,20 +214,20 @@ data class TaskSpec(
     val createdAt: Long,
     val result: ParseResult,
     val variantIndex: Int,
-    val mode: String,
+    val mode: DownloadMode,
     val sourceText: String = "",
-    val storageMode: String = StorageMode.LEGACY,
+    val storageMode: StorageMode = StorageMode.LEGACY,
     val storageRoot: String = "",
     val taskFolder: String = taskFolderName(createdAt, taskId),
 ) {
     fun toJson(): String = JSONObject().apply {
         put("task_id", taskId)
         put("created_at", createdAt)
-        put("result", JSONObject(result.rawJson))
+        put("result", result.toJson())
         put("variant_index", variantIndex)
-        put("mode", mode)
+        put("mode", mode.wireValue)
         put("source_text", sourceText)
-        put("storage_mode", storageMode)
+        put("storage_mode", storageMode.wireValue)
         put("storage_root", storageRoot)
         put("task_folder", taskFolder)
     }.toString()
@@ -160,9 +243,11 @@ data class TaskSpec(
                 createdAt = createdAt,
                 result = ParseResult.fromJson(resultJson),
                 variantIndex = root.optInt("variant_index", 0),
-                mode = root.optString("mode", "merge_keep"),
+                mode = DownloadMode.fromWire(root.optString("mode", DownloadMode.MERGE_KEEP.wireValue)),
                 sourceText = root.optString("source_text"),
-                storageMode = root.optString("storage_mode", StorageMode.LEGACY),
+                storageMode = StorageMode.fromWire(
+                    root.optString("storage_mode", StorageMode.LEGACY.wireValue),
+                ),
                 storageRoot = root.optString("storage_root"),
                 taskFolder = root.optString("task_folder").ifBlank {
                     legacyTaskFolderName(createdAt)
@@ -172,7 +257,7 @@ data class TaskSpec(
     }
 
     fun stableSource(): String = if (result.awemeId.isNotBlank()) {
-        val path = if (result.kind == "image") "note" else "video"
+        val path = if (result.kind == MediaKind.IMAGE) "note" else "video"
         "https://www.douyin.com/$path/${result.awemeId}"
     } else sourceText
 }
@@ -204,13 +289,13 @@ data class TaskOutput(
 data class TaskRecord(
     val id: String,
     val createdAt: Long,
-    val status: String,
+    val status: TaskStatus,
     val stage: String,
     val progress: Int,
     val title: String,
     val outputs: List<TaskOutput>,
     val error: String,
-    val fileState: String,
+    val fileState: FileState,
 ) {
     val outputUris: List<String> get() = outputs.map(TaskOutput::uri)
 }

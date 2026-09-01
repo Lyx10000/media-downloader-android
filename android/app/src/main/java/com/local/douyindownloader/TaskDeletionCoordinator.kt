@@ -10,24 +10,30 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
 data class TaskDeleteResult(
     val success: Boolean,
     val message: String,
 )
 
-class TaskDeletionCoordinator(private val context: Context) {
-    private val store = TaskStore(context)
-    private val inspector = StorageInspector(context)
-    private val logger = DiagnosticLogger(context)
-    private val workManager = WorkManager.getInstance(context)
+@Singleton
+class TaskDeletionCoordinator @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val store: DownloadTaskRepository,
+    private val inspector: StorageInspector,
+    private val logger: DiagnosticLogger,
+    private val workManager: WorkManager,
+) {
 
     suspend fun deleteTask(taskId: String, deleteFiles: Boolean): TaskDeleteResult =
         withContext(Dispatchers.IO) {
             val initialTask = store.get(taskId)
                 ?: return@withContext TaskDeleteResult(true, "任务已经删除")
             val spec = store.getSpec(taskId)
-            store.update(taskId, "DELETING", "正在删除", initialTask.progress)
+            store.update(taskId, TaskStatus.DELETING, "正在删除", initialTask.progress)
             if (!stopWork(taskId)) {
                 store.setDeleteFailed(taskId, initialTask.progress, "无法确认后台写入已经停止")
                 return@withContext TaskDeleteResult(false, "无法停止后台任务，请稍后重试删除")
@@ -109,7 +115,8 @@ class TaskDeletionCoordinator(private val context: Context) {
 
     private suspend fun stopWork(taskId: String): Boolean {
         val cancellationAccepted = runCatching {
-            workManager.cancelUniqueWork("douyin-$taskId").result.get(15, TimeUnit.SECONDS)
+            workManager.cancelUniqueWork(DownloadScheduler.uniqueWorkName(taskId))
+                .result.get(15, TimeUnit.SECONDS)
             true
         }.onFailure {
             logger.event(taskId, "DELETE", "WORK_CANCEL_FAILED", JSONObject().put("message", it.message))
@@ -118,7 +125,8 @@ class TaskDeletionCoordinator(private val context: Context) {
 
         repeat(50) {
             val active = runCatching {
-                workManager.getWorkInfosForUniqueWork("douyin-$taskId").get(5, TimeUnit.SECONDS)
+                workManager.getWorkInfosForUniqueWork(DownloadScheduler.uniqueWorkName(taskId))
+                    .get(5, TimeUnit.SECONDS)
                     .any { info -> !info.state.isFinished }
             }.getOrElse { return false }
             if (!active) return true
