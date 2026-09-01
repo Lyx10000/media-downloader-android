@@ -34,6 +34,17 @@ sealed interface ParseUiState {
     data class Error(val code: String, val message: String) : ParseUiState
 }
 
+enum class CookieReadySource(val wireValue: String) {
+    PAGE_READY("page_ready"),
+    PAGE_ERROR("page_error"),
+    TIMEOUT("timeout"),
+}
+
+internal fun shouldRefreshCookieEnvironment(
+    errorCode: String,
+    refreshAttempted: Boolean,
+): Boolean = !refreshAttempted && errorCode in setOf("AUTH_OR_RISK", "DETAIL_EMPTY")
+
 private data class TaskCapabilities(
     val requiresAllFilesAccess: Boolean = false,
     val hasReplacementStorage: Boolean = false,
@@ -98,6 +109,7 @@ class MainViewModel @Inject constructor(
 
     private var sessionId = ""
     private var parsingStarted = false
+    private var environmentRefreshAttempted = false
     private val refreshMutex = Mutex()
     private var taskCapabilities = emptyMap<String, TaskCapabilities>()
     private var tasksVisible = false
@@ -142,17 +154,47 @@ class MainViewModel @Inject constructor(
         }
         sessionId = UUID.randomUUID().toString()
         parsingStarted = false
+        environmentRefreshAttempted = false
         logger.event(sessionId, "INPUT", "LINK_ACCEPTED", JSONObject().put("host", Uri.parse(url).host))
-        parseState = ParseUiState.LoadingWeb(url)
+        val cookieHeader = CookieManager.getInstance()
+            .getCookie(DOUYIN_HOME_URL)
+            .orEmpty()
+        if (cookieHeader.isNotBlank()) {
+            logger.event(
+                sessionId,
+                "COOKIE",
+                "COOKIE_REUSED",
+                JSONObject().put("present", true),
+            )
+            startParse(cookieHeader)
+        } else {
+            requestEnvironmentRefresh("cookie_missing")
+        }
     }
 
-    fun parseWithCookies(cookieHeader: String) {
+    fun parseWithCookies(cookieHeader: String, source: CookieReadySource) {
+        if (parsingStarted) return
+        logger.event(sessionId, "COOKIE", "COOKIE_READY", JSONObject().apply {
+            put("present", cookieHeader.isNotBlank())
+            put("source", source.wireValue)
+        })
+        startParse(cookieHeader)
+    }
+
+    private fun startParse(cookieHeader: String) {
         if (parsingStarted) return
         parsingStarted = true
         parseState = ParseUiState.Parsing
-        logger.event(sessionId, "COOKIE", "COOKIE_READY", JSONObject().put("present", cookieHeader.isNotBlank()))
         viewModelScope.launch {
             val result = parser.parse(inputText, cookieHeader)
+            if (shouldRefreshCookieEnvironment(result.errorCode, environmentRefreshAttempted)) {
+                logger.event(sessionId, "COOKIE", "COOKIE_REFRESH_REQUIRED", JSONObject().apply {
+                    put("code", result.errorCode)
+                })
+                requestEnvironmentRefresh(result.errorCode.lowercase())
+                refreshLogs()
+                return@launch
+            }
             if (result.ok) {
                 logger.event(sessionId, "PARSE", "DETAIL_PARSED", JSONObject().apply {
                     put("aweme_id", result.awemeId)
@@ -183,6 +225,7 @@ class MainViewModel @Inject constructor(
     fun resetParse() {
         parseState = ParseUiState.Idle
         parsingStarted = false
+        environmentRefreshAttempted = false
     }
 
     fun selectVariant(index: Int) {
@@ -376,6 +419,13 @@ class MainViewModel @Inject constructor(
         }.takeIf { it >= 0 } ?: 0
     }
 
+    private fun requestEnvironmentRefresh(reason: String) {
+        environmentRefreshAttempted = true
+        parsingStarted = false
+        logger.event(sessionId, "COOKIE", "COOKIE_WARMUP_STARTED", JSONObject().put("reason", reason))
+        parseState = ParseUiState.LoadingWeb(DOUYIN_HOME_URL)
+    }
+
     private fun refreshTaskMetadata(records: List<TaskRecord>) {
         viewModelScope.launch(Dispatchers.IO) {
             val specs = records.mapNotNull { task ->
@@ -409,6 +459,8 @@ class MainViewModel @Inject constructor(
     }
 
     companion object {
+        const val DOUYIN_HOME_URL = "https://www.douyin.com/"
+
         private val douyinUrl = Regex(
             "https?://[^\\s]*?(?:douyin\\.com|iesdouyin\\.com)[^\\s]*",
             RegexOption.IGNORE_CASE,

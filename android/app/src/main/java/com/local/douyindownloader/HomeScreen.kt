@@ -3,6 +3,8 @@ package com.local.douyindownloader
 import android.annotation.SuppressLint
 import android.content.ClipboardManager
 import android.content.Context
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -45,6 +47,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -56,6 +62,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import java.net.URI
 import kotlinx.coroutines.delay
 
 @Composable
@@ -170,13 +177,27 @@ private fun ParsingStatus(text: String) {
 private fun WebEnvironment(
     url: String,
     title: String,
-    onReady: (String) -> Unit,
+    onReady: (String, CookieReadySource) -> Unit,
     onCancel: () -> Unit,
 ) {
+    var completed by remember(url) { mutableStateOf(false) }
+    fun finish(source: CookieReadySource) {
+        if (completed) return
+        completed = true
+        CookieManager.getInstance().flush()
+        onReady(
+            CookieManager.getInstance().getCookie(MainViewModel.DOUYIN_HOME_URL).orEmpty(),
+            source,
+        )
+    }
+    LaunchedEffect(url) {
+        delay(WEB_ENVIRONMENT_TIMEOUT_MS)
+        finish(CookieReadySource.TIMEOUT)
+    }
     Box(Modifier.fillMaxSize()) {
         DouyinWebView(
             url = url,
-            onReady = onReady,
+            onReady = ::finish,
             modifier = Modifier
                 .fillMaxSize()
                 .alpha(0f),
@@ -211,7 +232,7 @@ private fun WebEnvironment(
 @SuppressLint("SetJavaScriptEnabled")
 private fun DouyinWebView(
     url: String,
-    onReady: (String) -> Unit,
+    onReady: (CookieReadySource) -> Unit,
     modifier: Modifier = Modifier,
     autoContinue: Boolean = true,
 ) {
@@ -234,19 +255,28 @@ private fun DouyinWebView(
                 webChromeClient = WebChromeClient()
                 webViewClient = object : WebViewClient() {
                     private var delivered = false
+
+                    private fun deliver(source: CookieReadySource, delayMs: Long = 0) {
+                        if (delivered) return
+                        delivered = true
+                        currentWebView.postDelayed({ onReady(source) }, delayMs)
+                    }
+
                     override fun onPageFinished(view: WebView, finishedUrl: String) {
                         super.onPageFinished(view, finishedUrl)
-                        if (autoContinue && !delivered && finishedUrl.contains("douyin.com")) {
-                            view.postDelayed({
-                                if (!delivered) {
-                                    delivered = true
-                                    CookieManager.getInstance().flush()
-                                    onReady(
-                                        CookieManager.getInstance().getCookie("https://www.douyin.com/")
-                                            .orEmpty(),
-                                    )
-                                }
-                            }, 3_000)
+                        if (autoContinue && isDouyinPage(finishedUrl)) {
+                            deliver(CookieReadySource.PAGE_READY, WEB_COOKIE_SETTLE_DELAY_MS)
+                        }
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        error: WebResourceError,
+                    ) {
+                        super.onReceivedError(view, request, error)
+                        if (autoContinue && request.isForMainFrame) {
+                            deliver(CookieReadySource.PAGE_ERROR)
                         }
                     }
                 }
@@ -399,8 +429,8 @@ internal fun FullScreenWebEnvironment(onDismiss: () -> Unit) {
                 },
             ) { innerPadding ->
                 DouyinWebView(
-                    url = "https://www.douyin.com/",
-                    onReady = {},
+                    url = MainViewModel.DOUYIN_HOME_URL,
+                    onReady = { _ -> },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -431,3 +461,11 @@ internal fun videoModes(muxed: Boolean): List<Pair<DownloadMode, String>> = if (
 private const val DESKTOP_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"
+
+private const val WEB_ENVIRONMENT_TIMEOUT_MS = 15_000L
+private const val WEB_COOKIE_SETTLE_DELAY_MS = 1_500L
+
+internal fun isDouyinPage(url: String): Boolean {
+    val host = runCatching { URI(url).host.orEmpty().lowercase() }.getOrDefault("")
+    return host == "douyin.com" || host.endsWith(".douyin.com")
+}
