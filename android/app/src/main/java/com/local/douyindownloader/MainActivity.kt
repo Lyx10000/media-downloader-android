@@ -58,7 +58,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -553,13 +552,9 @@ private fun ErrorScreen(state: ParseUiState.Error, retry: () -> Unit, back: () -
 }
 
 @Composable
-private fun CenterStatus(text: String) {
+private fun EmptyTasksStatus() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator()
-            Spacer(Modifier.height(16.dp))
-            Text(text)
-        }
+        Text("还没有下载任务")
     }
 }
 
@@ -577,7 +572,7 @@ private fun TasksScreen(
     var recoveryTask by remember { mutableStateOf<TaskRecord?>(null) }
     LaunchedEffect(Unit) { viewModel.onTasksVisible() }
     if (viewModel.tasks.isEmpty()) {
-        CenterStatus("还没有下载任务")
+        EmptyTasksStatus()
         return
     }
     LazyColumn(
