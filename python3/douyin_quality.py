@@ -257,9 +257,19 @@ def _image_quality(url):
     return _number(match.group(1)) if match else 0
 
 
+def _is_watermarked_image_url(url):
+    value = urllib.parse.unquote(url or "").lower()
+    return any(marker in value for marker in (
+        "tplv-dy-water",
+        "tplv-dy-wm",
+        "/watermark/",
+    ))
+
+
 def extract_image_urls(image):
-    """优先下载原图字段，并保留同一图片的全部 CDN 回退地址。"""
+    """优先无水印原图，并把明确的水印模板地址保留为最后回退。"""
     ordered = []
+    watermarked = []
     source_groups = (
         ("download_url_list", "downloadUrlList", "download_url", "downloadUrl"),
         ("origin_url", "originUrl"),
@@ -269,11 +279,13 @@ def extract_image_urls(image):
         group = []
         for key in keys:
             group.extend(_address_urls(image.get(key)))
-        ordered.extend(sorted(group, key=_image_quality, reverse=True))
+        for url in sorted(group, key=_image_quality, reverse=True):
+            (watermarked if _is_watermarked_image_url(url) else ordered).append(url)
 
     # 新字段名出现时仍可作为最后回退，但不能盖过明确的下载原图字段。
-    ordered.extend(_address_urls(image))
-    return list(dict.fromkeys(url for url in ordered if url))
+    for url in _address_urls(image):
+        (watermarked if _is_watermarked_image_url(url) else ordered).append(url)
+    return list(dict.fromkeys(url for url in ordered + watermarked if url))
 
 
 def format_video_variant(variant):

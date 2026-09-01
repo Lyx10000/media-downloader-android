@@ -126,7 +126,11 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                 .imePadding(),
         ) {
             when (destination) {
-                0 -> HomeScreen(viewModel, onShowTasks = { destination = 1 })
+                0 -> HomeScreen(
+                    uiState = uiState,
+                    viewModel = viewModel,
+                    onShowTasks = { destination = 1 },
+                )
                 1 -> TasksScreen(
                     viewModel = viewModel,
                     chooseFolder = { folderPicker.launch(null) },

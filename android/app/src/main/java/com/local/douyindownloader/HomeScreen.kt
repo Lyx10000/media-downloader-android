@@ -59,9 +59,13 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 
 @Composable
-internal fun HomeScreen(viewModel: MainViewModel, onShowTasks: () -> Unit) {
+internal fun HomeScreen(
+    uiState: MainUiState,
+    viewModel: MainViewModel,
+    onShowTasks: () -> Unit,
+) {
     val context = LocalContext.current
-    when (val state = viewModel.parseState) {
+    when (val state = uiState.parseState) {
         ParseUiState.Idle -> LazyColumn(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -80,14 +84,14 @@ internal fun HomeScreen(viewModel: MainViewModel, onShowTasks: () -> Unit) {
             }
             item {
                 OutlinedTextField(
-                    value = viewModel.inputText,
+                    value = uiState.inputText,
                     onValueChange = viewModel::setIncomingText,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("抖音分享文本或链接") },
                     minLines = 4,
                     supportingText = { Text("剪贴板只会在你点击“粘贴”后读取") },
                     trailingIcon = {
-                        if (viewModel.inputText.isNotEmpty()) {
+                        if (uiState.inputText.isNotEmpty()) {
                             IconButton(onClick = viewModel::clearInput) {
                                 Icon(Icons.Default.Clear, contentDescription = "清空输入内容")
                             }
@@ -106,18 +110,18 @@ internal fun HomeScreen(viewModel: MainViewModel, onShowTasks: () -> Unit) {
                         Spacer(Modifier.size(8.dp))
                         Text("粘贴")
                     }
-                    Button(onClick = viewModel::beginParse, enabled = viewModel.inputText.isNotBlank()) {
+                    Button(onClick = viewModel::beginParse, enabled = uiState.inputText.isNotBlank()) {
                         Text("解析作品")
                     }
                 }
             }
-            if (viewModel.tasks.isNotEmpty()) {
+            if (uiState.tasks.isNotEmpty()) {
                 item {
                     OutlinedCard(onClick = onShowTasks, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp)) {
                             Text("最近任务", style = MaterialTheme.typography.titleMedium)
                             Text(
-                                viewModel.tasks.first().stage,
+                                uiState.tasks.first().stage,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -136,8 +140,8 @@ internal fun HomeScreen(viewModel: MainViewModel, onShowTasks: () -> Unit) {
         ParseUiState.Parsing -> ParsingStatus("正在读取完整质量档位……")
         is ParseUiState.Ready -> ResultScreen(
             result = state.result,
-            selectedVariant = viewModel.selectedVariant,
-            selectedMode = viewModel.selectedMode,
+            selectedVariant = uiState.selectedVariant,
+            selectedMode = uiState.selectedMode,
             onVariant = viewModel::selectVariant,
             onMode = viewModel::selectMode,
             onDownload = { viewModel.queueDownload(state.result); onShowTasks() },

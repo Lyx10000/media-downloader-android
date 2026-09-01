@@ -232,6 +232,25 @@ class ImageVariantTests(unittest.TestCase):
         self.assertEqual(urls[0], "https://cdn.example/original.jpeg")
         self.assertEqual(urls[1], "https://cdn.example/display-q90.jpeg")
 
+    def test_explicit_watermark_download_urls_are_last_resort(self):
+        watermarked = (
+            "https://p3-pc-sign.douyinpic.com/tos/image-id"
+            "~tplv-dy-water-v2:author:972:1216.webp"
+        )
+        clean_display = (
+            "https://p3-pc-sign.douyinpic.com/tos/image-id"
+            "~tplv-dy-aweme-images:q75.webp"
+        )
+        image = {
+            "download_url_list": [watermarked],
+            "url_list": [clean_display],
+        }
+
+        urls = extract_image_urls(image)
+
+        self.assertEqual(urls[0], clean_display)
+        self.assertEqual(urls[-1], watermarked)
+
 
 if __name__ == "__main__":
     unittest.main()
