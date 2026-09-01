@@ -69,6 +69,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (text.isNotBlank()) inputText = text
     }
 
+    fun clearInput() {
+        inputText = ""
+    }
+
     fun beginParse() {
         val url = extractDouyinUrl(inputText)
         if (url == null) {

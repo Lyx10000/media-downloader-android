@@ -1,12 +1,10 @@
 package com.local.douyindownloader
 
 import android.Manifest
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.webkit.CookieManager
@@ -41,17 +39,16 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -71,6 +68,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -82,14 +80,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -235,6 +235,13 @@ private fun HomeScreen(viewModel: MainViewModel, onShowTasks: () -> Unit) {
                     label = { Text("抖音分享文本或链接") },
                     minLines = 4,
                     supportingText = { Text("剪贴板只会在你点击“粘贴”后读取") },
+                    trailingIcon = {
+                        if (viewModel.inputText.isNotEmpty()) {
+                            IconButton(onClick = viewModel::clearInput) {
+                                Icon(Icons.Default.Clear, contentDescription = "清空输入内容")
+                            }
+                        }
+                    },
                 )
             }
             item {
@@ -275,7 +282,7 @@ private fun HomeScreen(viewModel: MainViewModel, onShowTasks: () -> Unit) {
             onCancel = viewModel::resetParse,
         )
 
-        ParseUiState.Parsing -> CenterStatus("正在读取完整质量档位……")
+        ParseUiState.Parsing -> ParsingStatus("正在读取完整质量档位……")
         is ParseUiState.Ready -> ResultScreen(
             result = state.result,
             selectedVariant = viewModel.selectedVariant,
@@ -290,40 +297,80 @@ private fun HomeScreen(viewModel: MainViewModel, onShowTasks: () -> Unit) {
 }
 
 @Composable
+private fun ParsingStatus(text: String) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        LinearProgressIndicator(Modifier.fillMaxWidth())
+        Spacer(Modifier.height(16.dp))
+        Text(text)
+    }
+}
+
+@Composable
 private fun WebEnvironment(
     url: String,
     title: String,
     onReady: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(title, style = MaterialTheme.typography.titleLarge)
-        Text(
-            "页面只用于生成抖音 Cookie。若出现登录或验证，请在下方完成。",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+    Box(Modifier.fillMaxSize()) {
+        DouyinWebView(
+            url = url,
+            onReady = onReady,
+            modifier = Modifier
+                .fillMaxSize()
+                .alpha(0f),
         )
-        Card(Modifier.weight(1f)) {
-            DouyinWebView(url = url, onReady = onReady)
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(20.dp))
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "正在后台准备解析环境，请稍候……",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(24.dp))
+                OutlinedButton(onClick = onCancel) { Text("取消") }
+            }
         }
-        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("取消") }
     }
 }
 
 @Composable
-private fun DouyinWebView(url: String, onReady: (String) -> Unit, autoContinue: Boolean = true) {
+private fun DouyinWebView(
+    url: String,
+    onReady: (String) -> Unit,
+    modifier: Modifier = Modifier.fillMaxSize(),
+    autoContinue: Boolean = true,
+) {
     AndroidView(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier,
         factory = { context ->
             WebView(context).apply {
                 val currentWebView = this
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.userAgentString = DESKTOP_USER_AGENT
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.builtInZoomControls = true
+                settings.displayZoomControls = false
                 CookieManager.getInstance().apply {
                     setAcceptCookie(true)
                     setAcceptThirdPartyCookies(currentWebView, true)
@@ -351,6 +398,10 @@ private fun DouyinWebView(url: String, onReady: (String) -> Unit, autoContinue: 
             }
         },
         update = { webView -> if (webView.url.isNullOrBlank()) webView.loadUrl(url) },
+        onRelease = { webView ->
+            webView.stopLoading()
+            webView.destroy()
+        },
     )
 }
 
@@ -515,16 +566,15 @@ private fun TasksScreen(viewModel: MainViewModel) {
                     }
                     if (task.outputUris.isNotEmpty()) {
                         Button(onClick = {
-                            val uri = task.outputUris.first().toUri()
-                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(uri, "*/*")
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            buildFileShareIntent(context.contentResolver, task.outputUris)?.let { intent ->
+                                context.startActivity(
+                                    Intent.createChooser(intent, "分享下载文件"),
+                                )
                             }
-                            runCatching { context.startActivity(intent) }
                         }) {
-                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
+                            Icon(Icons.Default.Share, contentDescription = null)
                             Spacer(Modifier.size(8.dp))
-                            Text("打开文件")
+                            Text("分享文件")
                         }
                     }
                 }
@@ -627,23 +677,8 @@ private fun SettingsScreen(viewModel: MainViewModel, chooseFolder: () -> Unit) {
         item { HorizontalDivider() }
         item { Text("解析环境", style = MaterialTheme.typography.titleMedium) }
         item {
-            Button(onClick = { showWebView = !showWebView }) {
-                Text(if (showWebView) "关闭抖音环境" else "登录或刷新抖音环境")
-            }
-        }
-        if (showWebView) {
-            item {
-                OutlinedCard(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(460.dp),
-                ) {
-                    DouyinWebView(
-                        url = "https://www.douyin.com/",
-                        onReady = {},
-                        autoContinue = false,
-                    )
-                }
+            Button(onClick = { showWebView = true }) {
+                Text("登录或刷新抖音环境")
             }
         }
         item { HorizontalDivider() }
@@ -651,6 +686,50 @@ private fun SettingsScreen(viewModel: MainViewModel, chooseFolder: () -> Unit) {
             Text("版本", style = MaterialTheme.typography.titleMedium)
             Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 android-core-1")
             Text("完全本地运行，不使用服务器", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    if (showWebView) {
+        FullScreenWebEnvironment(onDismiss = { showWebView = false })
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FullScreenWebEnvironment(onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Scaffold(
+                contentWindowInsets = WindowInsets.safeDrawing,
+                topBar = {
+                    TopAppBar(
+                        title = { Text("抖音登录环境") },
+                        navigationIcon = {
+                            IconButton(onClick = onDismiss) {
+                                Icon(Icons.Default.Clear, contentDescription = "关闭登录环境")
+                            }
+                        },
+                    )
+                },
+            ) { innerPadding ->
+                DouyinWebView(
+                    url = "https://www.douyin.com/",
+                    onReady = {},
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .imePadding(),
+                    autoContinue = false,
+                )
+            }
         }
     }
 }
