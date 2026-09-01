@@ -8,10 +8,38 @@ PYTHON_DIR = os.path.dirname(TEST_DIR)
 if PYTHON_DIR not in sys.path:
     sys.path.insert(0, PYTHON_DIR)
 
-from android_bridge import _normalise  # noqa: E402
+from android_bridge import _hydrate_variant_sizes, _normalise, _probe_content_length  # noqa: E402
 
 
 class AndroidBridgeTests(unittest.TestCase):
+    def test_reads_total_size_from_partial_content_header(self):
+        class Response:
+            status_code = 206
+            headers = {"Content-Range": "bytes 0-0/12345678", "Content-Length": "1"}
+
+            def close(self):
+                pass
+
+        size = _probe_content_length(
+            "https://cdn.example/video.mp4",
+            request_get=lambda *args, **kwargs: Response(),
+        )
+
+        self.assertEqual(size, 12_345_678)
+
+    def test_cdn_size_replaces_estimate_but_not_api_size(self):
+        variants = [
+            {"size": 5_000_000, "size_source": "estimated", "addrs": ["https://cdn/estimated"]},
+            {"size": 7_000_000, "size_source": "api", "addrs": ["https://cdn/api"]},
+        ]
+
+        _hydrate_variant_sizes(variants, probe_fn=lambda _urls: 8_000_000)
+
+        self.assertEqual(variants[0]["size"], 8_000_000)
+        self.assertEqual(variants[0]["size_source"], "cdn")
+        self.assertEqual(variants[1]["size"], 7_000_000)
+        self.assertEqual(variants[1]["size_source"], "api")
+
     def test_normalises_muxed_video_with_quality_ladder(self):
         detail = {
             "aweme_id": "1234567890123456789",

@@ -796,7 +796,7 @@ private fun SettingsScreen(viewModel: MainViewModel, chooseFolder: () -> Unit) {
         item { HorizontalDivider() }
         item {
             Text("版本", style = MaterialTheme.typography.titleMedium)
-            Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 android-core-1")
+            Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 android-core-2")
             Text("完全本地运行，不使用服务器", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

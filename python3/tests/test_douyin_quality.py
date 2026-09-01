@@ -14,6 +14,7 @@ from douyin_quality import (  # noqa: E402
     extract_audio_urls,
     extract_image_urls,
     extract_video_variants,
+    format_video_variant,
 )
 
 
@@ -32,6 +33,74 @@ def _rate(width, height, bitrate, codec="h264", fps=30, suffix="main"):
 
 
 class VideoVariantTests(unittest.TestCase):
+    def test_formats_exact_estimated_and_unknown_sizes(self):
+        base = {"width": 1080, "height": 1920, "bitrate": 4_000_000}
+
+        exact = format_video_variant({**base, "size": 10_000_000, "size_source": "cdn"})
+        estimated = format_video_variant({
+            **base, "size": 10_000_000, "size_source": "estimated",
+        })
+        unknown = format_video_variant({**base, "size": 0, "size_source": "unknown"})
+
+        self.assertIn("9.5 MB", exact)
+        self.assertNotIn("约 9.5 MB", exact)
+        self.assertIn("约 9.5 MB", estimated)
+        self.assertIn("大小未知", unknown)
+
+    def test_uses_exact_size_from_rate_when_play_address_omits_it(self):
+        video = {
+            "duration": 10_000,
+            "bit_rate": [{
+                "bit_rate": 4_000_000,
+                "file_size": 7_654_321,
+                "play_addr": {
+                    "width": 1080,
+                    "height": 1920,
+                    "url_list": ["https://cdn.example/exact.mp4"],
+                },
+            }],
+        }
+
+        variant = extract_video_variants(video)[0]
+
+        self.assertEqual(variant["size"], 7_654_321)
+        self.assertEqual(variant["size_source"], "api")
+
+    def test_estimates_missing_size_from_bitrate_and_duration(self):
+        video = {
+            "duration": 10_000,
+            "bit_rate": [{
+                "bit_rate": 4_000_000,
+                "play_addr": {
+                    "width": 1080,
+                    "height": 1920,
+                    "url_list": ["https://cdn.example/estimated.mp4"],
+                },
+            }],
+        }
+
+        variant = extract_video_variants(video)[0]
+
+        self.assertEqual(variant["size"], 5_000_000)
+        self.assertEqual(variant["size_source"], "estimated")
+
+    def test_marks_size_unknown_without_size_or_duration(self):
+        video = {
+            "bit_rate": [{
+                "bit_rate": 4_000_000,
+                "play_addr": {
+                    "width": 1080,
+                    "height": 1920,
+                    "url_list": ["https://cdn.example/unknown.mp4"],
+                },
+            }],
+        }
+
+        variant = extract_video_variants(video)[0]
+
+        self.assertEqual(variant["size"], 0)
+        self.assertEqual(variant["size_source"], "unknown")
+
     def test_resolution_precedes_bitrate_and_duplicate_ladders_are_collapsed(self):
         video = {
             "bit_rate": [

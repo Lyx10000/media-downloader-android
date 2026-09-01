@@ -163,10 +163,20 @@ def extract_audio_urls(video):
     return max(choices, key=lambda item: item[0])[1]
 
 
-def extract_video_variants(video):
+def _estimated_size(bitrate, duration_ms):
+    if bitrate <= 0 or duration_ms <= 0:
+        return 0
+    return int(bitrate * duration_ms / 8_000)
+
+
+def extract_video_variants(video, duration_ms=0):
     """提取并按分辨率、帧率、码率排序视频档位。"""
     rates = video.get("bit_rate") or video.get("bitRateList") or []
     grouped = {}
+    default_duration = _number(
+        video.get("duration") or video.get("duration_ms") or
+        video.get("durationMs") or duration_ms
+    )
 
     for rate in rates:
         play = rate.get("play_addr") or rate.get("playAddr") or {}
@@ -181,13 +191,26 @@ def extract_video_variants(video):
         bitrate = _number(rate.get("bit_rate") or rate.get("bitRate"))
         fps = _number(rate.get("FPS") or rate.get("fps"))
         codec = _codec_name(rate)
+        exact_size = _number(
+            play.get("data_size") or play.get("dataSize") or
+            play.get("file_size") or play.get("fileSize") or
+            rate.get("data_size") or rate.get("dataSize") or
+            rate.get("file_size") or rate.get("fileSize")
+        )
+        rate_duration = _number(
+            play.get("duration") or rate.get("duration") or default_duration
+        )
+        estimated_size = _estimated_size(bitrate, rate_duration)
         variant = {
             "width": width,
             "height": height,
             "bitrate": bitrate,
             "fps": fps,
             "codec": codec,
-            "size": _number(play.get("data_size") or play.get("dataSize")),
+            "size": exact_size or estimated_size,
+            "size_source": "api" if exact_size else (
+                "estimated" if estimated_size else "unknown"
+            ),
             "gear": rate.get("gear_name") or rate.get("gearName") or "",
             "addrs": urls,
             "confirmed": bool(width and height),
@@ -211,6 +234,7 @@ def extract_video_variants(video):
                 "fps": 0,
                 "codec": "未知",
                 "size": 0,
+                "size_source": "unknown",
                 "gear": "player",
                 "addrs": fallback,
                 "confirmed": False,
@@ -267,7 +291,10 @@ def format_video_variant(variant):
     if variant.get("codec"):
         parts.append(variant["codec"])
     if variant.get("size"):
-        parts.append(f"约 {variant['size'] / 1048576:.1f} MB")
+        prefix = "约 " if variant.get("size_source") == "estimated" else ""
+        parts.append(f"{prefix}{variant['size'] / 1048576:.1f} MB")
+    else:
+        parts.append("大小未知")
     return " / ".join(parts)
 
 

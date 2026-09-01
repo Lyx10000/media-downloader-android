@@ -5,6 +5,7 @@
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 import requests
@@ -24,6 +25,7 @@ URL_PATTERN = re.compile(
     re.I,
 )
 ID_PATTERN = re.compile(r"/(?:share/)?(?:video|note)/(\d{15,22})")
+CONTENT_RANGE_TOTAL = re.compile(r"bytes\s+\d+-\d+/(\d+|\*)", re.I)
 
 
 def _cookie_list(cookie_header):
@@ -81,7 +83,71 @@ def _resolve_item(share_text):
     raise ValueError("短链已打开，但没有识别到作品 ID")
 
 
-def _normalise(detail, item_id, item_kind):
+def _probe_content_length(url, request_get=requests.get):
+    """通过单字节范围请求读取总大小，不消费视频正文。"""
+    response = None
+    try:
+        response = request_get(
+            url,
+            headers={
+                "User-Agent": DOUYIN_API_USER_AGENT,
+                "Referer": "https://www.douyin.com/",
+                "Range": "bytes=0-0",
+                "Accept-Encoding": "identity",
+            },
+            allow_redirects=True,
+            stream=True,
+            timeout=(5, 5),
+        )
+        content_range = response.headers.get("Content-Range", "")
+        range_match = CONTENT_RANGE_TOTAL.search(content_range)
+        if range_match and range_match.group(1) != "*":
+            return int(range_match.group(1))
+        if response.status_code == 200:
+            return int(response.headers.get("Content-Length") or 0)
+    except (requests.RequestException, TypeError, ValueError):
+        return 0
+    finally:
+        if response is not None:
+            response.close()
+    return 0
+
+
+def _probe_variant_size(urls):
+    for url in (urls or [])[:2]:
+        size = _probe_content_length(url)
+        if size > 0:
+            return size
+    return 0
+
+
+def _hydrate_variant_sizes(variants, probe_fn=None):
+    """并行补齐接口未提供的档位大小，失败时保留估算值。"""
+    probe = probe_fn or _probe_variant_size
+    candidates = [
+        variant for variant in variants
+        if variant.get("size_source") != "api" and variant.get("addrs")
+    ]
+    if not candidates:
+        return variants
+    with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as executor:
+        futures = {
+            executor.submit(probe, variant.get("addrs") or []): variant
+            for variant in candidates
+        }
+        for future in as_completed(futures):
+            variant = futures[future]
+            try:
+                size = int(future.result() or 0)
+            except Exception:
+                size = 0
+            if size > 0:
+                variant["size"] = size
+                variant["size_source"] = "cdn"
+    return variants
+
+
+def _normalise(detail, item_id, item_kind, probe_sizes=False):
     author = detail.get("author") or {}
     result = {
         "ok": True,
@@ -107,6 +173,9 @@ def _normalise(detail, item_id, item_kind):
             result["cover_url"] = result["image_urls"][0]
     else:
         video = detail.get("video") or {}
+        variants = extract_video_variants(video, duration_ms=detail.get("duration") or 0)
+        if probe_sizes:
+            _hydrate_variant_sizes(variants)
         result["variants"] = [
             {
                 "width": variant.get("width", 0),
@@ -115,9 +184,10 @@ def _normalise(detail, item_id, item_kind):
                 "fps": variant.get("fps", 0),
                 "codec": variant.get("codec", ""),
                 "size": variant.get("size", 0),
+                "size_source": variant.get("size_source", "unknown"),
                 "urls": variant.get("addrs", []),
             }
-            for variant in extract_video_variants(video)
+            for variant in variants
         ]
         result["audio_urls"] = extract_audio_urls(video)
         result["cover_url"] = _first_url(
@@ -143,7 +213,10 @@ def parse_share(share_text, cookie_header=""):
                 "error_code": "DETAIL_EMPTY",
                 "message": "抖音详情接口没有返回作品信息，请刷新解析环境",
             }, ensure_ascii=False)
-        return json.dumps(_normalise(detail, item_id, item_kind), ensure_ascii=False)
+        return json.dumps(
+            _normalise(detail, item_id, item_kind, probe_sizes=True),
+            ensure_ascii=False,
+        )
     except requests.HTTPError as error:
         status = error.response.status_code if error.response is not None else 0
         code = "AUTH_OR_RISK" if status in (401, 403) else "HTTP_ERROR"
