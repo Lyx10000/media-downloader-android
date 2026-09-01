@@ -61,6 +61,19 @@ class DiagnosticLogger @Inject constructor(
         File(root, "$taskId-media-probe.json").writeText(Redactor.sanitize(probe))
     }
 
+    fun uncaughtException(thread: Thread, error: Throwable) {
+        event("app-crash", "CRASH", "UNCAUGHT_EXCEPTION", JSONObject().apply {
+            put("thread", thread.name)
+            put("error", error.javaClass.name)
+            put("message", error.message.orEmpty())
+            put("stack", error.stackTraceToString())
+            put("manufacturer", Build.MANUFACTURER)
+            put("model", Build.MODEL)
+            put("android", Build.VERSION.RELEASE)
+            put("sdk", Build.VERSION.SDK_INT)
+        })
+    }
+
     fun listFiles(): List<File> = root.listFiles()?.sortedByDescending(File::lastModified).orEmpty()
 
     fun readRecent(maxChars: Int = 24_000): String = listFiles()

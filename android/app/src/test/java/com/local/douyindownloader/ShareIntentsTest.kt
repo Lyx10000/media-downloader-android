@@ -81,4 +81,10 @@ class ShareIntentsTest {
         assertEquals("*/*", commonShareMimeType(listOf("video/mp4", "audio/mp4")))
         assertEquals("*/*", commonShareMimeType(listOf(null)))
     }
+
+    @Test
+    fun createsSafeUniqueCacheNamesWithoutChangingExtension() {
+        assertEquals("01_video_1.mp4", shareCacheFileName(0, "video_1.mp4"))
+        assertEquals("02_bad_name.m4a", shareCacheFileName(1, "../bad/name.m4a"))
+    }
 }

@@ -1,6 +1,7 @@
 package com.local.douyindownloader
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -61,6 +62,7 @@ class MainViewModel @Inject constructor(
     private val redownloadCoordinator: TaskRedownloadCoordinator,
     private val scheduler: DownloadScheduler,
     private val fileStateRefresher: TaskFileStateRefresher,
+    private val shareCoordinator: ShareCoordinator,
 ) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -234,6 +236,14 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             message = redownloadCoordinator.retry(task, cookieHeader, customTreeUri)
             refreshTasks()
+        }
+    }
+
+    internal fun shareTaskFiles(context: Context, taskId: String, files: List<ShareableFile>) {
+        message = "正在准备分享…"
+        viewModelScope.launch {
+            val result = shareCoordinator.share(context, taskId, files)
+            if (result.message.isNotBlank()) message = result.message
         }
     }
 

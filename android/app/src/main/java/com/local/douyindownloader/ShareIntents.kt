@@ -17,8 +17,9 @@ internal data class ShareableFile(
 internal fun resolveShareableFiles(
     resolver: ContentResolver,
     outputUris: List<String>,
-): List<ShareableFile> = outputUris.mapNotNull { value ->
+): List<ShareableFile> = outputUris.distinct().mapNotNull { value ->
     val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return@mapNotNull null
+    if (uri.scheme != ContentResolver.SCHEME_CONTENT) return@mapNotNull null
     val displayName = runCatching {
         resolver.query(
             uri,
@@ -38,7 +39,6 @@ internal fun resolveShareableFiles(
 }
 
 internal fun buildFileShareIntent(
-    resolver: ContentResolver,
     files: List<ShareableFile>,
 ): Intent? {
     if (files.isEmpty() || !canShareTogether(files.map(ShareableFile::mimeType))) return null
@@ -54,7 +54,7 @@ internal fun buildFileShareIntent(
             Intent.EXTRA_TITLE,
             if (files.size == 1) files.single().displayName else "${files.size} 个下载文件",
         )
-        clipData = ClipData.newUri(resolver, "抖音下载文件", uris.first()).apply {
+        clipData = ClipData.newRawUri("抖音下载文件", uris.first()).apply {
             uris.drop(1).forEach { addItem(ClipData.Item(it)) }
         }
         if (uris.size == 1) {
@@ -64,6 +64,27 @@ internal fun buildFileShareIntent(
         }
     }
     return intent
+}
+
+internal fun buildFileShareChooser(target: Intent): Intent =
+    Intent.createChooser(target, "分享下载文件").apply {
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        clipData = target.clipData
+    }
+
+internal fun shareCacheFileName(index: Int, displayName: String): String {
+    val extension = displayName.substringAfterLast('.', "")
+        .replace(Regex("[^A-Za-z0-9]"), "")
+        .take(12)
+    val rawBase = if (extension.isBlank()) displayName else displayName.substringBeforeLast('.')
+    val base = rawBase
+        .replace(Regex("[^\\p{L}\\p{N}_ -]"), "_")
+        .replace(Regex("_+"), "_")
+        .trim(' ', '_')
+        .ifBlank { "download" }
+        .take(96)
+    val suffix = extension.takeIf(String::isNotBlank)?.let { ".$it" }.orEmpty()
+    return "${(index + 1).toString().padStart(2, '0')}_${base}$suffix"
 }
 
 internal fun commonShareMimeType(types: List<String?>): String {

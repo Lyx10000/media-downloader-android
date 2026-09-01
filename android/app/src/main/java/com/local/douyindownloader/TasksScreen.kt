@@ -1,6 +1,5 @@
 package com.local.douyindownloader
 
-import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -66,7 +65,7 @@ internal fun TasksScreen(
     requestAllFilesAccess: () -> Unit,
 ) {
     val context = LocalContext.current
-    var shareFiles by remember { mutableStateOf(emptyList<ShareableFile>()) }
+    var pendingShare by remember { mutableStateOf<PendingShare?>(null) }
     var pendingDelete by remember { mutableStateOf<TaskRecord?>(null) }
     var deleteFiles by remember { mutableStateOf(false) }
     var recoveryTask by remember { mutableStateOf<TaskRecord?>(null) }
@@ -163,10 +162,15 @@ internal fun TasksScreen(
                         )
                     ) {
                         Button(onClick = {
-                            shareFiles = resolveShareableFiles(
+                            val files = resolveShareableFiles(
                                 context.contentResolver,
                                 task.outputUris,
                             )
+                            if (files.isEmpty()) {
+                                viewModel.shareTaskFiles(context, task.id, emptyList())
+                            } else {
+                                pendingShare = PendingShare(task.id, files)
+                            }
                         }) {
                             Icon(Icons.Default.Share, contentDescription = null)
                             Spacer(Modifier.size(8.dp))
@@ -177,15 +181,13 @@ internal fun TasksScreen(
             }
         }
     }
-    if (shareFiles.isNotEmpty()) {
+    pendingShare?.takeIf { it.files.isNotEmpty() }?.let { share ->
         ShareFilesSheet(
-            files = shareFiles,
-            onDismiss = { shareFiles = emptyList() },
+            files = share.files,
+            onDismiss = { pendingShare = null },
             onShare = { selected ->
-                buildFileShareIntent(context.contentResolver, selected)?.let { intent ->
-                    shareFiles = emptyList()
-                    context.startActivity(Intent.createChooser(intent, "分享下载文件"))
-                }
+                pendingShare = null
+                viewModel.shareTaskFiles(context, share.taskId, selected)
             },
         )
     }
@@ -290,6 +292,11 @@ internal fun TasksScreen(
         )
     }
 }
+
+private data class PendingShare(
+    val taskId: String,
+    val files: List<ShareableFile>,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
