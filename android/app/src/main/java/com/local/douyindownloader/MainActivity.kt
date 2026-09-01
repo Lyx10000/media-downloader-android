@@ -5,8 +5,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -44,6 +47,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Home
@@ -51,6 +55,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -121,6 +127,11 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        viewModel.onAppForeground()
+    }
+
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.let {
@@ -163,6 +174,22 @@ private fun DownloaderApp(viewModel: MainViewModel) {
             viewModel.setCustomTree(uri)
         }
     }
+    val allFilesAccess = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        viewModel.onAppForeground()
+    }
+    val requestAllFilesAccess = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            val appIntent = Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:${context.packageName}"),
+            )
+            runCatching { allFilesAccess.launch(appIntent) }.onFailure {
+                allFilesAccess.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -201,11 +228,16 @@ private fun DownloaderApp(viewModel: MainViewModel) {
         ) {
             when (destination) {
                 0 -> HomeScreen(viewModel, onShowTasks = { destination = 1 })
-                1 -> TasksScreen(viewModel)
+                1 -> TasksScreen(
+                    viewModel = viewModel,
+                    chooseFolder = { folderPicker.launch(null) },
+                    requestAllFilesAccess = requestAllFilesAccess,
+                )
                 2 -> DiagnosticsScreen(viewModel)
                 else -> SettingsScreen(
                     viewModel = viewModel,
                     chooseFolder = { folderPicker.launch(null) },
+                    requestAllFilesAccess = requestAllFilesAccess,
                 )
             }
         }
@@ -533,9 +565,17 @@ private fun CenterStatus(text: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TasksScreen(viewModel: MainViewModel) {
+private fun TasksScreen(
+    viewModel: MainViewModel,
+    chooseFolder: () -> Unit,
+    requestAllFilesAccess: () -> Unit,
+) {
     val context = LocalContext.current
     var shareFiles by remember { mutableStateOf(emptyList<ShareableFile>()) }
+    var pendingDelete by remember { mutableStateOf<TaskRecord?>(null) }
+    var deleteFiles by remember { mutableStateOf(false) }
+    var recoveryTask by remember { mutableStateOf<TaskRecord?>(null) }
+    LaunchedEffect(Unit) { viewModel.onTasksVisible() }
     if (viewModel.tasks.isEmpty()) {
         CenterStatus("还没有下载任务")
         return
@@ -545,16 +585,58 @@ private fun TasksScreen(viewModel: MainViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(viewModel.tasks, key = TaskRecord::id) { task ->
-            OutlinedCard(Modifier.fillMaxWidth()) {
+            val recoverable = task.fileState in setOf(
+                FileState.PARTIAL,
+                FileState.MISSING,
+                FileState.STORAGE_UNAVAILABLE,
+                FileState.DELETE_FAILED,
+            )
+            val containerColor = when (task.fileState) {
+                FileState.PARTIAL -> MaterialTheme.colorScheme.tertiaryContainer
+                FileState.MISSING -> MaterialTheme.colorScheme.surfaceVariant
+                FileState.STORAGE_UNAVAILABLE, FileState.DELETE_FAILED ->
+                    MaterialTheme.colorScheme.errorContainer
+                else -> MaterialTheme.colorScheme.surface
+            }
+            OutlinedCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alpha(if (task.fileState == FileState.MISSING) 0.62f else 1f)
+                    .then(
+                        if (recoverable) Modifier.clickable { recoveryTask = task }
+                        else Modifier,
+                    ),
+                colors = CardDefaults.outlinedCardColors(containerColor = containerColor),
+            ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(task.title, style = MaterialTheme.typography.titleMedium)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            task.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(onClick = { pendingDelete = task; deleteFiles = false }) {
+                            Icon(Icons.Default.Delete, contentDescription = "删除任务")
+                        }
+                    }
                     Text(
                         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date(task.createdAt)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(task.stage)
-                    if (task.status in setOf("QUEUED", "RUNNING")) {
+                    Text(
+                        when (task.fileState) {
+                            FileState.PARTIAL -> "部分文件已删除"
+                            FileState.MISSING -> "文件已被删除"
+                            FileState.STORAGE_UNAVAILABLE -> "保存目录已失效"
+                            FileState.DELETE_FAILED -> "部分内容删除失败"
+                            else -> task.stage
+                        },
+                    )
+                    if (task.status in setOf("QUEUED", "RUNNING", "DELETING")) {
                         LinearProgressIndicator(
                             progress = { task.progress / 100f },
                             modifier = Modifier.fillMaxWidth(),
@@ -564,14 +646,19 @@ private fun TasksScreen(viewModel: MainViewModel) {
                     if (task.error.isNotBlank()) {
                         Text(task.error, color = MaterialTheme.colorScheme.error)
                     }
-                    if (task.status == "FAILED") {
+                    if (task.status == "FAILED" && task.fileState != FileState.DELETE_FAILED) {
                         Button(onClick = { viewModel.retryTask(task) }) {
                             Icon(Icons.Default.Refresh, contentDescription = null)
                             Spacer(Modifier.size(8.dp))
                             Text("重试")
                         }
                     }
-                    if (task.outputUris.isNotEmpty()) {
+                    if (task.outputUris.isNotEmpty() && task.fileState in setOf(
+                            FileState.AVAILABLE,
+                            FileState.PARTIAL,
+                            FileState.UNKNOWN,
+                        )
+                    ) {
                         Button(onClick = {
                             shareFiles = resolveShareableFiles(
                                 context.contentResolver,
@@ -596,6 +683,106 @@ private fun TasksScreen(viewModel: MainViewModel) {
                     shareFiles = emptyList()
                     context.startActivity(Intent.createChooser(intent, "分享下载文件"))
                 }
+            },
+        )
+    }
+    pendingDelete?.let { task ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null; deleteFiles = false },
+            title = { Text("删除任务") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("确定删除“${task.title}”的任务记录吗？")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = deleteFiles, onCheckedChange = { deleteFiles = it })
+                        Text("同时删除下载内容和空任务文件夹")
+                    }
+                    Text(
+                        "任务文件夹中的其他文件不会被删除。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (deleteFiles && viewModel.requiresAllFilesAccess(task)) {
+                        requestAllFilesAccess()
+                    } else {
+                        viewModel.deleteTask(task, deleteFiles)
+                        pendingDelete = null
+                        deleteFiles = false
+                    }
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null; deleteFiles = false }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+    recoveryTask?.let { task ->
+        val storageUnavailable = task.fileState == FileState.STORAGE_UNAVAILABLE
+        val deleteFailed = task.fileState == FileState.DELETE_FAILED
+        val replacementStorageReady = storageUnavailable && viewModel.hasReplacementStorage(task)
+        AlertDialog(
+            onDismissRequest = { recoveryTask = null },
+            title = {
+                Text(
+                    when {
+                        storageUnavailable -> "保存目录已失效"
+                        deleteFailed -> "部分内容删除失败"
+                        task.fileState == FileState.PARTIAL -> "部分文件已删除"
+                        else -> "文件已被删除"
+                    },
+                )
+            },
+            text = {
+                Text(
+                    when {
+                        storageUnavailable && replacementStorageReady ->
+                            "新的保存目录已经就绪，可以重新解析并完整下载。"
+                        storageUnavailable -> "请重新选择保存目录，然后再次点击重新下载。"
+                        deleteFailed -> "可以重试删除下载内容，或者只移除任务记录并保留残留文件。"
+                        else -> "可以重新解析作品并完整下载，或者删除这条任务记录。"
+                    },
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    when {
+                        storageUnavailable && replacementStorageReady -> viewModel.retryTask(task)
+                        storageUnavailable -> chooseFolder()
+                        deleteFailed -> {
+                            if (viewModel.requiresAllFilesAccess(task)) requestAllFilesAccess()
+                            else viewModel.deleteTask(task, true)
+                        }
+                        viewModel.requiresAllFilesAccess(task) -> requestAllFilesAccess()
+                        else -> viewModel.retryTask(task)
+                    }
+                    recoveryTask = null
+                }) {
+                    Text(
+                        when {
+                            storageUnavailable && replacementStorageReady -> "重新下载"
+                            storageUnavailable -> "重新选择目录"
+                            deleteFailed -> "重试删除"
+                            else -> "重新下载"
+                        },
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    if (deleteFailed) {
+                        viewModel.deleteTask(task, false)
+                    } else {
+                        pendingDelete = task
+                        deleteFiles = false
+                    }
+                    recoveryTask = null
+                }) { Text(if (deleteFailed) "仅删除任务记录" else "删除任务") }
             },
         )
     }
@@ -735,7 +922,11 @@ private fun DiagnosticsScreen(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun SettingsScreen(viewModel: MainViewModel, chooseFolder: () -> Unit) {
+private fun SettingsScreen(
+    viewModel: MainViewModel,
+    chooseFolder: () -> Unit,
+    requestAllFilesAccess: () -> Unit,
+) {
     var showWebView by remember { mutableStateOf(false) }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -787,6 +978,23 @@ private fun SettingsScreen(viewModel: MainViewModel, chooseFolder: () -> Unit) {
             }
         }
         item { HorizontalDivider() }
+        item { Text("文件管理权限", style = MaterialTheme.typography.titleMedium) }
+        item {
+            ListItem(
+                headlineContent = { Text("所有文件访问") },
+                supportingContent = {
+                    Text("用于检查和删除默认下载目录中的空任务文件夹")
+                },
+                trailingContent = {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) {
+                        Text("已授权", color = MaterialTheme.colorScheme.primary)
+                    } else {
+                        OutlinedButton(onClick = requestAllFilesAccess) { Text("授权") }
+                    }
+                },
+            )
+        }
+        item { HorizontalDivider() }
         item { Text("解析环境", style = MaterialTheme.typography.titleMedium) }
         item {
             Button(onClick = { showWebView = true }) {
@@ -796,7 +1004,7 @@ private fun SettingsScreen(viewModel: MainViewModel, chooseFolder: () -> Unit) {
         item { HorizontalDivider() }
         item {
             Text("版本", style = MaterialTheme.typography.titleMedium)
-            Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 android-core-2")
+            Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 android-core-3")
             Text("完全本地运行，不使用服务器", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

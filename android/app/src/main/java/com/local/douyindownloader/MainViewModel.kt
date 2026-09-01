@@ -3,6 +3,9 @@ package com.local.douyindownloader
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.webkit.CookieManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +36,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val parser = ParserGateway()
     private val store = TaskStore(application)
     private val logger = DiagnosticLogger(application)
+    private val inspector = StorageInspector(application)
+    private val deletionCoordinator = TaskDeletionCoordinator(application)
     private val preferences = application.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     var inputText by mutableStateOf("")
@@ -53,6 +58,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var sessionId = ""
     private var parsingStarted = false
+    @Volatile private var refreshingTasks = false
+    private var lastStorageScanAt = 0L
 
     init {
         refreshTasks()
@@ -60,7 +67,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             while (isActive) {
                 delay(1_000)
-                refreshTasks()
+                refreshTasks(forceStorageCheck = false)
             }
         }
     }
@@ -134,7 +141,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun queueDownload(result: ParseResult) {
         val id = sessionId.ifBlank { UUID.randomUUID().toString() }
-        val spec = TaskSpec(id, System.currentTimeMillis(), result, selectedVariant, selectedMode)
+        val createdAt = System.currentTimeMillis()
+        val storageMode = if (customTreeUri.isNullOrBlank()) StorageMode.DEFAULT else StorageMode.SAF
+        val spec = TaskSpec(
+            taskId = id,
+            createdAt = createdAt,
+            result = result,
+            variantIndex = selectedVariant,
+            mode = selectedMode,
+            sourceText = inputText,
+            storageMode = storageMode,
+            storageRoot = customTreeUri.orEmpty(),
+            taskFolder = taskFolderName(createdAt, id),
+        )
         store.insert(spec)
         logger.event(id, "QUALITY", "DOWNLOAD_CONFIRMED", JSONObject().apply {
             put("variant", selectedVariant)
@@ -154,16 +173,144 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun retryTask(task: TaskRecord) {
-        store.update(task.id, "QUEUED", "等待重试", 0)
-        logger.event(task.id, "DOWNLOAD", "RETRY_REQUESTED")
-        enqueue(task.id, ExistingWorkPolicy.REPLACE)
-        refreshTasks()
+        val cookieHeader = CookieManager.getInstance()
+            .getCookie("https://www.douyin.com/").orEmpty()
+        viewModelScope.launch {
+            val originalSpec = withContext(Dispatchers.IO) { store.getSpec(task.id) }
+            if (originalSpec == null || originalSpec.result.awemeId.isBlank()) {
+                message = "旧任务缺少作品 ID，无法自动重新解析"
+                return@launch
+            }
+
+            val resolvedStorage = resolveStorageForRetry(originalSpec) ?: return@launch
+            store.update(task.id, "RUNNING", "正在重新解析作品", 0)
+            refreshTasks()
+            logger.event(task.id, "REDOWNLOAD", "REPARSE_STARTED", JSONObject().apply {
+                put("aweme_id", originalSpec.result.awemeId)
+                put("kind", originalSpec.result.kind)
+            })
+            val refreshed = parser.parse(originalSpec.stableSource(), cookieHeader)
+            if (!refreshed.ok) {
+                val hint = if (refreshed.errorCode == "AUTH_OR_RISK") {
+                    "请到设置中登录或刷新抖音环境后重试"
+                } else refreshed.message
+                store.update(task.id, "FAILED", "重新解析失败", 0, hint)
+                logger.event(task.id, "REDOWNLOAD", "REPARSE_FAILED", JSONObject().apply {
+                    put("code", refreshed.errorCode)
+                    put("message", refreshed.message)
+                })
+                message = hint
+                refreshTasks(forceStorageCheck = true)
+                return@launch
+            }
+
+            val previous = originalSpec.result.variants.getOrNull(originalSpec.variantIndex)
+            val match = if (refreshed.kind == "image") VariantMatch(0, true)
+            else matchVariant(previous, refreshed.variants)
+            if (refreshed.kind != "image" && match.index < 0) {
+                store.update(task.id, "FAILED", "重新解析失败", 0, "当前没有可下载的视频档位")
+                message = "当前没有可下载的视频档位"
+                refreshTasks()
+                return@launch
+            }
+
+            val cleanup = deletionCoordinator.deleteOutputsForRedownload(task.id)
+            if (!cleanup.success) {
+                message = cleanup.message
+                refreshTasks(forceStorageCheck = true)
+                return@launch
+            }
+
+            val now = System.currentTimeMillis()
+            val updatedSpec = originalSpec.copy(
+                result = refreshed,
+                variantIndex = match.index.coerceAtLeast(0),
+                sourceText = originalSpec.stableSource(),
+                storageMode = resolvedStorage.first,
+                storageRoot = resolvedStorage.second,
+                taskFolder = taskFolderName(now, task.id),
+            )
+            store.replaceSpec(task.id, updatedSpec)
+            store.update(task.id, "QUEUED", "等待重新下载", 0)
+            logger.event(task.id, "REDOWNLOAD", "REPARSE_COMPLETE", JSONObject().apply {
+                put("variant", match.index)
+                put("exact_match", match.exact)
+                put("images", refreshed.imageCandidates.size)
+            })
+            enqueue(task.id, ExistingWorkPolicy.REPLACE)
+            message = if (refreshed.kind != "image" && !match.exact) {
+                if (previous == null) "已选择当前可获得的最高档位"
+                else "原清晰度已不可用，已选择当前最接近的档位"
+            } else {
+                "已重新解析并开始下载"
+            }
+            refreshTasks()
+        }
     }
 
-    fun refreshTasks() {
+    fun deleteTask(task: TaskRecord, deleteFiles: Boolean) {
+        viewModelScope.launch {
+            val result = deletionCoordinator.deleteTask(task.id, deleteFiles)
+            message = result.message
+            refreshTasks(forceStorageCheck = true)
+        }
+    }
+
+    fun requiresAllFilesAccess(task: TaskRecord): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) {
+            return false
+        }
+        val spec = store.getSpec(task.id) ?: return false
+        if (spec.storageMode == StorageMode.SAF) return false
+        if (spec.storageMode == StorageMode.LEGACY) {
+            return task.outputs.any {
+                runCatching { Uri.parse(it.uri).authority == "media" }.getOrDefault(false)
+            }
+        }
+        return true
+    }
+
+    fun hasReplacementStorage(task: TaskRecord): Boolean {
+        val spec = store.getSpec(task.id) ?: return false
+        if (spec.storageMode != StorageMode.SAF || inspector.isTreeAvailable(spec.storageRoot)) {
+            return false
+        }
+        val replacement = customTreeUri ?: return false
+        return replacement != spec.storageRoot && inspector.isTreeAvailable(replacement)
+    }
+
+    fun onAppForeground() = refreshTasks(forceStorageCheck = true)
+
+    fun onTasksVisible() = refreshTasks(forceStorageCheck = true)
+
+    fun refreshTasks(forceStorageCheck: Boolean = false) {
+        if (refreshingTasks) return
+        refreshingTasks = true
         viewModelScope.launch(Dispatchers.IO) {
-            val records = store.list()
-            withContext(Dispatchers.Main) { tasks = records }
+            try {
+                var records = store.list()
+                val now = System.currentTimeMillis()
+                if (forceStorageCheck || now - lastStorageScanAt >= 15_000) {
+                    records.forEach { task ->
+                        if (task.status != "DELETING") {
+                            val state = inspector.inspect(task, store.getSpec(task.id))
+                            if (state != task.fileState) {
+                                store.updateFileState(task.id, state)
+                                logger.event(task.id, "STORAGE", "FILE_STATE_CHANGED", JSONObject().apply {
+                                    put("from", task.fileState)
+                                    put("to", state)
+                                    put("outputs", task.outputs.size)
+                                })
+                            }
+                        }
+                    }
+                    lastStorageScanAt = now
+                    records = store.list()
+                }
+                withContext(Dispatchers.Main) { tasks = records }
+            } finally {
+                refreshingTasks = false
+            }
         }
     }
 
@@ -218,6 +365,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return result.variants.indexOfFirst {
             it.width == highest.width && it.height == highest.height && it.codec.contains("264")
         }.takeIf { it >= 0 } ?: 0
+    }
+
+    private fun resolveStorageForRetry(spec: TaskSpec): Pair<String, String>? {
+        return when (spec.storageMode) {
+            StorageMode.SAF -> {
+                if (inspector.isTreeAvailable(spec.storageRoot)) {
+                    StorageMode.SAF to spec.storageRoot
+                } else {
+                    val replacement = customTreeUri
+                    if (replacement.isNullOrBlank() || !inspector.isTreeAvailable(replacement)) {
+                        message = "保存目录已失效，请重新选择目录后再下载"
+                        null
+                    } else {
+                        StorageMode.SAF to replacement
+                    }
+                }
+            }
+            StorageMode.DEFAULT -> StorageMode.DEFAULT to ""
+            else -> {
+                val currentTree = customTreeUri
+                if (!currentTree.isNullOrBlank() && inspector.isTreeAvailable(currentTree)) {
+                    StorageMode.SAF to currentTree
+                } else {
+                    StorageMode.DEFAULT to ""
+                }
+            }
+        }
     }
 
     private fun enqueue(taskId: String, policy: ExistingWorkPolicy) {

@@ -159,6 +159,7 @@ def _normalise(detail, item_id, item_kind, probe_sizes=False):
         "variants": [],
         "audio_urls": [],
         "image_urls": [],
+        "image_candidates": [],
         "music_urls": [],
         "response_shape": _shape(detail),
     }
@@ -168,6 +169,7 @@ def _normalise(detail, item_id, item_kind, probe_sizes=False):
         for image in images:
             urls = extract_image_urls(image)
             if urls:
+                result["image_candidates"].append(urls)
                 result["image_urls"].append(urls[0])
         if result["image_urls"]:
             result["cover_url"] = result["image_urls"][0]

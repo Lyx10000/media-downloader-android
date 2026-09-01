@@ -18,10 +18,6 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 
 class DownloadWorker(
     appContext: Context,
@@ -38,6 +34,11 @@ class DownloadWorker(
         val taskFolder = File(applicationContext.cacheDir, "downloadTasks/$taskId").apply { mkdirs() }
         try {
             update("RUNNING", "准备下载", 0)
+            PublicStorage.ensureDestination(applicationContext, spec)
+            logger.event(taskId, "STORAGE", "DESTINATION_READY", JSONObject().apply {
+                put("mode", spec.storageMode)
+                put("task_folder", spec.taskFolder)
+            })
             logger.event(taskId, "DOWNLOAD", "TASK_STARTED", JSONObject().apply {
                 put("aweme_id", spec.result.awemeId)
                 put("kind", spec.result.kind)
@@ -73,14 +74,17 @@ class DownloadWorker(
     override suspend fun getForegroundInfo(): ForegroundInfo =
         createForeground("等待下载", 0)
 
-    private suspend fun downloadImages(spec: TaskSpec, folder: File): List<String> {
+    private suspend fun downloadImages(spec: TaskSpec, folder: File): List<TaskOutput> {
         val files = mutableListOf<Pair<File, String>>()
-        spec.result.imageUrls.forEachIndexed { index, url ->
-            val ext = extensionFromUrl(url, "jpg")
+        val imageCandidates = spec.result.imageCandidates.ifEmpty {
+            spec.result.imageUrls.map(::listOf)
+        }
+        imageCandidates.forEachIndexed { index, urls ->
+            val ext = extensionFromUrl(urls.first(), "jpg")
             val name = "image_${index + 1}.$ext"
             val file = File(folder, name)
-            update("RUNNING", "下载原图 ${index + 1}/${spec.result.imageUrls.size}", percent(index, spec.result.imageUrls.size))
-            download(listOf(url), file)
+            update("RUNNING", "下载原图 ${index + 1}/${imageCandidates.size}", percent(index, imageCandidates.size))
+            download(urls, file)
             files += file to name
         }
         spec.result.musicUrls.firstOrNull()?.let { url ->
@@ -93,7 +97,7 @@ class DownloadWorker(
         return publishAll(spec, files)
     }
 
-    private suspend fun downloadVideo(spec: TaskSpec, folder: File): List<String> {
+    private suspend fun downloadVideo(spec: TaskSpec, folder: File): List<TaskOutput> {
         val variant = spec.result.variants.getOrNull(spec.variantIndex)
             ?: error("没有可下载的视频档位")
         val mode = spec.mode
@@ -168,14 +172,14 @@ class DownloadWorker(
         }
     }
 
-    private suspend fun publishAll(spec: TaskSpec, files: List<Pair<File, String>>): List<String> {
+    private suspend fun publishAll(spec: TaskSpec, files: List<Pair<File, String>>): List<TaskOutput> {
         update("RUNNING", "保存到公共下载目录", 94)
-        val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
-        }.format(Date(spec.createdAt))
-        return files.map { (file, name) ->
-            PublicStorage.publish(applicationContext, file, timestamp, name).toString()
+        val published = mutableListOf<TaskOutput>()
+        files.forEach { (file, name) ->
+            published += PublicStorage.publish(applicationContext, file, spec, name)
+            store.replaceOutputs(taskId, published)
         }
+        return published
     }
 
     private suspend fun download(urls: List<String>, target: File) {

@@ -258,24 +258,22 @@ def _image_quality(url):
 
 
 def extract_image_urls(image):
-    """优先原图字段，再按质量参数选择无水印 CDN 地址。"""
-    candidates = []
-    for source_rank, key in enumerate(("origin_url", "originUrl", "url_list", "urlList")):
-        for position, url in enumerate(_address_urls(image.get(key))):
-            candidates.append({
-                "url": url,
-                "source_rank": 2 if key in {"origin_url", "originUrl"} else 1,
-                "quality": _image_quality(url),
-                "position": position,
-            })
-    if not candidates:
-        return []
-    ordered = sorted(
-        candidates,
-        key=lambda item: (item["source_rank"], item["quality"], item["position"]),
-        reverse=True,
+    """优先下载原图字段，并保留同一图片的全部 CDN 回退地址。"""
+    ordered = []
+    source_groups = (
+        ("download_url_list", "downloadUrlList", "download_url", "downloadUrl"),
+        ("origin_url", "originUrl"),
+        ("url_list", "urlList"),
     )
-    return list(dict.fromkeys(item["url"] for item in ordered))
+    for keys in source_groups:
+        group = []
+        for key in keys:
+            group.extend(_address_urls(image.get(key)))
+        ordered.extend(sorted(group, key=_image_quality, reverse=True))
+
+    # 新字段名出现时仍可作为最后回退，但不能盖过明确的下载原图字段。
+    ordered.extend(_address_urls(image))
+    return list(dict.fromkeys(url for url in ordered if url))
 
 
 def format_video_variant(variant):

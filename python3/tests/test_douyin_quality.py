@@ -197,6 +197,27 @@ class VideoVariantTests(unittest.TestCase):
 
 
 class ImageVariantTests(unittest.TestCase):
+    def test_download_urls_precede_origin_and_display_candidates(self):
+        image = {
+            "download_url_list": [
+                "https://download.example/source-q100.webp",
+                "https://backup.example/source-q100.webp",
+            ],
+            "origin_url": {"url_list": ["https://cdn.example/original.jpeg"]},
+            "url_list": ["https://cdn.example/display-q90.jpeg"],
+        }
+
+        urls = extract_image_urls(image)
+
+        self.assertEqual(urls[:2], [
+            "https://download.example/source-q100.webp",
+            "https://backup.example/source-q100.webp",
+        ])
+        self.assertLess(
+            urls.index("https://cdn.example/original.jpeg"),
+            urls.index("https://cdn.example/display-q90.jpeg"),
+        )
+
     def test_origin_url_precedes_compressed_cdn_variants(self):
         image = {
             "origin_url": {"url_list": ["https://cdn.example/original.jpeg"]},

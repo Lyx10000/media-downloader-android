@@ -95,6 +95,30 @@ class AndroidBridgeTests(unittest.TestCase):
 
         self.assertEqual(result["kind"], "image")
         self.assertEqual(result["image_urls"], ["https://cdn.example/original.jpeg"])
+        self.assertEqual(result["image_candidates"], [[
+            "https://cdn.example/original.jpeg",
+            "https://cdn.example/compressed-q75.jpeg",
+        ]])
+
+    def test_normalises_all_download_url_candidates(self):
+        detail = {
+            "aweme_id": "1234567890123456789",
+            "images": [{
+                "download_url_list": [
+                    "https://download.example/main.webp",
+                    "https://download.example/backup.webp",
+                ],
+                "url_list": ["https://cdn.example/display.jpeg"],
+            }],
+        }
+
+        result = _normalise(detail, detail["aweme_id"], "note")
+
+        self.assertEqual(result["image_urls"], ["https://download.example/main.webp"])
+        self.assertEqual(result["image_candidates"][0][:2], [
+            "https://download.example/main.webp",
+            "https://download.example/backup.webp",
+        ])
 
 
 if __name__ == "__main__":

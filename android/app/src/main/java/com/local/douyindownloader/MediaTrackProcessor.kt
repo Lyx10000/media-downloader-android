@@ -1,6 +1,7 @@
 package com.local.douyindownloader
 
 import android.media.MediaExtractor
+import android.media.MediaCodec
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import java.io.File
@@ -98,7 +99,15 @@ object MediaTrackProcessor {
             info.offset = 0
             info.size = size
             info.presentationTimeUs = extractor.sampleTime
-            info.flags = extractor.sampleFlags
+            val sampleFlags = extractor.sampleFlags
+            info.flags = buildList {
+                if (sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+                    add(MediaCodec.BUFFER_FLAG_KEY_FRAME)
+                }
+                if (sampleFlags and MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME != 0) {
+                    add(MediaCodec.BUFFER_FLAG_PARTIAL_FRAME)
+                }
+            }.fold(0, Int::or)
             muxer.writeSampleData(outputTrack, buffer, info)
             extractor.advance()
         }
@@ -109,4 +118,3 @@ object MediaTrackProcessor {
         val format: MediaFormat,
     )
 }
-
