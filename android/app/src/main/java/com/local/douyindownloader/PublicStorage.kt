@@ -15,14 +15,7 @@ object PublicStorage {
         if (!customRoot.isNullOrBlank()) {
             return publishToTree(context, Uri.parse(customRoot), source, relativeFolder, displayName)
         }
-        val mime = when (displayName.substringAfterLast('.', "").lowercase()) {
-            "mp4" -> "video/mp4"
-            "m4a" -> "audio/mp4"
-            "jpg", "jpeg" -> "image/jpeg"
-            "png" -> "image/png"
-            "webp" -> "image/webp"
-            else -> "application/octet-stream"
-        }
+        val mime = mediaMimeType(displayName)
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, displayName)
             put(MediaStore.Downloads.MIME_TYPE, mime)
@@ -62,14 +55,7 @@ object PublicStorage {
             ?: root.createDirectory(relativeFolder)
             ?: error("无法创建任务目录 $relativeFolder")
         taskFolder.findFile(displayName)?.delete()
-        val mime = when (displayName.substringAfterLast('.', "").lowercase()) {
-            "mp4" -> "video/mp4"
-            "m4a" -> "audio/mp4"
-            "jpg", "jpeg" -> "image/jpeg"
-            "png" -> "image/png"
-            "webp" -> "image/webp"
-            else -> "application/octet-stream"
-        }
+        val mime = mediaMimeType(displayName)
         val target = taskFolder.createFile(mime, displayName)
             ?: error("无法在自定义目录创建 $displayName")
         context.contentResolver.openOutputStream(target.uri, "w")?.use { output ->

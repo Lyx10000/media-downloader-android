@@ -271,7 +271,12 @@ class DownloadWorker(
     private fun extensionFromUrl(url: String, fallback: String): String {
         val clean = url.substringBefore('?').substringAfterLast('/').substringAfterLast('.', "")
             .lowercase()
-        return clean.takeIf { it in setOf("jpg", "jpeg", "png", "webp", "m4a", "mp3", "aac") }
+        return clean.takeIf {
+            it in setOf(
+                "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif", "avif",
+                "m4a", "mp3", "aac",
+            )
+        }
             ?: fallback
     }
 
