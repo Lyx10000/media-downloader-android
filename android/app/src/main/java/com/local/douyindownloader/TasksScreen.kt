@@ -60,6 +60,7 @@ internal fun EmptyTasksStatus() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun TasksScreen(
+    tasks: List<TaskRecord>,
     viewModel: MainViewModel,
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
@@ -73,7 +74,7 @@ internal fun TasksScreen(
         viewModel.onTasksVisible()
         onDispose(viewModel::onTasksHidden)
     }
-    if (viewModel.tasks.isEmpty()) {
+    if (tasks.isEmpty()) {
         EmptyTasksStatus()
         return
     }
@@ -81,7 +82,7 @@ internal fun TasksScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(viewModel.tasks, key = TaskRecord::id) { task ->
+        items(tasks, key = TaskRecord::id) { task ->
             val recoverable = task.fileState in setOf(
                 FileState.PARTIAL,
                 FileState.MISSING,
@@ -115,7 +116,10 @@ internal fun TasksScreen(
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
-                        IconButton(onClick = { pendingDelete = task; deleteFiles = false }) {
+                        IconButton(
+                            onClick = { pendingDelete = task; deleteFiles = false },
+                            enabled = task.status != TaskStatus.DELETING,
+                        ) {
                             Icon(Icons.Default.Delete, contentDescription = "删除任务")
                         }
                     }
@@ -143,7 +147,9 @@ internal fun TasksScreen(
                             progress = { task.progress / 100f },
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        OutlinedButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
+                        if (task.status != TaskStatus.DELETING) {
+                            OutlinedButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
+                        }
                     }
                     if (task.error.isNotBlank()) {
                         Text(task.error, color = MaterialTheme.colorScheme.error)

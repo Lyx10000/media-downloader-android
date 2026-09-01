@@ -132,12 +132,17 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                     onShowTasks = { destination = 1 },
                 )
                 1 -> TasksScreen(
+                    tasks = uiState.tasks,
                     viewModel = viewModel,
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,
                 )
-                2 -> DiagnosticsScreen(viewModel)
+                2 -> DiagnosticsScreen(
+                    logText = uiState.logText,
+                    viewModel = viewModel,
+                )
                 else -> SettingsScreen(
+                    uiState = uiState,
                     viewModel = viewModel,
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,

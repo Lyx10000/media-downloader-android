@@ -45,7 +45,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun DiagnosticsScreen(viewModel: MainViewModel) {
+internal fun DiagnosticsScreen(
+    logText: String,
+    viewModel: MainViewModel,
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -70,7 +73,7 @@ internal fun DiagnosticsScreen(viewModel: MainViewModel) {
         OutlinedCard(Modifier.weight(1f)) {
             SelectionContainer {
                 Text(
-                    viewModel.logText.ifBlank { "暂无日志" },
+                    logText.ifBlank { "暂无日志" },
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
@@ -84,6 +87,7 @@ internal fun DiagnosticsScreen(viewModel: MainViewModel) {
 }
 @Composable
 internal fun SettingsScreen(
+    uiState: MainUiState,
     viewModel: MainViewModel,
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
@@ -99,7 +103,7 @@ internal fun SettingsScreen(
                 headlineContent = { Text("同分辨率优先 H.264") },
                 supportingContent = { Text("兼容性更好；关闭时默认选择排序最高档") },
                 trailingContent = {
-                    Switch(checked = viewModel.preferH264, onCheckedChange = viewModel::updatePreferH264)
+                    Switch(checked = uiState.preferH264, onCheckedChange = viewModel::updatePreferH264)
                 },
             )
         }
@@ -108,11 +112,11 @@ internal fun SettingsScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .selectable(viewModel.selectedMode == mode) { viewModel.setDefaultMode(mode) },
+                    .selectable(uiState.selectedMode == mode) { viewModel.setDefaultMode(mode) },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(
-                    selected = viewModel.selectedMode == mode,
+                    selected = uiState.selectedMode == mode,
                     onClick = { viewModel.setDefaultMode(mode) },
                 )
                 Text(label)
@@ -122,7 +126,7 @@ internal fun SettingsScreen(
         item { Text("保存位置", style = MaterialTheme.typography.titleMedium) }
         item {
             Text(
-                viewModel.customTreeUri ?: "内部存储/Download/DouyinDownloader/",
+                uiState.customTreeUri ?: "内部存储/Download/DouyinDownloader/",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -133,7 +137,7 @@ internal fun SettingsScreen(
                     Spacer(Modifier.size(8.dp))
                     Text("选择目录")
                 }
-                if (viewModel.customTreeUri != null) {
+                if (uiState.customTreeUri != null) {
                     OutlinedButton(onClick = { viewModel.setCustomTree(null) }) { Text("恢复默认") }
                 }
             }

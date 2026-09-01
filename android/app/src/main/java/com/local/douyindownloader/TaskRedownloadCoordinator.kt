@@ -3,6 +3,7 @@ package com.local.douyindownloader
 import androidx.work.ExistingWorkPolicy
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 @Singleton
@@ -80,7 +81,15 @@ class TaskRedownloadCoordinator @Inject constructor(
             put("exact_match", match.exact)
             put("images", refreshed.imageCandidates.size)
         })
-        scheduler.enqueue(task.id, ExistingWorkPolicy.REPLACE)
+        try {
+            scheduler.enqueue(task.id, ExistingWorkPolicy.REPLACE)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            val message = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+            repository.update(task.id, TaskStatus.FAILED, "启动重新下载失败", 0, message)
+            return "启动重新下载失败：$message"
+        }
         return if (refreshed.kind != MediaKind.IMAGE && !match.exact) {
             if (previous == null) "已选择当前可获得的最高档位"
             else "原清晰度已不可用，已选择当前最接近的档位"

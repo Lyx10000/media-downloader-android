@@ -6,6 +6,7 @@ import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import javax.inject.Inject
 import javax.inject.Singleton
+import org.json.JSONObject
 
 @Singleton
 class AppWorkerFactory @Inject constructor(
@@ -18,8 +19,18 @@ class AppWorkerFactory @Inject constructor(
         appContext: Context,
         workerClassName: String,
         workerParameters: WorkerParameters,
-    ): ListenableWorker? = when (workerClassName) {
-        DownloadWorker::class.java.name -> DownloadWorker(
+    ): ListenableWorker? {
+        if (workerClassName != DownloadWorker::class.java.name) return null
+        val taskId = workerParameters.inputData.getString(DownloadWorker.KEY_TASK_ID)
+            .orEmpty()
+            .ifBlank { "work-${workerParameters.id}" }
+        runCatching {
+            logger.event(taskId, "STARTUP", "WORKER_CREATED", JSONObject().apply {
+                put("work_id", workerParameters.id.toString())
+                put("run_attempt", workerParameters.runAttemptCount)
+            })
+        }
+        return DownloadWorker(
             appContext,
             workerParameters,
             repository,
@@ -27,6 +38,5 @@ class AppWorkerFactory @Inject constructor(
             executor,
             settingsRepository,
         )
-        else -> null
     }
 }

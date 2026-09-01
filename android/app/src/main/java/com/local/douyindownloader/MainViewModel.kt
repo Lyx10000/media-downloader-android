@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import androidx.work.ExistingWorkPolicy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -208,25 +209,54 @@ class MainViewModel @Inject constructor(
             taskFolder = taskFolderName(createdAt, id),
         )
         viewModelScope.launch {
-            runCatching { store.insert(spec) }
-                .onSuccess {
+            try {
+                store.insert(spec)
+                runCatching {
                     logger.event(id, "QUALITY", "DOWNLOAD_CONFIRMED", JSONObject().apply {
                         put("variant", selectedVariant)
                         put("mode", selectedMode.wireValue)
                     })
-                    scheduler.enqueue(id, ExistingWorkPolicy.KEEP)
-                    message = "已加入后台下载"
-                    resetParse()
                 }
-                .onFailure { error -> message = "创建下载任务失败：${error.message}" }
+                scheduler.enqueue(id, ExistingWorkPolicy.KEEP)
+                message = "已加入后台下载"
+                resetParse()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val safeMessage = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+                runCatching {
+                    store.update(id, TaskStatus.FAILED, "启动下载失败", 0, safeMessage)
+                }
+                runCatching {
+                    logger.event(id, "SCHEDULE", "TASK_SUBMISSION_FAILED", JSONObject().apply {
+                        put("type", error.javaClass.name)
+                        put("message", safeMessage)
+                    })
+                }
+                message = "创建下载任务失败：$safeMessage"
+            }
         }
     }
 
     fun cancelTask(task: TaskRecord) {
-        scheduler.cancel(task.id)
         viewModelScope.launch {
-            store.update(task.id, TaskStatus.CANCELLED, "已取消", task.progress)
-            logger.event(task.id, "DOWNLOAD", "CANCEL_REQUESTED")
+            runCatching { logger.event(task.id, "DOWNLOAD", "CANCEL_REQUESTED") }
+            try {
+                scheduler.cancel(task.id)
+                store.update(task.id, TaskStatus.CANCELLED, "已取消", task.progress)
+                runCatching { logger.event(task.id, "DOWNLOAD", "CANCEL_ACCEPTED") }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val safeMessage = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+                runCatching {
+                    logger.event(task.id, "DOWNLOAD", "CANCEL_FAILED", JSONObject().apply {
+                        put("type", error.javaClass.name)
+                        put("message", safeMessage)
+                    })
+                }
+                message = "取消失败：$safeMessage"
+            }
         }
     }
 
