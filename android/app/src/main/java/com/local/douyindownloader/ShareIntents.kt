@@ -10,6 +10,7 @@ internal data class ShareableFile(
     val uri: Uri,
     val displayName: String,
     val mimeType: String,
+    val sizeBytes: Long = 0L,
 ) {
     val category: String get() = mediaCategory(mimeType)
 }
@@ -20,21 +21,29 @@ internal fun resolveShareableFiles(
 ): List<ShareableFile> = outputUris.distinct().mapNotNull { value ->
     val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return@mapNotNull null
     if (uri.scheme != ContentResolver.SCHEME_CONTENT) return@mapNotNull null
-    val displayName = runCatching {
+    val metadata = runCatching {
         resolver.query(
             uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
             null,
             null,
             null,
         )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
+            if (!cursor.moveToFirst()) return@use null
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+            Pair(
+                if (nameIndex >= 0) cursor.getString(nameIndex) else null,
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else 0L,
+            )
         }
-    }.getOrNull().orEmpty().ifBlank { uri.lastPathSegment ?: "download" }
+    }.getOrNull()
+    val displayName = metadata?.first.orEmpty().ifBlank { uri.lastPathSegment ?: "download" }
     ShareableFile(
         uri = uri,
         displayName = displayName,
         mimeType = mediaMimeType(displayName, runCatching { resolver.getType(uri) }.getOrNull()),
+        sizeBytes = metadata?.second?.coerceAtLeast(0L) ?: 0L,
     )
 }
 

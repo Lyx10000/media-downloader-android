@@ -44,15 +44,34 @@ class DownloadExecutor @Inject constructor(
         imageCandidates.forEachIndexed { index, urls ->
             val name = "image_${index + 1}.${extensionFromUrl(urls.first(), "jpg")}"
             val file = File(folder, name)
-            progress("下载原图 ${index + 1}/${imageCandidates.size}", percent(index, imageCandidates.size), true)
-            download(taskId, urls, file, progress)
+            val startProgress = 5 + index * 80 / imageCandidates.size
+            val endProgress = 5 + (index + 1) * 80 / imageCandidates.size
+            val label = "原图 ${index + 1}/${imageCandidates.size}"
+            progress("准备下载$label", startProgress, true)
+            download(
+                taskId = taskId,
+                urls = urls,
+                target = file,
+                label = label,
+                startProgress = startProgress,
+                endProgress = endProgress,
+                progress = progress,
+            )
             files += file to name
         }
         spec.result.musicUrls.firstOrNull()?.let { url ->
             val name = "bgm_1.${extensionFromUrl(url, "m4a")}"
             val file = File(folder, name)
-            progress("下载 BGM", 90, true)
-            download(taskId, spec.result.musicUrls, file, progress)
+            progress("准备下载 BGM", 86, true)
+            download(
+                taskId = taskId,
+                urls = spec.result.musicUrls,
+                target = file,
+                label = "BGM",
+                startProgress = 86,
+                endProgress = 92,
+                progress = progress,
+            )
             files += file to name
         }
         return publishAll(taskId, spec, files, progress)
@@ -73,8 +92,19 @@ class DownloadExecutor @Inject constructor(
         val audioTrack = File(folder, "video_1_audio.m4a")
         val merged = File(folder, "video_1.mp4")
 
-        progress("下载原始视频", 15, true)
-        download(taskId, variant.urls, source, progress)
+        progress("准备下载原始视频", 15, true)
+        download(
+            taskId = taskId,
+            urls = variant.urls,
+            target = source,
+            label = "视频",
+            startProgress = 15,
+            endProgress = 70,
+            fallbackTotalBytes = variant.size.takeIf {
+                it > 0L && variant.sizeSource != "estimated"
+            } ?: -1L,
+            progress = progress,
+        )
         progress("分析音视频轨道", 72, true)
         val sourceProbe = MediaTrackProcessor.probe(source)
         val probeText = sourceProbe.toString()
@@ -175,7 +205,15 @@ class DownloadExecutor @Inject constructor(
         }
 
         progress("下载独立音频轨", 76, true)
-        download(taskId, audioUrls, audioTrack, progress)
+        download(
+            taskId = taskId,
+            urls = audioUrls,
+            target = audioTrack,
+            label = "独立音频",
+            startProgress = 76,
+            endProgress = 84,
+            progress = progress,
+        )
         return when (mode) {
             DownloadMode.MERGE_KEEP -> {
                 progress("无损合并音视频", 86, true)
@@ -217,6 +255,10 @@ class DownloadExecutor @Inject constructor(
         taskId: String,
         urls: List<String>,
         target: File,
+        label: String,
+        startProgress: Int,
+        endProgress: Int,
+        fallbackTotalBytes: Long = -1L,
         progress: DownloadProgress,
     ) {
         var lastError: Throwable? = null
@@ -233,22 +275,59 @@ class DownloadExecutor @Inject constructor(
                     try {
                         val status = connection.responseCode
                         if (status !in 200..299) error("CDN HTTP $status")
-                        val total = connection.contentLengthLong
+                        val total = connection.contentLengthLong.takeIf { it > 0L }
+                            ?: fallbackTotalBytes
+                        progress(
+                            formatDownloadStatus(label, 0L, total, 0L),
+                            startProgress,
+                            true,
+                        )
                         target.outputStream().use { output ->
                             connection.inputStream.use { input ->
                                 val buffer = ByteArray(128 * 1024)
                                 var downloaded = 0L
+                                var lastReportedBytes = 0L
+                                var lastReportedAt = System.nanoTime()
+
+                                suspend fun reportDownloadProgress(force: Boolean) {
+                                    val now = System.nanoTime()
+                                    val elapsed = now - lastReportedAt
+                                    if (downloaded == lastReportedBytes) return
+                                    if (!force && elapsed < PROGRESS_REPORT_INTERVAL_NANOS) return
+                                    val bytesPerSecond = if (elapsed > 0L) {
+                                        ((downloaded - lastReportedBytes).toDouble() * 1_000_000_000L /
+                                            elapsed).toLong().coerceAtLeast(0L)
+                                    } else {
+                                        0L
+                                    }
+                                    progress(
+                                        formatDownloadStatus(
+                                            label,
+                                            downloaded,
+                                            total,
+                                            bytesPerSecond,
+                                        ),
+                                        downloadTaskProgress(
+                                            downloaded,
+                                            total,
+                                            startProgress,
+                                            endProgress,
+                                        ),
+                                        true,
+                                    )
+                                    lastReportedBytes = downloaded
+                                    lastReportedAt = now
+                                }
+
                                 while (true) {
                                     currentCoroutineContext().ensureActive()
                                     val count = input.read(buffer)
                                     if (count < 0) break
                                     output.write(buffer, 0, count)
                                     downloaded += count
-                                    if (total > 0) {
-                                        val value = (downloaded * 65 / total).toInt().coerceIn(1, 65)
-                                        progress("正在下载 ${target.name}", value, value % 5 == 0)
-                                    }
+                                    reportDownloadProgress(force = false)
                                 }
+                                reportDownloadProgress(force = true)
                             }
                         }
                     } finally {
@@ -287,9 +366,8 @@ class DownloadExecutor @Inject constructor(
         } ?: fallback
     }
 
-    private fun percent(index: Int, count: Int): Int = if (count <= 0) 0 else index * 80 / count
-
     companion object {
+        private const val PROGRESS_REPORT_INTERVAL_NANOS = 750_000_000L
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
     }

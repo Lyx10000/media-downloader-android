@@ -137,6 +137,15 @@ internal fun TasksScreen(
                             else -> task.stage
                         },
                     )
+                    if (task.status == TaskStatus.COMPLETE) {
+                        formatOutputSummary(task.outputs)?.let { summary ->
+                            Text(
+                                summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     if (task.status in setOf(
                             TaskStatus.QUEUED,
                             TaskStatus.RUNNING,
@@ -365,7 +374,13 @@ internal fun ShareFilesSheet(
                             Text(file.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         },
                         supportingContent = {
-                            Text("${mediaCategoryLabel(file.category)} · ${file.mimeType}")
+                            Text(
+                                buildList {
+                                    add(mediaCategoryLabel(file.category))
+                                    if (file.sizeBytes > 0L) add(formatByteSize(file.sizeBytes))
+                                    add(file.mimeType)
+                                }.joinToString(" · "),
+                            )
                         },
                         leadingContent = {
                             Checkbox(

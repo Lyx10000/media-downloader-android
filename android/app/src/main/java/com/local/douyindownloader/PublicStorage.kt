@@ -34,7 +34,12 @@ object PublicStorage {
                 spec.taskFolder,
                 displayName,
             )
-            return TaskOutput(uri.toString(), displayName, mediaMimeType(displayName))
+            return TaskOutput(
+                uri.toString(),
+                displayName,
+                mediaMimeType(displayName),
+                source.length(),
+            )
         }
         val mime = mediaMimeType(displayName)
         val values = ContentValues().apply {
@@ -56,7 +61,7 @@ object PublicStorage {
             values.clear()
             values.put(MediaStore.Downloads.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
-            return TaskOutput(uri.toString(), displayName, mime)
+            return TaskOutput(uri.toString(), displayName, mime, source.length())
         } catch (error: Throwable) {
             resolver.delete(uri, null, null)
             throw error

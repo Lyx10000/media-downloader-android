@@ -266,11 +266,13 @@ data class TaskOutput(
     val uri: String,
     val displayName: String = "",
     val mimeType: String = "",
+    val sizeBytes: Long = 0L,
 ) {
     fun toJson() = JSONObject().apply {
         put("uri", uri)
         put("display_name", displayName)
         put("mime_type", mimeType)
+        put("size_bytes", sizeBytes)
     }
 
     companion object {
@@ -279,6 +281,7 @@ data class TaskOutput(
                 uri = value.optString("uri"),
                 displayName = value.optString("display_name"),
                 mimeType = value.optString("mime_type"),
+                sizeBytes = value.optLong("size_bytes").coerceAtLeast(0L),
             ).takeIf { it.uri.isNotBlank() }
             is String -> TaskOutput(uri = value).takeIf { it.uri.isNotBlank() }
             else -> null
