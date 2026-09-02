@@ -44,17 +44,13 @@ class DownloadExecutor @Inject constructor(
         imageCandidates.forEachIndexed { index, urls ->
             val name = "image_${index + 1}.${extensionFromUrl(urls.first(), "jpg")}"
             val file = File(folder, name)
-            val startProgress = 5 + index * 80 / imageCandidates.size
-            val endProgress = 5 + (index + 1) * 80 / imageCandidates.size
             val label = "原图 ${index + 1}/${imageCandidates.size}"
-            progress("准备下载$label", startProgress, true)
+            progress("准备下载$label", 0, true)
             download(
                 taskId = taskId,
                 urls = urls,
                 target = file,
                 label = label,
-                startProgress = startProgress,
-                endProgress = endProgress,
                 progress = progress,
             )
             files += file to name
@@ -62,14 +58,12 @@ class DownloadExecutor @Inject constructor(
         spec.result.musicUrls.firstOrNull()?.let { url ->
             val name = "bgm_1.${extensionFromUrl(url, "m4a")}"
             val file = File(folder, name)
-            progress("准备下载 BGM", 86, true)
+            progress("准备下载 BGM", 0, true)
             download(
                 taskId = taskId,
                 urls = spec.result.musicUrls,
                 target = file,
                 label = "BGM",
-                startProgress = 86,
-                endProgress = 92,
                 progress = progress,
             )
             files += file to name
@@ -92,20 +86,18 @@ class DownloadExecutor @Inject constructor(
         val audioTrack = File(folder, "video_1_audio.m4a")
         val merged = File(folder, "video_1.mp4")
 
-        progress("准备下载原始视频", 15, true)
+        progress("准备下载原始视频", 0, true)
         download(
             taskId = taskId,
             urls = variant.urls,
             target = source,
             label = "视频",
-            startProgress = 15,
-            endProgress = 70,
             fallbackTotalBytes = variant.size.takeIf {
                 it > 0L && variant.sizeSource != "estimated"
             } ?: -1L,
             progress = progress,
         )
-        progress("分析音视频轨道", 72, true)
+        progress("分析音视频轨道", 0, true)
         val sourceProbe = MediaTrackProcessor.probe(source)
         val probeText = sourceProbe.toString()
         val hasEmbeddedAudio = sourceProbe.any { track ->
@@ -163,7 +155,7 @@ class DownloadExecutor @Inject constructor(
         mode: DownloadMode,
         progress: DownloadProgress,
     ): List<Pair<File, String>> {
-        progress("使用视频内置原始音频", 78, true)
+        progress("使用视频内置原始音频", 0, true)
         return when (mode) {
             DownloadMode.MERGE_KEEP -> {
                 MediaTrackProcessor.extractVideo(source, videoTrack)
@@ -204,19 +196,17 @@ class DownloadExecutor @Inject constructor(
             return listOf(source to videoTrack.name)
         }
 
-        progress("下载独立音频轨", 76, true)
+        progress("准备下载独立音频轨", 0, true)
         download(
             taskId = taskId,
             urls = audioUrls,
             target = audioTrack,
             label = "独立音频",
-            startProgress = 76,
-            endProgress = 84,
             progress = progress,
         )
         return when (mode) {
             DownloadMode.MERGE_KEEP -> {
-                progress("无损合并音视频", 86, true)
+                progress("无损合并音视频", 0, true)
                 logger.event(taskId, "MEDIA_PROCESS", "MUX_STARTED")
                 MediaTrackProcessor.mux(source, audioTrack, merged)
                 val mergedProbe = MediaTrackProcessor.probe(merged).toString()
@@ -242,7 +232,7 @@ class DownloadExecutor @Inject constructor(
         files: List<Pair<File, String>>,
         progress: DownloadProgress,
     ): List<TaskOutput> {
-        progress("保存到公共下载目录", 94, true)
+        progress("保存到公共下载目录", 0, true)
         val published = mutableListOf<TaskOutput>()
         files.forEach { (file, name) ->
             published += PublicStorage.publish(context, file, spec, name)
@@ -256,8 +246,6 @@ class DownloadExecutor @Inject constructor(
         urls: List<String>,
         target: File,
         label: String,
-        startProgress: Int,
-        endProgress: Int,
         fallbackTotalBytes: Long = -1L,
         progress: DownloadProgress,
     ) {
@@ -279,7 +267,7 @@ class DownloadExecutor @Inject constructor(
                             ?: fallbackTotalBytes
                         progress(
                             formatDownloadStatus(label, 0L, total, 0L),
-                            startProgress,
+                            0,
                             true,
                         )
                         target.outputStream().use { output ->
@@ -307,12 +295,7 @@ class DownloadExecutor @Inject constructor(
                                             total,
                                             bytesPerSecond,
                                         ),
-                                        downloadTaskProgress(
-                                            downloaded,
-                                            total,
-                                            startProgress,
-                                            endProgress,
-                                        ),
+                                        downloadFileProgress(downloaded, total),
                                         true,
                                     )
                                     lastReportedBytes = downloaded

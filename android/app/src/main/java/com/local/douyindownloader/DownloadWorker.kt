@@ -120,15 +120,21 @@ class DownloadWorker(
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val notification: Notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+        val showProgress = shouldShowDownloadProgress(stage)
+        val complete = stage == "下载完成"
+        val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("抖音下载器")
             .setContentText(stage)
             .setContentIntent(pending)
             .setOnlyAlertOnce(true)
-            .setOngoing(progress < 100)
-            .setProgress(100, progress, progress <= 0)
-            .build()
+            .setOngoing(!complete)
+        if (showProgress) {
+            builder.setProgress(100, progress.coerceIn(0, 100), false)
+        } else {
+            builder.setProgress(0, 0, false)
+        }
+        val notification: Notification = builder.build()
         return ForegroundInfo(
             taskId.hashCode().and(0x7fffffff),
             notification,

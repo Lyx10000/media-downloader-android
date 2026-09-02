@@ -146,19 +146,17 @@ internal fun TasksScreen(
                             )
                         }
                     }
-                    if (task.status in setOf(
-                            TaskStatus.QUEUED,
-                            TaskStatus.RUNNING,
-                            TaskStatus.DELETING,
-                        )
+                    if (
+                        task.status == TaskStatus.RUNNING &&
+                        shouldShowDownloadProgress(task.stage)
                     ) {
                         LinearProgressIndicator(
                             progress = { task.progress / 100f },
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        if (task.status != TaskStatus.DELETING) {
-                            OutlinedButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
-                        }
+                    }
+                    if (task.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)) {
+                        OutlinedButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
                     }
                     if (task.error.isNotBlank()) {
                         Text(task.error, color = MaterialTheme.colorScheme.error)

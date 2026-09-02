@@ -3,18 +3,18 @@ package com.local.douyindownloader
 import java.util.Locale
 import kotlin.math.roundToInt
 
-internal fun downloadTaskProgress(
+internal fun downloadFileProgress(
     downloadedBytes: Long,
     totalBytes: Long,
-    startProgress: Int,
-    endProgress: Int,
 ): Int {
-    val safeStart = startProgress.coerceIn(0, 100)
-    val safeEnd = endProgress.coerceIn(safeStart, 100)
-    if (totalBytes <= 0L) return safeStart
-    val ratio = (downloadedBytes.toDouble() / totalBytes).coerceIn(0.0, 1.0)
-    return (safeStart + ratio * (safeEnd - safeStart)).toInt().coerceIn(safeStart, safeEnd)
+    if (totalBytes <= 0L) return 0
+    return (downloadedBytes.toDouble() * 100 / totalBytes)
+        .coerceIn(0.0, 100.0)
+        .roundToInt()
 }
+
+internal fun shouldShowDownloadProgress(stage: String): Boolean =
+    stage.startsWith("正在下载") && DETERMINATE_PERCENT.containsMatchIn(stage)
 
 internal fun formatDownloadStatus(
     label: String,
@@ -55,3 +55,5 @@ internal fun formatByteSize(bytes: Long): String {
         String.format(Locale.US, "%.1f %s", value, units[unitIndex])
     }
 }
+
+private val DETERMINATE_PERCENT = Regex(" · \\d{1,3}% · ")

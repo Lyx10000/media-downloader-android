@@ -7,16 +7,24 @@ import org.junit.Test
 
 class DownloadProgressTest {
     @Test
-    fun fileProgressStaysInsideItsTaskStageRange() {
-        assertEquals(15, downloadTaskProgress(0, 1_000, 15, 70))
-        assertEquals(42, downloadTaskProgress(500, 1_000, 15, 70))
-        assertEquals(70, downloadTaskProgress(1_000, 1_000, 15, 70))
-        assertEquals(70, downloadTaskProgress(2_000, 1_000, 15, 70))
+    fun fileProgressRepresentsOnlyTransferredBytes() {
+        assertEquals(0, downloadFileProgress(0, 1_000))
+        assertEquals(50, downloadFileProgress(500, 1_000))
+        assertEquals(100, downloadFileProgress(1_000, 1_000))
+        assertEquals(100, downloadFileProgress(2_000, 1_000))
     }
 
     @Test
-    fun unknownTotalKeepsTaskProgressStable() {
-        assertEquals(15, downloadTaskProgress(800, -1, 15, 70))
+    fun unknownTotalDoesNotInventAFilePercentage() {
+        assertEquals(0, downloadFileProgress(800, -1))
+    }
+
+    @Test
+    fun progressBarIsShownOnlyForARealDeterminateTransfer() {
+        assertEquals(true, shouldShowDownloadProgress("正在下载视频 · 38% · 2.0 MB/s"))
+        assertEquals(false, shouldShowDownloadProgress("准备下载原始视频"))
+        assertEquals(false, shouldShowDownloadProgress("分析音视频轨道"))
+        assertEquals(false, shouldShowDownloadProgress("正在下载视频 · 已下载 192.0 MB"))
     }
 
     @Test
