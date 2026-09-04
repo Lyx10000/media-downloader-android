@@ -75,9 +75,14 @@ class MainViewModel @Inject constructor(
     private val scheduler: DownloadScheduler,
     private val fileStateRefresher: TaskFileStateRefresher,
     private val shareCoordinator: ShareCoordinator,
+    private val audioPreviewCoordinator: AudioPreviewCoordinator,
+    private val taskFolderNavigator: TaskFolderNavigator,
 ) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+    private val _expandedTaskId = MutableStateFlow<String?>(null)
+    internal val expandedTaskId: StateFlow<String?> = _expandedTaskId.asStateFlow()
+    internal val audioPreviewState: StateFlow<AudioPreviewState> = audioPreviewCoordinator.state
 
     var inputText: String
         get() = _uiState.value.inputText
@@ -127,6 +132,11 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             store.observe().collectLatest { records ->
                 tasks = records
+                val expanded = _expandedTaskId.value
+                if (expanded != null && records.none { it.id == expanded }) {
+                    audioPreviewCoordinator.stopIfTask(expanded, "TASK_REMOVED")
+                    _expandedTaskId.value = null
+                }
                 refreshTaskMetadata(records)
             }
         }
@@ -320,7 +330,43 @@ class MainViewModel @Inject constructor(
         }
     }
 
+    internal fun toggleTaskPreview(taskId: String) {
+        val current = _expandedTaskId.value
+        if (current == taskId) {
+            audioPreviewCoordinator.stopIfTask(taskId)
+            _expandedTaskId.value = null
+        } else {
+            audioPreviewCoordinator.stopAndRelease("PREVIEW_SWITCHED")
+            _expandedTaskId.value = taskId
+        }
+    }
+
+    internal fun toggleAudioPreview(taskId: String, uri: Uri) {
+        if (_expandedTaskId.value != taskId) _expandedTaskId.value = taskId
+        audioPreviewCoordinator.toggle(taskId, uri)
+    }
+
+    internal fun seekAudioPreview(taskId: String, positionMs: Long) {
+        audioPreviewCoordinator.seekTo(taskId, positionMs)
+    }
+
+    internal fun openTaskFolder(context: Context, task: TaskRecord) {
+        viewModelScope.launch {
+            val spec = store.getSpec(task.id)
+            if (spec == null) {
+                message = "无法读取该任务的保存目录"
+                return@launch
+            }
+            val result = taskFolderNavigator.open(context, task.id, spec)
+            if (result.message.isNotBlank()) message = result.message
+        }
+    }
+
     fun deleteTask(task: TaskRecord, deleteFiles: Boolean) {
+        if (_expandedTaskId.value == task.id) {
+            audioPreviewCoordinator.stopIfTask(task.id, "TASK_DELETE_REQUESTED")
+            _expandedTaskId.value = null
+        }
         viewModelScope.launch {
             val result = deletionCoordinator.deleteTask(task.id, deleteFiles)
             message = result.message
@@ -341,6 +387,10 @@ class MainViewModel @Inject constructor(
 
     fun onAppForeground() = refreshTasks()
 
+    fun onAppBackground() {
+        audioPreviewCoordinator.stopAndRelease("APP_BACKGROUNDED")
+    }
+
     fun onTasksVisible() {
         tasksVisible = true
         refreshTasks()
@@ -348,6 +398,7 @@ class MainViewModel @Inject constructor(
 
     fun onTasksHidden() {
         tasksVisible = false
+        audioPreviewCoordinator.stopAndRelease()
     }
 
     fun refreshTasks() {
@@ -409,6 +460,11 @@ class MainViewModel @Inject constructor(
         val current = message
         message = ""
         return current
+    }
+
+    override fun onCleared() {
+        audioPreviewCoordinator.stopAndRelease("VIEW_MODEL_CLEARED")
+        super.onCleared()
     }
 
     private fun preferredVariant(result: ParseResult): Int {

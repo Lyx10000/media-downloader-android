@@ -34,6 +34,11 @@ class MainActivity : ComponentActivity() {
         viewModel.onAppForeground()
     }
 
+    override fun onStop() {
+        viewModel.onAppBackground()
+        super.onStop()
+    }
+
     private fun handleIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.let {

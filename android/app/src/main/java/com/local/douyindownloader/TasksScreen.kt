@@ -1,12 +1,16 @@
 package com.local.douyindownloader
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,12 +21,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,23 +43,36 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.ImageLoader
+import coil.compose.SubcomposeAsyncImage
+import coil.decode.VideoFrameDecoder
+import coil.request.ImageRequest
+import coil.request.videoFrameMillis
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 
 @Composable
@@ -57,7 +81,7 @@ internal fun EmptyTasksStatus() {
         Text("还没有下载任务")
     }
 }
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun TasksScreen(
     tasks: List<TaskRecord>,
@@ -66,6 +90,14 @@ internal fun TasksScreen(
     requestAllFilesAccess: () -> Unit,
 ) {
     val context = LocalContext.current
+    val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
+    val audioPreviewState by viewModel.audioPreviewState.collectAsStateWithLifecycle()
+    val previewImageLoader = remember(context.applicationContext) {
+        ImageLoader.Builder(context.applicationContext)
+            .components { add(VideoFrameDecoder.Factory()) }
+            .crossfade(true)
+            .build()
+    }
     var pendingShare by remember { mutableStateOf<PendingShare?>(null) }
     var pendingDelete by remember { mutableStateOf<TaskRecord?>(null) }
     var deleteFiles by remember { mutableStateOf(false) }
@@ -73,6 +105,9 @@ internal fun TasksScreen(
     DisposableEffect(Unit) {
         viewModel.onTasksVisible()
         onDispose(viewModel::onTasksHidden)
+    }
+    DisposableEffect(previewImageLoader) {
+        onDispose(previewImageLoader::shutdown)
     }
     if (tasks.isEmpty()) {
         EmptyTasksStatus()
@@ -96,6 +131,12 @@ internal fun TasksScreen(
                     MaterialTheme.colorScheme.errorContainer
                 else -> MaterialTheme.colorScheme.surface
             }
+            val filesAvailable = task.outputUris.isNotEmpty() && task.fileState in setOf(
+                FileState.AVAILABLE,
+                FileState.PARTIAL,
+                FileState.UNKNOWN,
+            )
+            val isPreviewExpanded = expandedTaskId == task.id
             OutlinedCard(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -168,27 +209,55 @@ internal fun TasksScreen(
                             Text("重试")
                         }
                     }
-                    if (task.outputUris.isNotEmpty() && task.fileState in setOf(
-                            FileState.AVAILABLE,
-                            FileState.PARTIAL,
-                            FileState.UNKNOWN,
-                        )
-                    ) {
-                        Button(onClick = {
-                            val files = resolveShareableFiles(
-                                context.contentResolver,
-                                task.outputUris,
-                            )
-                            if (files.isEmpty()) {
-                                viewModel.shareTaskFiles(context, task.id, emptyList())
-                            } else {
-                                pendingShare = PendingShare(task.id, files)
+                    if (filesAvailable) {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(onClick = { viewModel.toggleTaskPreview(task.id) }) {
+                                Icon(
+                                    if (isPreviewExpanded) Icons.Default.VisibilityOff
+                                    else Icons.Default.Visibility,
+                                    contentDescription = null,
+                                )
+                                Spacer(Modifier.size(8.dp))
+                                Text(if (isPreviewExpanded) "收起" else "预览")
                             }
-                        }) {
-                            Icon(Icons.Default.Share, contentDescription = null)
-                            Spacer(Modifier.size(8.dp))
-                            Text("分享文件")
+                            OutlinedButton(onClick = { viewModel.openTaskFolder(context, task) }) {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null)
+                                Spacer(Modifier.size(8.dp))
+                                Text("文件夹")
+                            }
+                            Button(onClick = {
+                                val files = resolveShareableFiles(
+                                    context.contentResolver,
+                                    task.outputUris,
+                                )
+                                if (files.isEmpty()) {
+                                    viewModel.shareTaskFiles(context, task.id, emptyList())
+                                } else {
+                                    pendingShare = PendingShare(task.id, files)
+                                }
+                            }) {
+                                Icon(Icons.Default.Share, contentDescription = null)
+                                Spacer(Modifier.size(8.dp))
+                                Text("分享")
+                            }
                         }
+                    }
+                    if (isPreviewExpanded && filesAvailable) {
+                        TaskPreviewPanel(
+                            task = task,
+                            audioState = audioPreviewState,
+                            imageLoader = previewImageLoader,
+                            onToggleAudio = { uri ->
+                                viewModel.toggleAudioPreview(task.id, uri)
+                            },
+                            onSeekAudio = { positionMs ->
+                                viewModel.seekAudioPreview(task.id, positionMs)
+                            },
+                        )
                     }
                 }
             }
@@ -304,6 +373,216 @@ internal fun TasksScreen(
             },
         )
     }
+}
+
+private sealed interface TaskPreviewLoadState {
+    data object Loading : TaskPreviewLoadState
+    data object Unavailable : TaskPreviewLoadState
+    data class Ready(val media: TaskPreviewMedia) : TaskPreviewLoadState
+}
+
+@Composable
+private fun TaskPreviewPanel(
+    task: TaskRecord,
+    audioState: AudioPreviewState,
+    imageLoader: ImageLoader,
+    onToggleAudio: (android.net.Uri) -> Unit,
+    onSeekAudio: (Long) -> Unit,
+) {
+    val context = LocalContext.current
+    var previewState by remember(task.id, task.outputs) {
+        mutableStateOf<TaskPreviewLoadState>(TaskPreviewLoadState.Loading)
+    }
+    LaunchedEffect(task.id, task.outputs) {
+        previewState = withContext(Dispatchers.IO) {
+            resolveTaskPreview(context.contentResolver, task.outputs)
+                ?.let(TaskPreviewLoadState::Ready)
+                ?: TaskPreviewLoadState.Unavailable
+        }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        when (val state = previewState) {
+            TaskPreviewLoadState.Loading -> PreviewLoading()
+            TaskPreviewLoadState.Unavailable -> Text(
+                "无法读取预览，文件可能已被移动或删除",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            is TaskPreviewLoadState.Ready -> when (state.media.kind) {
+                TaskPreviewKind.IMAGE -> ImageOrVideoPreview(
+                    media = state.media,
+                    imageLoader = imageLoader,
+                    isVideo = false,
+                )
+                TaskPreviewKind.VIDEO -> ImageOrVideoPreview(
+                    media = state.media,
+                    imageLoader = imageLoader,
+                    isVideo = true,
+                )
+                TaskPreviewKind.AUDIO -> AudioPreviewControls(
+                    taskId = task.id,
+                    media = state.media,
+                    state = audioState,
+                    onToggleAudio = onToggleAudio,
+                    onSeekAudio = onSeekAudio,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewLoading() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(96.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.size(12.dp))
+        Text("正在读取预览…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun ImageOrVideoPreview(
+    media: TaskPreviewMedia,
+    imageLoader: ImageLoader,
+    isVideo: Boolean,
+) {
+    val context = LocalContext.current
+    val model = remember(media.uri, isVideo) {
+        ImageRequest.Builder(context)
+            .data(media.uri)
+            .apply { if (isVideo) videoFrameMillis(1_000) }
+            .build()
+    }
+    Text(
+        when {
+            media.kind == TaskPreviewKind.IMAGE && media.matchingOutputCount > 1 ->
+                "图片预览 · 共 ${media.matchingOutputCount} 张"
+            isVideo -> "视频预览"
+            else -> "图片预览"
+        },
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        SubcomposeAsyncImage(
+            model = model,
+            imageLoader = imageLoader,
+            contentDescription = if (isVideo) "视频缩略图" else "图片预览",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+            loading = { PreviewLoading() },
+            error = {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("无法生成预览", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+        )
+        if (isVideo) {
+            Icon(
+                Icons.Default.PlayCircle,
+                contentDescription = "视频文件",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(48.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AudioPreviewControls(
+    taskId: String,
+    media: TaskPreviewMedia,
+    state: AudioPreviewState,
+    onToggleAudio: (android.net.Uri) -> Unit,
+    onSeekAudio: (Long) -> Unit,
+) {
+    val isCurrent = state.taskId == taskId && state.uri == media.uri.toString()
+    val status = if (isCurrent) state.status else AudioPreviewStatus.IDLE
+    val durationMs = if (isCurrent) state.durationMs else 0L
+    var sliderPosition by remember(taskId, media.uri) { mutableFloatStateOf(0f) }
+    var dragging by remember(taskId, media.uri) { mutableStateOf(false) }
+    LaunchedEffect(isCurrent, state.positionMs, dragging) {
+        if (!dragging) sliderPosition = if (isCurrent) state.positionMs.toFloat() else 0f
+    }
+
+    Text(
+        "音频预览",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(
+            onClick = { onToggleAudio(media.uri) },
+            enabled = status != AudioPreviewStatus.PREPARING,
+        ) {
+            if (status == AudioPreviewStatus.PREPARING) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(
+                    if (status == AudioPreviewStatus.PLAYING) Icons.Default.Pause
+                    else Icons.Default.PlayArrow,
+                    contentDescription = if (status == AudioPreviewStatus.PLAYING) "暂停" else "播放",
+                )
+            }
+        }
+        Slider(
+            value = sliderPosition.coerceIn(0f, durationMs.coerceAtLeast(1L).toFloat()),
+            onValueChange = {
+                dragging = true
+                sliderPosition = it
+            },
+            onValueChangeFinished = {
+                dragging = false
+                onSeekAudio(sliderPosition.toLong())
+            },
+            valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
+            enabled = durationMs > 0L && status !in setOf(
+                AudioPreviewStatus.PREPARING,
+                AudioPreviewStatus.ERROR,
+            ),
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Text(
+        "${formatPlaybackTime(sliderPosition.toLong())} / ${formatPlaybackTime(durationMs)}",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (isCurrent && status == AudioPreviewStatus.ERROR) {
+        Text(
+            "音频预览失败：${state.error}",
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+internal fun formatPlaybackTime(milliseconds: Long): String {
+    val totalSeconds = milliseconds.coerceAtLeast(0L) / 1_000L
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "%d:%02d".format(Locale.US, minutes, seconds)
 }
 
 private data class PendingShare(
