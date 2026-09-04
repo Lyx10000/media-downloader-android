@@ -2,7 +2,6 @@ package com.local.douyindownloader
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DocumentReaderTest {
@@ -29,41 +28,36 @@ class DocumentReaderTest {
     }
 
     @Test
-    fun htmlUsesInternalMediaUrlsAndEscapesUntrustedText() {
+    fun readerImagesFollowDocumentOrderAndKeepTheirOwnOutput() {
         val document = DocumentContent(
             type = DocumentType.ANSWER,
-            title = "标题 <script>alert(1)</script>",
+            title = "标题",
             author = "作者",
             sourceUrl = "https://www.zhihu.com/question/1/answer/2",
             blocks = listOf(
-                DocumentBlock(DocumentBlockType.PARAGRAPH, "正文 <img src=x onerror=alert(1)>"),
+                DocumentBlock(DocumentBlockType.IMAGE, assetId = "image-2"),
+                DocumentBlock(DocumentBlockType.PARAGRAPH, "正文"),
                 DocumentBlock(DocumentBlockType.IMAGE, assetId = "image-1"),
-                DocumentBlock(DocumentBlockType.VIDEO, assetId = "video-1"),
             ),
             assets = listOf(
                 DocumentAsset("image-1", DocumentAssetKind.IMAGE, alt = "图片"),
-                DocumentAsset("video-1", DocumentAssetKind.VIDEO, alt = "视频"),
+                DocumentAsset("image-2", DocumentAssetKind.IMAGE, alt = "第二张"),
             ),
         )
+        val image1 = output("i1", "image_001.jpg", "media/image_001.jpg")
+        val image2 = output("i2", "image_002.jpg", "media/image_002.jpg")
+        val data = DocumentReaderData(document, mapOf("image-1" to image1, "image-2" to image2))
 
-        val html = DocumentHtmlRenderer.render(
-            document,
-            mapOf(
-                "image-1" to "https://appassets.androidplatform.net/document-media/image-1",
-                "video-1" to "https://appassets.androidplatform.net/document-media/video-1",
-            ),
-        )
+        val images = resolveDocumentReaderImages(data)
 
-        assertTrue(html.contains("document-media/image-1"))
-        assertTrue(html.contains("document-media/video-1"))
-        assertTrue(html.contains("app-media://open/video-1"))
-        assertFalse(html.contains("loading=\"lazy\""))
-        assertFalse(html.contains("<script>alert(1)</script>"))
-        assertFalse(html.contains("<img src=x onerror=alert(1)>"))
+        assertEquals(listOf("image-2", "image-1"), images.map { it.asset.id })
+        assertEquals(listOf(image2, image1), images.map { it.output })
+        assertEquals(0, documentImageStartIndex(images, "image-2"))
+        assertEquals(1, documentImageStartIndex(images, "image-1"))
     }
 
     @Test
-    fun htmlFallsBackToRemoteImageWhenLocalOutputIsMissing() {
+    fun readerImageKeepsRemoteFallbackWhenLocalOutputIsMissing() {
         val document = document(
             blocks = listOf(DocumentBlock(DocumentBlockType.IMAGE, assetId = "image-1")),
             assets = listOf(
@@ -75,10 +69,11 @@ class DocumentReaderTest {
             ),
         )
 
-        val html = DocumentHtmlRenderer.render(document, emptyMap())
+        val image = resolveDocumentReaderImages(DocumentReaderData(document, emptyMap())).single()
 
-        assertTrue(html.contains("https://picx.zhimg.com/remote.jpg"))
-        assertTrue(html.contains("本地文件不可用，正在尝试在线资源"))
+        assertEquals(null, image.output)
+        assertEquals("https://picx.zhimg.com/remote.jpg", image.asset.candidateUrls.single())
+        assertEquals(0, documentImageStartIndex(listOf(image), "missing"))
     }
 
     private fun document(

@@ -623,12 +623,23 @@ class MainViewModel @Inject internal constructor(
         }
     }
 
-    internal fun onDocumentMediaLoadFailed(taskId: String, assetId: String, reason: String) {
-        runCatching {
-            logger.event(taskId, "DOCUMENT_READER", "LOCAL_MEDIA_LOAD_FAILED", JSONObject().apply {
-                put("asset_id", assetId)
-                put("message", Redactor.sanitize(reason))
-            })
+    internal fun onDocumentImageLoadFailed(
+        taskId: String,
+        assetId: String,
+        outputName: String,
+        sourceScheme: String,
+        error: Throwable,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                logger.event(taskId, "DOCUMENT_READER", "IMAGE_LOAD_FAILED", JSONObject().apply {
+                    put("asset_id", assetId)
+                    put("output_name", outputName)
+                    put("source_scheme", sourceScheme)
+                    put("type", error.javaClass.name)
+                    put("message", Redactor.sanitize(error.message ?: error.javaClass.simpleName))
+                })
+            }
         }
     }
 

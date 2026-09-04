@@ -14,8 +14,8 @@ android {
         applicationId = "com.local.douyindownloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 29
-        versionName = "1.4.5"
+        versionCode = 30
+        versionName = "1.4.6"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -79,7 +79,6 @@ dependencies {
     implementation("com.google.dagger:hilt-android:$hiltVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
     ksp("com.google.dagger:hilt-compiler:$hiltVersion")
-    implementation("androidx.webkit:webkit:1.12.1")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
