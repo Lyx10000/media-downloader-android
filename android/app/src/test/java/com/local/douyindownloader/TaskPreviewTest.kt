@@ -16,6 +16,20 @@ class TaskPreviewTest {
         assertEquals(image, selected?.output)
         assertEquals(TaskPreviewKind.IMAGE, selected?.kind)
         assertEquals(1, selected?.matchingOutputCount)
+        assertEquals(listOf(image), selected?.imageOutputs)
+    }
+
+    @Test
+    fun `image preview keeps every image in output order`() {
+        val first = TaskOutput("image", "image_1.jpg", "image/jpeg")
+        val ignored = TaskOutput("metadata", "details.json", "application/json")
+        val second = TaskOutput("image", "image_2.webp", "image/webp")
+
+        val selected = selectPreviewOutput(listOf(first, ignored, second))
+
+        assertEquals(first, selected?.output)
+        assertEquals(2, selected?.matchingOutputCount)
+        assertEquals(listOf(first, second), selected?.imageOutputs)
     }
 
     @Test

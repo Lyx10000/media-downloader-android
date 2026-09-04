@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
@@ -61,6 +63,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +88,7 @@ import coil.request.videoFrameMillis
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 
 @Composable
@@ -506,29 +510,39 @@ private fun ImagePreview(
     imageLoader: ImageLoader,
 ) {
     val context = LocalContext.current
-    val model = remember(media.uri) {
-        ImageRequest.Builder(context)
-            .data(media.uri)
-            .build()
+    val images = remember(media.images, media.output, media.uri, media.mimeType) {
+        media.images.ifEmpty {
+            listOf(TaskPreviewImage(media.output, media.uri, media.mimeType))
+        }
     }
+    val pagerState = rememberPagerState(pageCount = images::size)
+    val coroutineScope = rememberCoroutineScope()
     Text(
-        if (media.matchingOutputCount > 1) "图片预览 · 共 ${media.matchingOutputCount} 张"
+        if (images.size > 1) "图片预览 · 共 ${images.size} 张"
         else "图片预览",
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Box(
+    HorizontalPager(
+        state = pagerState,
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(16f / 9f)
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center,
-    ) {
+        beyondViewportPageCount = 1,
+        key = { page -> images[page].uri.toString() },
+    ) { page ->
+        val image = images[page]
+        val model = remember(image.uri) {
+            ImageRequest.Builder(context)
+                .data(image.uri)
+                .build()
+        }
         SubcomposeAsyncImage(
             model = model,
             imageLoader = imageLoader,
-            contentDescription = "图片预览",
+            contentDescription = "第 ${page + 1} 张图片，共 ${images.size} 张",
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize(),
             loading = { PreviewLoading() },
@@ -538,6 +552,39 @@ private fun ImagePreview(
                 }
             },
         )
+    }
+    if (images.size > 1) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = {
+                    coroutineScope.launch {
+                        pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                    }
+                },
+                enabled = pagerState.currentPage > 0,
+            ) {
+                Text("上一张")
+            }
+            Text(
+                "${pagerState.currentPage + 1} / ${images.size}",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(
+                onClick = {
+                    coroutineScope.launch {
+                        pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                    }
+                },
+                enabled = pagerState.currentPage < images.lastIndex,
+            ) {
+                Text("下一张")
+            }
+        }
     }
 }
 

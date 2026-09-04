@@ -41,8 +41,15 @@ internal data class PreviewSelection(
     val output: TaskOutput,
     val kind: TaskPreviewKind,
     val matchingOutputCount: Int,
+    val imageOutputs: List<TaskOutput> = emptyList(),
     val audioOutput: TaskOutput? = null,
     val videoAudioMode: VideoAudioMode? = null,
+)
+
+internal data class TaskPreviewImage(
+    val output: TaskOutput,
+    val uri: Uri,
+    val mimeType: String,
 )
 
 internal data class TaskPreviewMedia(
@@ -51,6 +58,7 @@ internal data class TaskPreviewMedia(
     val mimeType: String,
     val kind: TaskPreviewKind,
     val matchingOutputCount: Int,
+    val images: List<TaskPreviewImage> = emptyList(),
     val audioOutput: TaskOutput? = null,
     val audioUri: Uri? = null,
     val videoAudioMode: VideoAudioMode? = null,
@@ -66,9 +74,15 @@ internal fun selectTaskPreview(candidates: List<PreviewCandidate>): TaskPreviewM
     val audio = selection.audioOutput?.let { audioOutput ->
         candidates.firstOrNull { it.output == audioOutput }
     }
+    val images = selection.imageOutputs.mapNotNull { imageOutput ->
+        candidates.firstOrNull { it.output == imageOutput }?.let { image ->
+            TaskPreviewImage(image.output, image.uri, image.mimeType)
+        }
+    }
     return selected.toMedia(
         kind = selection.kind,
         matchingOutputCount = selection.matchingOutputCount,
+        images = images,
         audio = audio,
         videoAudioMode = selection.videoAudioMode,
     )
@@ -83,7 +97,12 @@ internal fun selectPreviewOutput(
 ): PreviewSelection? {
     val images = outputs.filter { previewKind(mimeTypeFor(it)) == TaskPreviewKind.IMAGE }
     images.firstOrNull()?.let { image ->
-        return PreviewSelection(image, TaskPreviewKind.IMAGE, images.size)
+        return PreviewSelection(
+            output = image,
+            kind = TaskPreviewKind.IMAGE,
+            matchingOutputCount = images.size,
+            imageOutputs = images,
+        )
     }
 
     val videos = outputs.filter { previewKind(mimeTypeFor(it)) == TaskPreviewKind.VIDEO }
@@ -127,6 +146,7 @@ internal fun selectPreviewOutput(
 private fun PreviewCandidate.toMedia(
     kind: TaskPreviewKind,
     matchingOutputCount: Int,
+    images: List<TaskPreviewImage> = emptyList(),
     audio: PreviewCandidate? = null,
     videoAudioMode: VideoAudioMode? = null,
 ) = TaskPreviewMedia(
@@ -135,6 +155,7 @@ private fun PreviewCandidate.toMedia(
     mimeType = mimeType,
     kind = kind,
     matchingOutputCount = matchingOutputCount,
+    images = images,
     audioOutput = audio?.output,
     audioUri = audio?.uri,
     videoAudioMode = videoAudioMode,
@@ -229,6 +250,9 @@ class TaskPreviewResolver @Inject constructor(
                         put("kind", media?.kind?.name?.lowercase() ?: "none")
                         put("video_audio_mode", media?.videoAudioMode?.name?.lowercase() ?: "none")
                         put("readable_outputs", candidates.size)
+                        put("image_outputs", candidates.count {
+                            previewKind(it.mimeType) == TaskPreviewKind.IMAGE
+                        })
                         put("video_outputs", candidates.count {
                             previewKind(it.mimeType) == TaskPreviewKind.VIDEO
                         })
