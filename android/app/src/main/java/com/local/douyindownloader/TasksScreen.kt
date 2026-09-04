@@ -16,19 +16,26 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -44,6 +51,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -58,11 +66,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.compose.ContentFrame
 import coil.ImageLoader
 import coil.compose.SubcomposeAsyncImage
 import coil.decode.VideoFrameDecoder
@@ -71,8 +85,6 @@ import coil.request.videoFrameMillis
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 
 @Composable
@@ -91,7 +103,8 @@ internal fun TasksScreen(
 ) {
     val context = LocalContext.current
     val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
-    val audioPreviewState by viewModel.audioPreviewState.collectAsStateWithLifecycle()
+    val mediaPreviewState by viewModel.mediaPreviewState.collectAsStateWithLifecycle()
+    val fullscreenTaskId by viewModel.fullscreenTaskId.collectAsStateWithLifecycle()
     val previewImageLoader = remember(context.applicationContext) {
         ImageLoader.Builder(context.applicationContext)
             .components { add(VideoFrameDecoder.Factory()) }
@@ -249,18 +262,26 @@ internal fun TasksScreen(
                     if (isPreviewExpanded && filesAvailable) {
                         TaskPreviewPanel(
                             task = task,
-                            audioState = audioPreviewState,
+                            mediaState = mediaPreviewState,
                             imageLoader = previewImageLoader,
-                            onToggleAudio = { uri ->
-                                viewModel.toggleAudioPreview(task.id, uri)
-                            },
-                            onSeekAudio = { positionMs ->
-                                viewModel.seekAudioPreview(task.id, positionMs)
-                            },
+                            isFullscreen = fullscreenTaskId == task.id,
+                            viewModel = viewModel,
                         )
                     }
                 }
             }
+        }
+    }
+    if (fullscreenTaskId != null && mediaPreviewState.taskId == fullscreenTaskId) {
+        val source = mediaPreviewState.source
+        if (source?.kind == TaskPreviewKind.VIDEO && mediaPreviewState.player != null) {
+            FullscreenVideoPreview(
+                state = mediaPreviewState,
+                onToggle = { viewModel.toggleMediaPreview(fullscreenTaskId!!, source) },
+                onSeek = { viewModel.seekMediaPreview(fullscreenTaskId!!, it) },
+                onToggleMute = { viewModel.toggleMediaMute(fullscreenTaskId!!) },
+                onDismiss = viewModel::exitFullscreen,
+            )
         }
     }
     pendingShare?.takeIf { it.files.isNotEmpty() }?.let { share ->
@@ -384,21 +405,21 @@ private sealed interface TaskPreviewLoadState {
 @Composable
 private fun TaskPreviewPanel(
     task: TaskRecord,
-    audioState: AudioPreviewState,
+    mediaState: MediaPreviewState,
     imageLoader: ImageLoader,
-    onToggleAudio: (android.net.Uri) -> Unit,
-    onSeekAudio: (Long) -> Unit,
+    isFullscreen: Boolean,
+    viewModel: MainViewModel,
 ) {
-    val context = LocalContext.current
     var previewState by remember(task.id, task.outputs) {
         mutableStateOf<TaskPreviewLoadState>(TaskPreviewLoadState.Loading)
     }
     LaunchedEffect(task.id, task.outputs) {
-        previewState = withContext(Dispatchers.IO) {
-            resolveTaskPreview(context.contentResolver, task.outputs)
-                ?.let(TaskPreviewLoadState::Ready)
-                ?: TaskPreviewLoadState.Unavailable
-        }
+        previewState = viewModel.resolveTaskPreview(task.id, task.outputs)
+            ?.let(TaskPreviewLoadState::Ready)
+            ?: TaskPreviewLoadState.Unavailable
+    }
+    DisposableEffect(task.id) {
+        onDispose { viewModel.stopMediaPreviewIfTask(task.id) }
     }
     Column(
         modifier = Modifier
@@ -414,22 +435,28 @@ private fun TaskPreviewPanel(
                 style = MaterialTheme.typography.bodyMedium,
             )
             is TaskPreviewLoadState.Ready -> when (state.media.kind) {
-                TaskPreviewKind.IMAGE -> ImageOrVideoPreview(
+                TaskPreviewKind.IMAGE -> ImagePreview(
                     media = state.media,
                     imageLoader = imageLoader,
-                    isVideo = false,
                 )
-                TaskPreviewKind.VIDEO -> ImageOrVideoPreview(
-                    media = state.media,
-                    imageLoader = imageLoader,
-                    isVideo = true,
-                )
-                TaskPreviewKind.AUDIO -> AudioPreviewControls(
+                TaskPreviewKind.VIDEO -> VideoPreview(
                     taskId = task.id,
                     media = state.media,
-                    state = audioState,
-                    onToggleAudio = onToggleAudio,
-                    onSeekAudio = onSeekAudio,
+                    state = mediaState,
+                    imageLoader = imageLoader,
+                    isFullscreen = isFullscreen,
+                    onToggle = { viewModel.toggleMediaPreview(task.id, state.media) },
+                    onSeek = { viewModel.seekMediaPreview(task.id, it) },
+                    onToggleMute = { viewModel.toggleMediaMute(task.id) },
+                    onFullscreen = { viewModel.enterFullscreen(task.id, state.media) },
+                )
+                TaskPreviewKind.AUDIO -> MediaPreviewControls(
+                    taskId = task.id,
+                    media = state.media,
+                    state = mediaState,
+                    onToggle = { viewModel.toggleMediaPreview(task.id, state.media) },
+                    onSeek = { viewModel.seekMediaPreview(task.id, it) },
+                    onToggleMute = { viewModel.toggleMediaMute(task.id) },
                 )
             }
         }
@@ -452,25 +479,19 @@ private fun PreviewLoading() {
 }
 
 @Composable
-private fun ImageOrVideoPreview(
+private fun ImagePreview(
     media: TaskPreviewMedia,
     imageLoader: ImageLoader,
-    isVideo: Boolean,
 ) {
     val context = LocalContext.current
-    val model = remember(media.uri, isVideo) {
+    val model = remember(media.uri) {
         ImageRequest.Builder(context)
             .data(media.uri)
-            .apply { if (isVideo) videoFrameMillis(1_000) }
             .build()
     }
     Text(
-        when {
-            media.kind == TaskPreviewKind.IMAGE && media.matchingOutputCount > 1 ->
-                "图片预览 · 共 ${media.matchingOutputCount} 张"
-            isVideo -> "视频预览"
-            else -> "图片预览"
-        },
+        if (media.matchingOutputCount > 1) "图片预览 · 共 ${media.matchingOutputCount} 张"
+        else "图片预览",
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -485,7 +506,7 @@ private fun ImageOrVideoPreview(
         SubcomposeAsyncImage(
             model = model,
             imageLoader = imageLoader,
-            contentDescription = if (isVideo) "视频缩略图" else "图片预览",
+            contentDescription = "图片预览",
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize(),
             loading = { PreviewLoading() },
@@ -495,88 +516,341 @@ private fun ImageOrVideoPreview(
                 }
             },
         )
-        if (isVideo) {
-            Icon(
-                Icons.Default.PlayCircle,
-                contentDescription = "视频文件",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(48.dp),
-            )
-        }
     }
 }
 
 @Composable
-private fun AudioPreviewControls(
+private fun VideoPreview(
     taskId: String,
     media: TaskPreviewMedia,
-    state: AudioPreviewState,
-    onToggleAudio: (android.net.Uri) -> Unit,
-    onSeekAudio: (Long) -> Unit,
+    state: MediaPreviewState,
+    imageLoader: ImageLoader,
+    isFullscreen: Boolean,
+    onToggle: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onToggleMute: () -> Unit,
+    onFullscreen: () -> Unit,
 ) {
-    val isCurrent = state.taskId == taskId && state.uri == media.uri.toString()
-    val status = if (isCurrent) state.status else AudioPreviewStatus.IDLE
-    val durationMs = if (isCurrent) state.durationMs else 0L
-    var sliderPosition by remember(taskId, media.uri) { mutableFloatStateOf(0f) }
-    var dragging by remember(taskId, media.uri) { mutableStateOf(false) }
-    LaunchedEffect(isCurrent, state.positionMs, dragging) {
-        if (!dragging) sliderPosition = if (isCurrent) state.positionMs.toFloat() else 0f
+    val isCurrent = state.taskId == taskId && state.source.samePlaybackSource(media)
+    val hasPlayer = isCurrent && state.player != null
+    Text(
+        when (media.videoAudioMode) {
+            VideoAudioMode.SEPARATE -> "视频预览 · 独立音轨同步播放"
+            VideoAudioMode.SILENT -> "视频预览 · 无可用音轨"
+            else -> "视频预览"
+        },
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .clip(MaterialTheme.shapes.medium)
+            .background(Color.Black),
+        contentAlignment = Alignment.Center,
+    ) {
+        when {
+            hasPlayer && !isFullscreen -> {
+                VideoPlayerSurface(state.player!!)
+                if (state.status == MediaPreviewStatus.PREPARING) {
+                    CircularProgressIndicator(color = Color.White)
+                }
+                IconButton(
+                    onClick = onToggle,
+                    enabled = state.status != MediaPreviewStatus.PREPARING,
+                    modifier = Modifier
+                        .size(64.dp)
+                        .background(Color.Black.copy(alpha = 0.46f), MaterialTheme.shapes.extraLarge),
+                ) {
+                    Icon(
+                        if (state.status == MediaPreviewStatus.PLAYING) Icons.Default.Pause
+                        else if (state.status == MediaPreviewStatus.ENDED) Icons.Default.Replay
+                        else Icons.Default.PlayArrow,
+                        contentDescription = if (state.status == MediaPreviewStatus.PLAYING) "暂停" else "播放",
+                        tint = Color.White,
+                        modifier = Modifier.size(38.dp),
+                    )
+                }
+            }
+            !hasPlayer -> VideoThumbnail(media, imageLoader, onToggle)
+        }
     }
+    if (hasPlayer) {
+        MediaControlBar(
+            state = state,
+            onToggle = onToggle,
+            onSeek = onSeek,
+            onToggleMute = onToggleMute,
+            onFullscreen = onFullscreen,
+        )
+    }
+    PreviewMessages(isCurrent, state, "视频")
+}
 
+@Composable
+private fun VideoThumbnail(
+    media: TaskPreviewMedia,
+    imageLoader: ImageLoader,
+    onPlay: () -> Unit,
+) {
+    val context = LocalContext.current
+    val model = remember(media.uri) {
+        ImageRequest.Builder(context)
+            .data(media.uri)
+            .videoFrameMillis(1_000)
+            .build()
+    }
+    SubcomposeAsyncImage(
+        model = model,
+        imageLoader = imageLoader,
+        contentDescription = "视频缩略图",
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.fillMaxSize(),
+        loading = { PreviewLoading() },
+        error = {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("无法生成缩略图", color = Color.White)
+            }
+        },
+    )
+    IconButton(
+        onClick = onPlay,
+        modifier = Modifier
+            .size(64.dp)
+            .background(Color.Black.copy(alpha = 0.46f), MaterialTheme.shapes.extraLarge),
+    ) {
+        Icon(
+            Icons.Default.PlayArrow,
+            contentDescription = "播放视频",
+            tint = Color.White,
+            modifier = Modifier.size(40.dp),
+        )
+    }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun VideoPlayerSurface(player: Player) {
+    ContentFrame(
+        player = player,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Fit,
+    )
+}
+
+@Composable
+private fun MediaPreviewControls(
+    taskId: String,
+    media: TaskPreviewMedia,
+    state: MediaPreviewState,
+    onToggle: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onToggleMute: () -> Unit,
+) {
+    val isCurrent = state.taskId == taskId && state.source.samePlaybackSource(media)
+    val visibleState = if (isCurrent) state else MediaPreviewState()
     Text(
         "音频预览",
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(
-            onClick = { onToggleAudio(media.uri) },
-            enabled = status != AudioPreviewStatus.PREPARING,
+    MediaControlBar(
+        state = visibleState,
+        onToggle = onToggle,
+        onSeek = onSeek,
+        onToggleMute = onToggleMute,
+    )
+    PreviewMessages(isCurrent, state, "音频")
+}
+
+@Composable
+private fun MediaControlBar(
+    state: MediaPreviewState,
+    onToggle: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onToggleMute: () -> Unit,
+    modifier: Modifier = Modifier,
+    onFullscreen: (() -> Unit)? = null,
+    dark: Boolean = false,
+) {
+    val durationMs = state.durationMs
+    var sliderPosition by remember(state.taskId, state.source?.uri) { mutableFloatStateOf(0f) }
+    var dragging by remember(state.taskId, state.source?.uri) { mutableStateOf(false) }
+    LaunchedEffect(state.positionMs, dragging) {
+        if (!dragging) sliderPosition = state.positionMs.toFloat()
+    }
+    val foreground = if (dark) Color.White else MaterialTheme.colorScheme.onSurface
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (status == AudioPreviewStatus.PREPARING) {
-                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-            } else {
+            IconButton(
+                onClick = onToggle,
+                enabled = state.status != MediaPreviewStatus.PREPARING,
+            ) {
+                if (state.status == MediaPreviewStatus.PREPARING) {
+                    CircularProgressIndicator(
+                        Modifier.size(24.dp),
+                        color = foreground,
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(
+                        if (state.status == MediaPreviewStatus.PLAYING) Icons.Default.Pause
+                        else if (state.status == MediaPreviewStatus.ENDED) Icons.Default.Replay
+                        else Icons.Default.PlayArrow,
+                        contentDescription = if (state.status == MediaPreviewStatus.PLAYING) "暂停" else "播放",
+                        tint = foreground,
+                    )
+                }
+            }
+            Slider(
+                value = sliderPosition.coerceIn(0f, durationMs.coerceAtLeast(1L).toFloat()),
+                onValueChange = {
+                    dragging = true
+                    sliderPosition = it
+                },
+                onValueChangeFinished = {
+                    dragging = false
+                    onSeek(sliderPosition.toLong())
+                },
+                valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
+                enabled = durationMs > 0L && state.status !in setOf(
+                    MediaPreviewStatus.PREPARING,
+                    MediaPreviewStatus.ERROR,
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onToggleMute, enabled = state.taskId != null) {
                 Icon(
-                    if (status == AudioPreviewStatus.PLAYING) Icons.Default.Pause
-                    else Icons.Default.PlayArrow,
-                    contentDescription = if (status == AudioPreviewStatus.PLAYING) "暂停" else "播放",
+                    if (state.isMuted) Icons.AutoMirrored.Filled.VolumeOff
+                    else Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = if (state.isMuted) "取消静音" else "静音",
+                    tint = foreground,
                 )
             }
+            onFullscreen?.let { openFullscreen ->
+                IconButton(onClick = openFullscreen, enabled = state.player != null) {
+                    Icon(Icons.Default.Fullscreen, contentDescription = "全屏", tint = foreground)
+                }
+            }
         }
-        Slider(
-            value = sliderPosition.coerceIn(0f, durationMs.coerceAtLeast(1L).toFloat()),
-            onValueChange = {
-                dragging = true
-                sliderPosition = it
-            },
-            onValueChangeFinished = {
-                dragging = false
-                onSeekAudio(sliderPosition.toLong())
-            },
-            valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
-            enabled = durationMs > 0L && status !in setOf(
-                AudioPreviewStatus.PREPARING,
-                AudioPreviewStatus.ERROR,
-            ),
-            modifier = Modifier.weight(1f),
+        Text(
+            "${formatPlaybackTime(sliderPosition.toLong())} / ${formatPlaybackTime(durationMs)}",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (dark) Color.White.copy(alpha = 0.82f)
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp),
         )
     }
-    Text(
-        "${formatPlaybackTime(sliderPosition.toLong())} / ${formatPlaybackTime(durationMs)}",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    if (isCurrent && status == AudioPreviewStatus.ERROR) {
+}
+
+@Composable
+private fun PreviewMessages(isCurrent: Boolean, state: MediaPreviewState, mediaLabel: String) {
+    if (isCurrent && state.message.isNotBlank()) {
         Text(
-            "音频预览失败：${state.error}",
+            state.message,
+            color = MaterialTheme.colorScheme.tertiary,
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+    if (isCurrent && state.status == MediaPreviewStatus.ERROR) {
+        Text(
+            "${mediaLabel}预览失败：${state.error}",
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall,
         )
     }
 }
+
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun FullscreenVideoPreview(
+    state: MediaPreviewState,
+    onToggle: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onToggleMute: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val player = state.player ?: return
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Surface(color = Color.Black, modifier = Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                ContentFrame(
+                    player = player,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    IconButton(
+                        onClick = onToggle,
+                        enabled = state.status != MediaPreviewStatus.PREPARING,
+                        modifier = Modifier
+                            .size(72.dp)
+                            .background(
+                                Color.Black.copy(alpha = 0.46f),
+                                MaterialTheme.shapes.extraLarge,
+                            ),
+                    ) {
+                        if (state.status == MediaPreviewStatus.PREPARING) {
+                            CircularProgressIndicator(color = Color.White)
+                        } else {
+                            Icon(
+                                if (state.status == MediaPreviewStatus.PLAYING) Icons.Default.Pause
+                                else if (state.status == MediaPreviewStatus.ENDED) Icons.Default.Replay
+                                else Icons.Default.PlayArrow,
+                                contentDescription = if (
+                                    state.status == MediaPreviewStatus.PLAYING
+                                ) "暂停" else "播放",
+                                tint = Color.White,
+                                modifier = Modifier.size(42.dp),
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(16.dp)
+                            .background(
+                                Color.Black.copy(alpha = 0.46f),
+                                MaterialTheme.shapes.extraLarge,
+                            ),
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "退出全屏", tint = Color.White)
+                    }
+                    MediaControlBar(
+                        state = state,
+                        onToggle = onToggle,
+                        onSeek = onSeek,
+                        onToggleMute = onToggleMute,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .background(Color.Black.copy(alpha = 0.62f))
+                            .padding(bottom = 16.dp),
+                        dark = true,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun TaskPreviewMedia?.samePlaybackSource(other: TaskPreviewMedia): Boolean =
+    this?.uri == other.uri
 
 internal fun formatPlaybackTime(milliseconds: Long): String {
     val totalSeconds = milliseconds.coerceAtLeast(0L) / 1_000L

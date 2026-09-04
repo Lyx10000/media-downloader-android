@@ -75,14 +75,17 @@ class MainViewModel @Inject constructor(
     private val scheduler: DownloadScheduler,
     private val fileStateRefresher: TaskFileStateRefresher,
     private val shareCoordinator: ShareCoordinator,
-    private val audioPreviewCoordinator: AudioPreviewCoordinator,
+    private val mediaPreviewCoordinator: MediaPreviewCoordinator,
+    private val taskPreviewResolver: TaskPreviewResolver,
     private val taskFolderNavigator: TaskFolderNavigator,
 ) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
     private val _expandedTaskId = MutableStateFlow<String?>(null)
     internal val expandedTaskId: StateFlow<String?> = _expandedTaskId.asStateFlow()
-    internal val audioPreviewState: StateFlow<AudioPreviewState> = audioPreviewCoordinator.state
+    internal val mediaPreviewState: StateFlow<MediaPreviewState> = mediaPreviewCoordinator.state
+    private val _fullscreenTaskId = MutableStateFlow<String?>(null)
+    internal val fullscreenTaskId: StateFlow<String?> = _fullscreenTaskId.asStateFlow()
 
     var inputText: String
         get() = _uiState.value.inputText
@@ -134,7 +137,8 @@ class MainViewModel @Inject constructor(
                 tasks = records
                 val expanded = _expandedTaskId.value
                 if (expanded != null && records.none { it.id == expanded }) {
-                    audioPreviewCoordinator.stopIfTask(expanded, "TASK_REMOVED")
+                    mediaPreviewCoordinator.stopIfTask(expanded, "TASK_REMOVED")
+                    if (_fullscreenTaskId.value == expanded) _fullscreenTaskId.value = null
                     _expandedTaskId.value = null
                 }
                 refreshTaskMetadata(records)
@@ -333,21 +337,53 @@ class MainViewModel @Inject constructor(
     internal fun toggleTaskPreview(taskId: String) {
         val current = _expandedTaskId.value
         if (current == taskId) {
-            audioPreviewCoordinator.stopIfTask(taskId)
+            if (_fullscreenTaskId.value == taskId) _fullscreenTaskId.value = null
+            mediaPreviewCoordinator.stopIfTask(taskId)
             _expandedTaskId.value = null
         } else {
-            audioPreviewCoordinator.stopAndRelease("PREVIEW_SWITCHED")
+            _fullscreenTaskId.value = null
+            mediaPreviewCoordinator.stopAndRelease("PREVIEW_SWITCHED")
             _expandedTaskId.value = taskId
         }
     }
 
-    internal fun toggleAudioPreview(taskId: String, uri: Uri) {
+    internal suspend fun resolveTaskPreview(
+        taskId: String,
+        outputs: List<TaskOutput>,
+    ): TaskPreviewMedia? = taskPreviewResolver.resolve(taskId, outputs)
+
+    internal fun toggleMediaPreview(taskId: String, media: TaskPreviewMedia) {
         if (_expandedTaskId.value != taskId) _expandedTaskId.value = taskId
-        audioPreviewCoordinator.toggle(taskId, uri)
+        mediaPreviewCoordinator.toggle(taskId, media)
     }
 
-    internal fun seekAudioPreview(taskId: String, positionMs: Long) {
-        audioPreviewCoordinator.seekTo(taskId, positionMs)
+    internal fun seekMediaPreview(taskId: String, positionMs: Long) {
+        mediaPreviewCoordinator.seekTo(taskId, positionMs)
+    }
+
+    internal fun toggleMediaMute(taskId: String) {
+        mediaPreviewCoordinator.toggleMute(taskId)
+    }
+
+    internal fun enterFullscreen(taskId: String, media: TaskPreviewMedia) {
+        if (mediaPreviewState.value.taskId != taskId ||
+            !mediaPreviewState.value.source.samePreviewSource(media)
+        ) {
+            mediaPreviewCoordinator.toggle(taskId, media)
+        }
+        _fullscreenTaskId.value = taskId
+    }
+
+    internal fun exitFullscreen() {
+        if (_fullscreenTaskId.value == null) return
+        mediaPreviewCoordinator.pause("FULLSCREEN_EXITED")
+        _fullscreenTaskId.value = null
+    }
+
+    internal fun stopMediaPreviewIfTask(taskId: String, reason: String = "PREVIEW_DISPOSED") {
+        if (_fullscreenTaskId.value != taskId) {
+            mediaPreviewCoordinator.stopIfTask(taskId, reason)
+        }
     }
 
     internal fun openTaskFolder(context: Context, task: TaskRecord) {
@@ -364,7 +400,8 @@ class MainViewModel @Inject constructor(
 
     fun deleteTask(task: TaskRecord, deleteFiles: Boolean) {
         if (_expandedTaskId.value == task.id) {
-            audioPreviewCoordinator.stopIfTask(task.id, "TASK_DELETE_REQUESTED")
+            if (_fullscreenTaskId.value == task.id) _fullscreenTaskId.value = null
+            mediaPreviewCoordinator.stopIfTask(task.id, "TASK_DELETE_REQUESTED")
             _expandedTaskId.value = null
         }
         viewModelScope.launch {
@@ -388,7 +425,8 @@ class MainViewModel @Inject constructor(
     fun onAppForeground() = refreshTasks()
 
     fun onAppBackground() {
-        audioPreviewCoordinator.stopAndRelease("APP_BACKGROUNDED")
+        _fullscreenTaskId.value = null
+        mediaPreviewCoordinator.stopAndRelease("APP_BACKGROUNDED")
     }
 
     fun onTasksVisible() {
@@ -398,7 +436,8 @@ class MainViewModel @Inject constructor(
 
     fun onTasksHidden() {
         tasksVisible = false
-        audioPreviewCoordinator.stopAndRelease()
+        _fullscreenTaskId.value = null
+        mediaPreviewCoordinator.stopAndRelease()
     }
 
     fun refreshTasks() {
@@ -463,7 +502,7 @@ class MainViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        audioPreviewCoordinator.stopAndRelease("VIEW_MODEL_CLEARED")
+        mediaPreviewCoordinator.stopAndRelease("VIEW_MODEL_CLEARED")
         super.onCleared()
     }
 
@@ -525,3 +564,6 @@ class MainViewModel @Inject constructor(
         fun extractDouyinUrl(text: String): String? = douyinUrl.find(text)?.value
     }
 }
+
+private fun TaskPreviewMedia?.samePreviewSource(other: TaskPreviewMedia): Boolean =
+    this?.uri == other.uri
