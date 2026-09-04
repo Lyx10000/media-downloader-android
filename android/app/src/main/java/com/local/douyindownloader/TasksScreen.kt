@@ -204,7 +204,7 @@ internal fun TasksScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        PlatformBadge(task.platform)
+                        PlatformBrandBadge(task.platform)
                         Text(
                             SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
                                 .format(Date(task.createdAt)),
@@ -431,21 +431,6 @@ internal fun toggleTaskSelection(selected: Set<String>, taskId: String): Set<Str
 
 internal fun reconcileTaskSelection(selected: Set<String>, available: Set<String>): Set<String> =
     selected.intersect(available)
-
-@Composable
-private fun PlatformBadge(platform: SourcePlatform) {
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        shape = MaterialTheme.shapes.small,
-    ) {
-        Text(
-            text = platform.displayName,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-        )
-    }
-}
 
 private sealed interface TaskPreviewLoadState {
     data object Loading : TaskPreviewLoadState

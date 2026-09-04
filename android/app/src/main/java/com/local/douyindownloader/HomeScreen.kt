@@ -191,7 +191,7 @@ private fun PlatformCredentialCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(platform.displayName)
+                    PlatformBrandBadge(platform)
                     Text(
                         if (detected) "检测到登录凭据" else "未检测到登录",
                         color = if (detected) {
