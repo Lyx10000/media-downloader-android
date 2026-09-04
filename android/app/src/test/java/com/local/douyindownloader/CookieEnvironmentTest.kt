@@ -20,13 +20,21 @@ class CookieEnvironmentTest {
     }
 
     @Test
-    fun zhihuOnlyWarmsUpAutomaticallyWhenAnonymousSessionHasNoCookie() {
+    fun zhihuDocumentUsesOneTargetPageSnapshotEvenWhenCookieExists() {
         assertTrue(
             shouldRefreshCookieEnvironment(
                 "AUTH_OR_RISK",
                 refreshAttempted = false,
                 platform = SourcePlatform.ZHIHU,
-                hadCookie = false,
+                supportsTargetPageSnapshot = true,
+            ),
+        )
+        assertTrue(
+            shouldRefreshCookieEnvironment(
+                "AUTH_OR_RISK",
+                refreshAttempted = false,
+                platform = SourcePlatform.ZHIHU,
+                supportsTargetPageSnapshot = true,
             ),
         )
         assertFalse(
@@ -34,7 +42,7 @@ class CookieEnvironmentTest {
                 "AUTH_OR_RISK",
                 refreshAttempted = false,
                 platform = SourcePlatform.ZHIHU,
-                hadCookie = true,
+                supportsTargetPageSnapshot = false,
             ),
         )
     }

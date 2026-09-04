@@ -392,6 +392,11 @@ internal object ZhihuPageStateExtractor {
         return null
     }
 
+    fun findEntityFromJson(json: String, entityName: String, entityId: String): JSONObject? {
+        val root = runCatching { JSONObject(json) }.getOrNull() ?: return null
+        return findEntity(root, entityName, entityId, 0)
+    }
+
     private fun findEntity(value: Any?, entityName: String, entityId: String, depth: Int): JSONObject? {
         if (depth > 12) return null
         return when (value) {

@@ -170,6 +170,27 @@ class PlatformParsersTest {
         assertEquals("cdn", result.variants.single().sizeSource)
     }
 
+    @Test
+    fun `zhihu document consumes web snapshot without another http request`() {
+        val answerId = "2079127079271011205"
+        val url = "https://www.zhihu.com/question/26730775/answer/$answerId"
+        val http = FakeParserHttpClient(responses = ArrayDeque())
+        val snapshot = WebPageSnapshot(
+            finalUrl = url,
+            title = "问题标题",
+            author = "答主",
+            contentHtml = "<p>WebView 正文</p>",
+            visibleText = "问题标题 WebView 正文",
+        )
+
+        val result = ZhihuPlatformParser(http).parse(url, "d_c0=cookie", snapshot)
+
+        assertTrue(result.ok)
+        assertEquals(MediaKind.DOCUMENT, result.kind)
+        assertEquals("WebView 正文", result.document?.blocks?.single()?.text)
+        assertTrue(http.requests.isEmpty())
+    }
+
     private data class CapturedRequest(val url: String, val cookie: String)
 
     private class FakeParserHttpClient(

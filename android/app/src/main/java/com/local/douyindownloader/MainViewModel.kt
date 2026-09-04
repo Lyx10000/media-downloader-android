@@ -30,7 +30,11 @@ import java.util.UUID
 
 sealed interface ParseUiState {
     data object Idle : ParseUiState
-    data class LoadingWeb(val platform: SourcePlatform, val url: String) : ParseUiState
+    data class LoadingWeb(
+        val platform: SourcePlatform,
+        val url: String,
+        val capturePage: Boolean = false,
+    ) : ParseUiState
     data object Parsing : ParseUiState
     data class Ready(val result: ParseResult) : ParseUiState
     data class Error(val code: String, val message: String) : ParseUiState
@@ -46,12 +50,12 @@ internal fun shouldRefreshCookieEnvironment(
     errorCode: String,
     refreshAttempted: Boolean,
     platform: SourcePlatform = SourcePlatform.DOUYIN,
-    hadCookie: Boolean = false,
+    supportsTargetPageSnapshot: Boolean = false,
 ): Boolean {
     if (refreshAttempted || errorCode !in setOf("AUTH_OR_RISK", "DETAIL_EMPTY", "LOGIN_REQUIRED")) {
         return false
     }
-    return platform != SourcePlatform.ZHIHU || !hadCookie
+    return platform != SourcePlatform.ZHIHU || supportsTargetPageSnapshot
 }
 
 private data class TaskCapabilities(
@@ -129,9 +133,10 @@ class MainViewModel @Inject internal constructor(
 
     private var sessionId = ""
     private var sessionPlatform = SourcePlatform.DOUYIN
+    private var sessionSourceUrl = ""
+    private var sessionSupportsPageSnapshot = false
     private var parsingStarted = false
     private var environmentRefreshAttempted = false
-    private var sessionHadCookie = false
     private val refreshMutex = Mutex()
     private var taskCapabilities = emptyMap<String, TaskCapabilities>()
     private var tasksVisible = false
@@ -181,6 +186,10 @@ class MainViewModel @Inject internal constructor(
             return
         }
         sessionPlatform = source.platform
+        sessionSourceUrl = source.url
+        sessionSupportsPageSnapshot = source.platform == SourcePlatform.ZHIHU && runCatching {
+            ZhihuSourceResolver.resolve(source.url).type != ZhihuContentType.VIDEO
+        }.getOrDefault(false)
         sessionId = UUID.randomUUID().toString()
         parsingStarted = false
         environmentRefreshAttempted = false
@@ -191,7 +200,6 @@ class MainViewModel @Inject internal constructor(
         val cookieHeader = CookieManager.getInstance()
             .getCookie(source.platform.homeUrl)
             .orEmpty()
-        sessionHadCookie = cookieHeader.isNotBlank()
         if (cookieHeader.isNotBlank() || source.platform.anonymousFirst) {
             logger.event(
                 sessionId,
@@ -205,27 +213,34 @@ class MainViewModel @Inject internal constructor(
         }
     }
 
-    fun parseWithCookies(cookieHeader: String, source: CookieReadySource) {
+    fun parseWithCookies(
+        cookieHeader: String,
+        source: CookieReadySource,
+        pageSnapshot: WebPageSnapshot?,
+    ) {
         if (parsingStarted) return
         logger.event(sessionId, "COOKIE", "COOKIE_READY", JSONObject().apply {
             put("present", cookieHeader.isNotBlank())
             put("source", source.wireValue)
+            put("page_snapshot", pageSnapshot != null)
+            put("snapshot_initial_bytes", pageSnapshot?.initialData?.length ?: 0)
+            put("snapshot_content_bytes", pageSnapshot?.contentHtml?.length ?: 0)
+            put("snapshot_host", pageSnapshot?.finalUrl?.let { Uri.parse(it).host }.orEmpty())
         })
-        startParse(cookieHeader)
+        startParse(cookieHeader, pageSnapshot)
     }
 
-    private fun startParse(cookieHeader: String) {
+    private fun startParse(cookieHeader: String, pageSnapshot: WebPageSnapshot? = null) {
         if (parsingStarted) return
         parsingStarted = true
-        if (cookieHeader.isNotBlank()) sessionHadCookie = true
         parseState = ParseUiState.Parsing
         viewModelScope.launch {
-            val result = parser.parse(inputText, cookieHeader)
+            val result = parser.parse(inputText, cookieHeader, pageSnapshot)
             if (shouldRefreshCookieEnvironment(
                     result.errorCode,
                     environmentRefreshAttempted,
                     sessionPlatform,
-                    sessionHadCookie,
+                    sessionSupportsPageSnapshot,
                 )
             ) {
                 logger.event(sessionId, "COOKIE", "COOKIE_REFRESH_REQUIRED", JSONObject().apply {
@@ -640,7 +655,11 @@ class MainViewModel @Inject internal constructor(
         environmentRefreshAttempted = true
         parsingStarted = false
         logger.event(sessionId, "COOKIE", "COOKIE_WARMUP_STARTED", JSONObject().put("reason", reason))
-        parseState = ParseUiState.LoadingWeb(sessionPlatform, sessionPlatform.homeUrl)
+        parseState = ParseUiState.LoadingWeb(
+            platform = sessionPlatform,
+            url = if (sessionSupportsPageSnapshot) sessionSourceUrl else sessionPlatform.homeUrl,
+            capturePage = sessionSupportsPageSnapshot,
+        )
     }
 
     private fun refreshTaskMetadata(records: List<TaskRecord>) {

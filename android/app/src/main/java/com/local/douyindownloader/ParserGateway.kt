@@ -9,10 +9,14 @@ import javax.inject.Singleton
 class ParserGateway @Inject constructor(
     private val router: KotlinParserRouter,
 ) {
-    suspend fun parse(shareText: String, cookieHeader: String): ParseResult =
+    suspend fun parse(
+        shareText: String,
+        cookieHeader: String,
+        pageSnapshot: WebPageSnapshot? = null,
+    ): ParseResult =
         withContext(Dispatchers.IO) {
             try {
-                router.parse(shareText, cookieHeader)
+                router.parse(shareText, cookieHeader, pageSnapshot)
             } catch (error: Throwable) {
                 ParseResult(
                     ok = false,

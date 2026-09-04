@@ -11,7 +11,11 @@ import javax.inject.Singleton
 
 internal interface PlatformParser {
     val platform: SourcePlatform
-    fun parse(shareText: String, cookieHeader: String): ParseResult
+    fun parse(
+        shareText: String,
+        cookieHeader: String,
+        pageSnapshot: WebPageSnapshot? = null,
+    ): ParseResult
 }
 
 @Singleton
@@ -23,10 +27,14 @@ class KotlinParserRouter @Inject internal constructor(
     private val parsers = listOf(douyinParser, xiaohongshuParser, zhihuParser)
         .associateBy(PlatformParser::platform)
 
-    internal fun parse(shareText: String, cookieHeader: String): ParseResult {
+    internal fun parse(
+        shareText: String,
+        cookieHeader: String,
+        pageSnapshot: WebPageSnapshot? = null,
+    ): ParseResult {
         val source = extractSupportedSource(shareText)
             ?: return parseFailure(SourcePlatform.DOUYIN, "UNSUPPORTED_URL", "没有找到支持的作品链接")
-        return parsers.getValue(source.platform).parse(shareText, cookieHeader)
+        return parsers.getValue(source.platform).parse(shareText, cookieHeader, pageSnapshot)
     }
 }
 
@@ -36,7 +44,11 @@ internal class ZhihuPlatformParser @Inject constructor(
 ) : PlatformParser {
     override val platform = SourcePlatform.ZHIHU
 
-    override fun parse(shareText: String, cookieHeader: String): ParseResult = try {
+    override fun parse(
+        shareText: String,
+        cookieHeader: String,
+        pageSnapshot: WebPageSnapshot?,
+    ): ParseResult = try {
         val sourceUrl = extractSupportedSource(shareText)
             ?.takeIf { it.platform == platform }
             ?.url
@@ -48,7 +60,11 @@ internal class ZhihuPlatformParser @Inject constructor(
                 ZhihuMediaParser.normalizeStandaloneVideo(payload, source.contentId, source.canonicalUrl),
             )
         } else {
-            val payload = fetchDocument(source, cookieHeader)
+            val payload = if (pageSnapshot != null) {
+                ZhihuWebSnapshotExtractor.extract(pageSnapshot, source)
+            } else {
+                fetchDocument(source, cookieHeader)
+            }
             hydrateSizes(
                 ZhihuMediaParser.normalizeDocument(payload, source) { videoId ->
                     fetchLensVideo(videoId, source.canonicalUrl, cookieHeader)
@@ -197,7 +213,11 @@ internal class DouyinPlatformParser @Inject constructor(
 ) : PlatformParser {
     override val platform = SourcePlatform.DOUYIN
 
-    override fun parse(shareText: String, cookieHeader: String): ParseResult = try {
+    override fun parse(
+        shareText: String,
+        cookieHeader: String,
+        pageSnapshot: WebPageSnapshot?,
+    ): ParseResult = try {
         val sourceUrl = extractSupportedSource(shareText)
             ?.takeIf { it.platform == platform }
             ?.url
@@ -339,7 +359,11 @@ internal class XiaohongshuPlatformParser @Inject constructor(
 ) : PlatformParser {
     override val platform = SourcePlatform.XIAOHONGSHU
 
-    override fun parse(shareText: String, cookieHeader: String): ParseResult = try {
+    override fun parse(
+        shareText: String,
+        cookieHeader: String,
+        pageSnapshot: WebPageSnapshot?,
+    ): ParseResult = try {
         val sourceUrl = XiaohongshuMediaParser.extractShareUrl(shareText)
         var response = requestPage(sourceUrl, cookieHeader)
         var canonicalUrl = response.finalUrl

@@ -140,6 +140,7 @@ internal fun HomeScreen(
             platform = state.platform,
             url = state.url,
             title = "正在建立${state.platform.displayName}解析环境",
+            capturePage = state.capturePage,
             onReady = viewModel::parseWithCookies,
             onCancel = viewModel::resetParse,
         )
@@ -178,17 +179,19 @@ private fun WebEnvironment(
     platform: SourcePlatform,
     url: String,
     title: String,
-    onReady: (String, CookieReadySource) -> Unit,
+    capturePage: Boolean,
+    onReady: (String, CookieReadySource, WebPageSnapshot?) -> Unit,
     onCancel: () -> Unit,
 ) {
     var completed by remember(url) { mutableStateOf(false) }
-    fun finish(source: CookieReadySource) {
+    fun finish(source: CookieReadySource, snapshot: WebPageSnapshot? = null) {
         if (completed) return
         completed = true
         CookieManager.getInstance().flush()
         onReady(
             CookieManager.getInstance().getCookie(platform.homeUrl).orEmpty(),
             source,
+            snapshot,
         )
     }
     LaunchedEffect(url) {
@@ -200,6 +203,7 @@ private fun WebEnvironment(
             platform = platform,
             url = url,
             onReady = ::finish,
+            capturePage = capturePage,
             modifier = Modifier
                 .fillMaxSize()
                 .alpha(0f),
@@ -235,9 +239,10 @@ private fun WebEnvironment(
 private fun PlatformWebView(
     platform: SourcePlatform,
     url: String,
-    onReady: (CookieReadySource) -> Unit,
+    onReady: (CookieReadySource, WebPageSnapshot?) -> Unit,
     modifier: Modifier = Modifier,
     autoContinue: Boolean = true,
+    capturePage: Boolean = false,
 ) {
     AndroidView(
         modifier = modifier,
@@ -262,13 +267,24 @@ private fun PlatformWebView(
                     private fun deliver(source: CookieReadySource, delayMs: Long = 0) {
                         if (delivered) return
                         delivered = true
-                        currentWebView.postDelayed({ onReady(source) }, delayMs)
+                        currentWebView.postDelayed({
+                            if (capturePage) {
+                                currentWebView.evaluateJavascript(PAGE_SNAPSHOT_SCRIPT) { value ->
+                                    onReady(source, WebPageSnapshot.fromJavascriptResult(value))
+                                }
+                            } else {
+                                onReady(source, null)
+                            }
+                        }, delayMs)
                     }
 
                     override fun onPageFinished(view: WebView, finishedUrl: String) {
                         super.onPageFinished(view, finishedUrl)
                         if (autoContinue && isPlatformPage(finishedUrl, platform)) {
-                            deliver(CookieReadySource.PAGE_READY, WEB_COOKIE_SETTLE_DELAY_MS)
+                            deliver(
+                                CookieReadySource.PAGE_READY,
+                                if (capturePage) WEB_PAGE_SNAPSHOT_DELAY_MS else WEB_COOKIE_SETTLE_DELAY_MS,
+                            )
                         }
                     }
 
@@ -465,7 +481,7 @@ internal fun FullScreenWebEnvironment(
                 PlatformWebView(
                     platform = platform,
                     url = platform.homeUrl,
-                    onReady = { _ -> },
+                    onReady = { _, _ -> },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -499,3 +515,42 @@ private const val DESKTOP_USER_AGENT =
 
 private const val WEB_ENVIRONMENT_TIMEOUT_MS = 15_000L
 private const val WEB_COOKIE_SETTLE_DELAY_MS = 1_500L
+private const val WEB_PAGE_SNAPSHOT_DELAY_MS = 2_500L
+
+private const val PAGE_SNAPSHOT_SCRIPT = """
+    (function() {
+      var path = window.location.pathname || '';
+      var answerMatch = path.match(/\/answer\/(\d+)/);
+      var root = null;
+      var content = null;
+      if (answerMatch) {
+        var answerId = answerMatch[1];
+        root = document.querySelector('[data-answer-id="' + answerId + '"], #answer-' + answerId);
+        if (!root) {
+          var answers = Array.prototype.slice.call(document.querySelectorAll('.AnswerItem'));
+          root = answers.find(function(item) {
+            return (item.getAttribute('data-zop') || '').indexOf(answerId) >= 0 ||
+              (item.getAttribute('name') || '') === answerId;
+          }) || answers[0] || null;
+        }
+        content = root && root.querySelector('.RichContent-inner, .RichText');
+      } else if (/\/pin\//.test(path)) {
+        root = document.querySelector('.PinItem, .Pin-content, main');
+        content = root && root.querySelector('.RichContent-inner, .RichText, .PinItem-content, .Pin-content');
+      } else {
+        root = document.querySelector('.Post-Main, article, main');
+        content = document.querySelector('.Post-RichTextContainer .RichText, .Post-RichTextContainer, article .RichText');
+      }
+      var state = document.querySelector('script#js-initialData, script#__NEXT_DATA__');
+      var titleNode = document.querySelector('h1.Post-Title, .QuestionHeader-title, article h1, main h1, h1');
+      var authorNode = root && root.querySelector('.AuthorInfo-name, [itemprop="name"], .UserLink-link');
+      return JSON.stringify({
+        finalUrl: window.location.href || '',
+        initialData: state ? (state.textContent || '') : '',
+        title: titleNode ? (titleNode.textContent || '').trim() : (document.title || '').trim(),
+        author: authorNode ? (authorNode.textContent || '').trim() : '',
+        contentHtml: content ? (content.innerHTML || '') : '',
+        visibleText: document.body ? (document.body.innerText || '').slice(0, 8000) : ''
+      });
+    })();
+"""
