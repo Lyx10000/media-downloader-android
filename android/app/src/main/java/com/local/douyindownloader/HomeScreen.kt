@@ -78,7 +78,7 @@ internal fun HomeScreen(
         ) {
             item {
                 Text(
-                    "原画质下载",
+                    "聚合下载",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold,
                 )

@@ -1,6 +1,6 @@
-# Android 原画质下载器
+# Android 聚合下载器
 
-首版面向一加 13T / ColorOS 15，自用侧载，完全在手机本地运行。最低 Android 10，
+面向 Android 手机侧载使用，最低 Android 10，
 APK 只包含 `arm64-v8a`。
 
 ## 安装

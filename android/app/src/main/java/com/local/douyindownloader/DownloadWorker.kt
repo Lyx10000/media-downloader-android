@@ -126,7 +126,7 @@ class DownloadWorker(
         val complete = stage == "下载完成"
         val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("原画质下载器")
+            .setContentTitle("聚合下载器")
             .setContentText(stage)
             .setContentIntent(pending)
             .setOnlyAlertOnce(true)

@@ -15,6 +15,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
+internal const val PARSER_VERSION = "kotlin-core-1"
+
 object Redactor {
     private val secret = Regex(
         "(?i)(\"?(?:cookie|a_bogus|msToken|signature|token|odin_tt|ttwid)\"?\\s*[:=]\\s*\"?)([^\"\\s,;&}]+)",
@@ -46,7 +48,7 @@ class DiagnosticLogger @Inject constructor(
             put("stage", stage)
             put("event", name)
             put("app_version", BuildConfig.VERSION_NAME)
-            put("parser_version", "kotlin-core-1")
+            put("parser_version", PARSER_VERSION)
             put("details", JSONObject(Redactor.sanitize(details.toString())))
         }
         File(root, "$taskId.jsonl").appendText(record.toString() + "\n")
@@ -105,7 +107,7 @@ class DiagnosticLogger @Inject constructor(
             ZipOutputStream(output).use { zip ->
                 val manifest = JSONObject().apply {
                     put("app_version", BuildConfig.VERSION_NAME)
-                    put("parser_version", "kotlin-core-1")
+                    put("parser_version", PARSER_VERSION)
                     put("manufacturer", Build.MANUFACTURER)
                     put("model", Build.MODEL)
                     put("android", Build.VERSION.RELEASE)
