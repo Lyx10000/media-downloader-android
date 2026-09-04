@@ -20,6 +20,8 @@ class DownloadExecutor @Inject constructor(
     private val repository: DownloadTaskRepository,
     private val logger: DiagnosticLogger,
 ) {
+    private val acceleratedDownloader = AcceleratedDownloader()
+
     suspend fun execute(
         taskId: String,
         spec: TaskSpec,
@@ -278,7 +280,69 @@ class DownloadExecutor @Inject constructor(
                 }
             }
         }.distinct()
-        securedUrls.forEachIndexed { addressIndex, address ->
+        val orderedUrls = if (shouldAccelerateDownload(fallbackTotalBytes)) {
+            val selection = acceleratedDownloader.selectCandidate(
+                addresses = securedUrls,
+                referer = referer,
+                fallbackTotalBytes = fallbackTotalBytes,
+            )
+            if (selection != null) {
+                logger.event(taskId, "DOWNLOAD", "CDN_SELECTED", JSONObject().apply {
+                    put("cdn_index", securedUrls.indexOf(selection.address))
+                    put("cdn_host", URL(selection.address).host)
+                    put("probe_bytes_per_second", selection.bytesPerSecond)
+                    put("range_supported", selection.rangeSupported)
+                    put("total_bytes", selection.totalBytes)
+                })
+                if (selection.rangeSupported && shouldAccelerateDownload(selection.totalBytes)) {
+                    try {
+                        progress(
+                            formatDownloadStatus(label, 0L, selection.totalBytes, 0L),
+                            0,
+                            true,
+                        )
+                        logger.event(taskId, "DOWNLOAD", "RANGE_DOWNLOAD_STARTED", JSONObject().apply {
+                            put("parts", ACCELERATED_PART_COUNT)
+                            put("cdn_host", URL(selection.address).host)
+                            put("total_bytes", selection.totalBytes)
+                        })
+                        acceleratedDownloader.downloadRanges(
+                            selection = selection,
+                            target = target,
+                            referer = referer,
+                            partCount = ACCELERATED_PART_COUNT,
+                        ) { downloaded, total, bytesPerSecond ->
+                            progress(
+                                formatDownloadStatus(label, downloaded, total, bytesPerSecond),
+                                downloadFileProgress(downloaded, total),
+                                true,
+                            )
+                        }
+                        logger.event(taskId, "DOWNLOAD", "FILE_DOWNLOADED", JSONObject().apply {
+                            put("name", target.name)
+                            put("bytes", target.length())
+                            put("cdn_index", securedUrls.indexOf(selection.address))
+                            put("cdn_host", URL(selection.address).host)
+                            put("transfer_mode", "range_$ACCELERATED_PART_COUNT")
+                        })
+                        return
+                    } catch (error: Throwable) {
+                        if (error is CancellationException) throw error
+                        target.delete()
+                        logger.event(taskId, "DOWNLOAD", "RANGE_DOWNLOAD_FALLBACK", JSONObject().apply {
+                            put("cdn_host", URL(selection.address).host)
+                            put("message", error.message ?: error.javaClass.simpleName)
+                        })
+                    }
+                }
+                listOf(selection.address) + securedUrls.filterNot { it == selection.address }
+            } else {
+                securedUrls
+            }
+        } else {
+            securedUrls
+        }
+        orderedUrls.forEachIndexed { addressIndex, address ->
             repeat(3) { attempt ->
                 currentCoroutineContext().ensureActive()
                 try {
@@ -347,8 +411,9 @@ class DownloadExecutor @Inject constructor(
                     logger.event(taskId, "DOWNLOAD", "FILE_DOWNLOADED", JSONObject().apply {
                         put("name", target.name)
                         put("bytes", target.length())
-                        put("cdn_index", addressIndex)
+                        put("cdn_index", securedUrls.indexOf(address).takeIf { it >= 0 } ?: addressIndex)
                         put("cdn_host", URL(address).host)
+                        put("transfer_mode", "single")
                     })
                     return
                 } catch (error: Throwable) {
@@ -356,7 +421,7 @@ class DownloadExecutor @Inject constructor(
                     lastError = error
                     target.delete()
                     logger.event(taskId, "DOWNLOAD", "CDN_ATTEMPT_FAILED", JSONObject().apply {
-                        put("cdn_index", addressIndex)
+                        put("cdn_index", securedUrls.indexOf(address).takeIf { it >= 0 } ?: addressIndex)
                         put("attempt", attempt + 1)
                         put("message", error.message ?: error.javaClass.simpleName)
                     })
@@ -378,6 +443,7 @@ class DownloadExecutor @Inject constructor(
     }
 
     companion object {
+        private const val ACCELERATED_PART_COUNT = 4
         private const val PROGRESS_REPORT_INTERVAL_NANOS = 750_000_000L
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
