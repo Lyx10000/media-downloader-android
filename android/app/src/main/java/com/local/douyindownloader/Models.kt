@@ -116,7 +116,10 @@ data class MediaVariant(
 
 data class ParseResult(
     val ok: Boolean,
-    val awemeId: String = "",
+    val platform: SourcePlatform = SourcePlatform.DOUYIN,
+    val contentId: String = "",
+    val canonicalUrl: String = "",
+    val referer: String = platform.referer,
     val kind: MediaKind = MediaKind.VIDEO,
     val author: String = "",
     val description: String = "",
@@ -136,7 +139,11 @@ data class ParseResult(
         if (preserved?.has("ok") == true) return preserved
         return JSONObject().apply {
                 put("ok", ok)
-                put("aweme_id", awemeId)
+                put("platform", platform.wireValue)
+                put("content_id", contentId)
+                if (platform == SourcePlatform.DOUYIN) put("aweme_id", contentId)
+                put("canonical_url", canonicalUrl)
+                put("referer", referer)
                 put("kind", kind.wireValue)
                 put("author", author)
                 put("description", description)
@@ -166,6 +173,7 @@ data class ParseResult(
             if (!root.optBoolean("ok")) {
                 return ParseResult(
                     ok = false,
+                    platform = SourcePlatform.fromWire(root.optString("platform", "douyin")),
                     errorCode = root.optString("error_code", "PARSE_FAILED"),
                     message = root.optString("message", "解析失败"),
                     rawJson = text,
@@ -192,7 +200,14 @@ data class ParseResult(
                 .ifEmpty { imageUrls.map(::listOf) }
             return ParseResult(
                 ok = true,
-                awemeId = root.optString("aweme_id"),
+                platform = SourcePlatform.fromWire(root.optString("platform", "douyin")),
+                contentId = root.optString("content_id").ifBlank {
+                    root.optString("aweme_id")
+                },
+                canonicalUrl = root.optString("canonical_url"),
+                referer = root.optString("referer").ifBlank {
+                    SourcePlatform.fromWire(root.optString("platform", "douyin")).referer
+                },
                 kind = MediaKind.fromWire(root.optString("kind", MediaKind.VIDEO.wireValue)),
                 author = root.optString("author"),
                 description = root.optString("description"),
@@ -256,9 +271,11 @@ data class TaskSpec(
         }
     }
 
-    fun stableSource(): String = if (result.awemeId.isNotBlank()) {
+    fun stableSource(): String = if (result.canonicalUrl.isNotBlank()) {
+        result.canonicalUrl
+    } else if (result.platform == SourcePlatform.DOUYIN && result.contentId.isNotBlank()) {
         val path = if (result.kind == MediaKind.IMAGE) "note" else "video"
-        "https://www.douyin.com/$path/${result.awemeId}"
+        "https://www.douyin.com/$path/${result.contentId}"
     } else sourceText
 }
 
@@ -299,6 +316,7 @@ data class TaskRecord(
     val outputs: List<TaskOutput>,
     val error: String,
     val fileState: FileState,
+    val platform: SourcePlatform = SourcePlatform.DOUYIN,
 ) {
     val outputUris: List<String> get() = outputs.map(TaskOutput::uri)
 }

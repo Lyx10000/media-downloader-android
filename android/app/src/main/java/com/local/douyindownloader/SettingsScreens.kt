@@ -92,7 +92,7 @@ internal fun SettingsScreen(
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
 ) {
-    var showWebView by remember { mutableStateOf(false) }
+    var showWebViewPlatform by remember { mutableStateOf<SourcePlatform?>(null) }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -162,18 +162,26 @@ internal fun SettingsScreen(
         item { HorizontalDivider() }
         item { Text("解析环境", style = MaterialTheme.typography.titleMedium) }
         item {
-            Button(onClick = { showWebView = true }) {
+            Button(onClick = { showWebViewPlatform = SourcePlatform.DOUYIN }) {
                 Text("登录或刷新抖音环境")
+            }
+        }
+        item {
+            OutlinedButton(onClick = { showWebViewPlatform = SourcePlatform.XIAOHONGSHU }) {
+                Text("登录或刷新小红书环境")
             }
         }
         item { HorizontalDivider() }
         item {
             Text("版本", style = MaterialTheme.typography.titleMedium)
-            Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 android-core-3")
+            Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 android-core-4")
             Text("完全本地运行，不使用服务器", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    if (showWebView) {
-        FullScreenWebEnvironment(onDismiss = { showWebView = false })
+    showWebViewPlatform?.let { platform ->
+        FullScreenWebEnvironment(
+            platform = platform,
+            onDismiss = { showWebViewPlatform = null },
+        )
     }
 }

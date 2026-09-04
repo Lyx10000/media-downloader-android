@@ -177,11 +177,18 @@ internal fun TasksScreen(
                             Icon(Icons.Default.Delete, contentDescription = "删除任务")
                         }
                     }
-                    Text(
-                        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(Date(task.createdAt)),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PlatformBadge(task.platform)
+                        Text(
+                            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+                                .format(Date(task.createdAt)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(
                         when (task.fileState) {
                             FileState.PARTIAL -> "部分文件已删除"
@@ -392,6 +399,21 @@ internal fun TasksScreen(
                     recoveryTask = null
                 }) { Text(if (deleteFailed) "仅删除任务记录" else "删除任务") }
             },
+        )
+    }
+}
+
+@Composable
+private fun PlatformBadge(platform: SourcePlatform) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Text(
+            text = platform.displayName,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelMedium,
         )
     }
 }

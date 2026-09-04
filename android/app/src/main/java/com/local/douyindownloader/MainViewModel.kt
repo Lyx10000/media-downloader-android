@@ -28,7 +28,7 @@ import java.util.UUID
 
 sealed interface ParseUiState {
     data object Idle : ParseUiState
-    data class LoadingWeb(val url: String) : ParseUiState
+    data class LoadingWeb(val platform: SourcePlatform, val url: String) : ParseUiState
     data object Parsing : ParseUiState
     data class Ready(val result: ParseResult) : ParseUiState
     data class Error(val code: String, val message: String) : ParseUiState
@@ -43,7 +43,11 @@ enum class CookieReadySource(val wireValue: String) {
 internal fun shouldRefreshCookieEnvironment(
     errorCode: String,
     refreshAttempted: Boolean,
-): Boolean = !refreshAttempted && errorCode in setOf("AUTH_OR_RISK", "DETAIL_EMPTY")
+): Boolean = !refreshAttempted && errorCode in setOf(
+    "AUTH_OR_RISK",
+    "DETAIL_EMPTY",
+    "LOGIN_REQUIRED",
+)
 
 private data class TaskCapabilities(
     val requiresAllFilesAccess: Boolean = false,
@@ -116,6 +120,7 @@ class MainViewModel @Inject constructor(
         private set(value) = _uiState.update { it.copy(customTreeUri = value) }
 
     private var sessionId = ""
+    private var sessionPlatform = SourcePlatform.DOUYIN
     private var parsingStarted = false
     private var environmentRefreshAttempted = false
     private val refreshMutex = Mutex()
@@ -161,24 +166,28 @@ class MainViewModel @Inject constructor(
     }
 
     fun beginParse() {
-        val url = extractDouyinUrl(inputText)
-        if (url == null) {
-            message = "没有找到抖音链接"
+        val source = extractSupportedSource(inputText)
+        if (source == null) {
+            message = "没有找到抖音或小红书链接"
             return
         }
+        sessionPlatform = source.platform
         sessionId = UUID.randomUUID().toString()
         parsingStarted = false
         environmentRefreshAttempted = false
-        logger.event(sessionId, "INPUT", "LINK_ACCEPTED", JSONObject().put("host", Uri.parse(url).host))
+        logger.event(sessionId, "INPUT", "LINK_ACCEPTED", JSONObject().apply {
+            put("host", Uri.parse(source.url).host)
+            put("platform", source.platform.wireValue)
+        })
         val cookieHeader = CookieManager.getInstance()
-            .getCookie(DOUYIN_HOME_URL)
+            .getCookie(source.platform.homeUrl)
             .orEmpty()
-        if (cookieHeader.isNotBlank()) {
+        if (cookieHeader.isNotBlank() || source.platform.anonymousFirst) {
             logger.event(
                 sessionId,
                 "COOKIE",
-                "COOKIE_REUSED",
-                JSONObject().put("present", true),
+                if (cookieHeader.isBlank()) "ANONYMOUS_PARSE_ALLOWED" else "COOKIE_REUSED",
+                JSONObject().put("present", cookieHeader.isNotBlank()),
             )
             startParse(cookieHeader)
         } else {
@@ -211,7 +220,8 @@ class MainViewModel @Inject constructor(
             }
             if (result.ok) {
                 logger.event(sessionId, "PARSE", "DETAIL_PARSED", JSONObject().apply {
-                    put("aweme_id", result.awemeId)
+                    put("content_id", result.contentId)
+                    put("platform", result.platform.wireValue)
                     put("kind", result.kind.wireValue)
                     put("variants", result.variants.size)
                     put("images", result.imageUrls.size)
@@ -319,7 +329,7 @@ class MainViewModel @Inject constructor(
 
     fun retryTask(task: TaskRecord) {
         val cookieHeader = CookieManager.getInstance()
-            .getCookie("https://www.douyin.com/").orEmpty()
+            .getCookie(task.platform.homeUrl).orEmpty()
         viewModelScope.launch {
             message = redownloadCoordinator.retry(task, cookieHeader, customTreeUri)
             refreshTasks()
@@ -518,7 +528,7 @@ class MainViewModel @Inject constructor(
         environmentRefreshAttempted = true
         parsingStarted = false
         logger.event(sessionId, "COOKIE", "COOKIE_WARMUP_STARTED", JSONObject().put("reason", reason))
-        parseState = ParseUiState.LoadingWeb(DOUYIN_HOME_URL)
+        parseState = ParseUiState.LoadingWeb(sessionPlatform, sessionPlatform.homeUrl)
     }
 
     private fun refreshTaskMetadata(records: List<TaskRecord>) {
@@ -553,16 +563,6 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    companion object {
-        const val DOUYIN_HOME_URL = "https://www.douyin.com/"
-
-        private val douyinUrl = Regex(
-            "https?://[^\\s]*?(?:douyin\\.com|iesdouyin\\.com)[^\\s]*",
-            RegexOption.IGNORE_CASE,
-        )
-
-        fun extractDouyinUrl(text: String): String? = douyinUrl.find(text)?.value
-    }
 }
 
 private fun TaskPreviewMedia?.samePreviewSource(other: TaskPreviewMedia): Boolean =

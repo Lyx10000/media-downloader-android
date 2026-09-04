@@ -34,7 +34,7 @@ class RoomDownloadTaskRepository @Inject constructor(
 ) : DownloadTaskRepository {
     override suspend fun insert(spec: TaskSpec) {
         val title = spec.result.author.ifBlank {
-            spec.result.description.take(30).ifBlank { spec.result.awemeId }
+            spec.result.description.take(30).ifBlank { spec.result.contentId }
         }
         dao.insert(
             TaskEntity(
@@ -112,6 +112,8 @@ class RoomDownloadTaskRepository @Inject constructor(
 }
 
 internal fun TaskEntity.toRecord(): TaskRecord {
+    val sourcePlatform = runCatching { TaskSpec.fromJson(spec).result.platform }
+        .getOrDefault(SourcePlatform.DOUYIN)
     val outputJson = runCatching { JSONArray(outputs) }.getOrNull()
     val outputRecords = if (outputJson == null) {
         emptyList()
@@ -127,6 +129,7 @@ internal fun TaskEntity.toRecord(): TaskRecord {
         stage = stage,
         progress = progress,
         title = title,
+        platform = sourcePlatform,
         outputs = outputRecords,
         error = if (outputJson == null) error.ifBlank { "任务输出记录损坏" } else error,
         fileState = if (outputJson == null) FileState.UNKNOWN else FileState.fromWire(fileStatus),

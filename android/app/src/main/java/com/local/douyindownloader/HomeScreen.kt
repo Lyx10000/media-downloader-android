@@ -62,7 +62,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
-import java.net.URI
 import kotlinx.coroutines.delay
 
 @Composable
@@ -85,7 +84,7 @@ internal fun HomeScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "粘贴分享文本，或在抖音中直接分享到本应用。解析、下载和媒体处理全部在本机完成。",
+                    "粘贴抖音或小红书分享文本，也可以从对应应用直接分享到这里。解析、下载和媒体处理全部在本机完成。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -94,7 +93,7 @@ internal fun HomeScreen(
                     value = uiState.inputText,
                     onValueChange = viewModel::setIncomingText,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("抖音分享文本或链接") },
+                    label = { Text("抖音或小红书分享文本/链接") },
                     minLines = 4,
                     supportingText = { Text("剪贴板只会在你点击“粘贴”后读取") },
                     trailingIcon = {
@@ -138,13 +137,14 @@ internal fun HomeScreen(
         }
 
         is ParseUiState.LoadingWeb -> WebEnvironment(
+            platform = state.platform,
             url = state.url,
-            title = "正在建立抖音解析环境",
+            title = "正在建立${state.platform.displayName}解析环境",
             onReady = viewModel::parseWithCookies,
             onCancel = viewModel::resetParse,
         )
 
-        ParseUiState.Parsing -> ParsingStatus("正在读取完整质量档位……")
+        ParseUiState.Parsing -> ParsingStatus("正在读取原始媒体和完整质量档位……")
         is ParseUiState.Ready -> ResultScreen(
             result = state.result,
             selectedVariant = uiState.selectedVariant,
@@ -175,6 +175,7 @@ private fun ParsingStatus(text: String) {
 
 @Composable
 private fun WebEnvironment(
+    platform: SourcePlatform,
     url: String,
     title: String,
     onReady: (String, CookieReadySource) -> Unit,
@@ -186,7 +187,7 @@ private fun WebEnvironment(
         completed = true
         CookieManager.getInstance().flush()
         onReady(
-            CookieManager.getInstance().getCookie(MainViewModel.DOUYIN_HOME_URL).orEmpty(),
+            CookieManager.getInstance().getCookie(platform.homeUrl).orEmpty(),
             source,
         )
     }
@@ -195,7 +196,8 @@ private fun WebEnvironment(
         finish(CookieReadySource.TIMEOUT)
     }
     Box(Modifier.fillMaxSize()) {
-        DouyinWebView(
+        PlatformWebView(
+            platform = platform,
             url = url,
             onReady = ::finish,
             modifier = Modifier
@@ -230,7 +232,8 @@ private fun WebEnvironment(
 
 @Composable
 @SuppressLint("SetJavaScriptEnabled")
-private fun DouyinWebView(
+private fun PlatformWebView(
+    platform: SourcePlatform,
     url: String,
     onReady: (CookieReadySource) -> Unit,
     modifier: Modifier = Modifier,
@@ -264,7 +267,7 @@ private fun DouyinWebView(
 
                     override fun onPageFinished(view: WebView, finishedUrl: String) {
                         super.onPageFinished(view, finishedUrl)
-                        if (autoContinue && isDouyinPage(finishedUrl)) {
+                        if (autoContinue && isPlatformPage(finishedUrl, platform)) {
                             deliver(CookieReadySource.PAGE_READY, WEB_COOKIE_SETTLE_DELAY_MS)
                         }
                     }
@@ -315,7 +318,10 @@ private fun ResultScreen(
                         .height(220.dp),
                 )
             }
-            Text(result.author.ifBlank { "抖音作品" }, style = MaterialTheme.typography.titleLarge)
+            Text(
+                result.author.ifBlank { "${result.platform.displayName}作品" },
+                style = MaterialTheme.typography.titleLarge,
+            )
             if (result.description.isNotBlank()) {
                 Text(
                     result.description,
@@ -403,7 +409,10 @@ private fun ErrorScreen(state: ParseUiState.Error, retry: () -> Unit, back: () -
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun FullScreenWebEnvironment(onDismiss: () -> Unit) {
+internal fun FullScreenWebEnvironment(
+    platform: SourcePlatform,
+    onDismiss: () -> Unit,
+) {
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -419,7 +428,7 @@ internal fun FullScreenWebEnvironment(onDismiss: () -> Unit) {
                 contentWindowInsets = WindowInsets.safeDrawing,
                 topBar = {
                     TopAppBar(
-                        title = { Text("抖音登录环境") },
+                        title = { Text("${platform.displayName}登录环境") },
                         navigationIcon = {
                             IconButton(onClick = onDismiss) {
                                 Icon(Icons.Default.Clear, contentDescription = "关闭登录环境")
@@ -428,8 +437,9 @@ internal fun FullScreenWebEnvironment(onDismiss: () -> Unit) {
                     )
                 },
             ) { innerPadding ->
-                DouyinWebView(
-                    url = MainViewModel.DOUYIN_HOME_URL,
+                PlatformWebView(
+                    platform = platform,
+                    url = platform.homeUrl,
                     onReady = { _ -> },
                     modifier = Modifier
                         .fillMaxSize()
@@ -464,8 +474,3 @@ private const val DESKTOP_USER_AGENT =
 
 private const val WEB_ENVIRONMENT_TIMEOUT_MS = 15_000L
 private const val WEB_COOKIE_SETTLE_DELAY_MS = 1_500L
-
-internal fun isDouyinPage(url: String): Boolean {
-    val host = runCatching { URI(url).host.orEmpty().lowercase() }.getOrDefault("")
-    return host == "douyin.com" || host.endsWith(".douyin.com")
-}

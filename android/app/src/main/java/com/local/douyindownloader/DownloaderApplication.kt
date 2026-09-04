@@ -27,7 +27,7 @@ class DownloaderApplication : Application(), Configuration.Provider {
             DownloadWorker.CHANNEL_ID,
             "下载任务",
             NotificationManager.IMPORTANCE_LOW,
-        ).apply { description = "显示抖音媒体下载和处理进度" }
+        ).apply { description = "显示媒体下载和处理进度" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 

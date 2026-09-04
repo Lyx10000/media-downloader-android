@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -8,7 +9,12 @@ PYTHON_DIR = os.path.dirname(TEST_DIR)
 if PYTHON_DIR not in sys.path:
     sys.path.insert(0, PYTHON_DIR)
 
-from android_bridge import _hydrate_variant_sizes, _normalise, _probe_content_length  # noqa: E402
+from android_bridge import (  # noqa: E402
+    _hydrate_variant_sizes,
+    _normalise,
+    _probe_content_length,
+    parse_share,
+)
 
 
 class AndroidBridgeTests(unittest.TestCase):
@@ -39,6 +45,32 @@ class AndroidBridgeTests(unittest.TestCase):
         self.assertEqual(variants[0]["size_source"], "cdn")
         self.assertEqual(variants[1]["size"], 7_000_000)
         self.assertEqual(variants[1]["size_source"], "api")
+
+    def test_cdn_size_hydration_accepts_normalised_url_field(self):
+        variants = [{
+            "size": 0,
+            "size_source": "unknown",
+            "urls": ["https://sns-video-bd.xhscdn.com/video.mp4"],
+        }]
+
+        _hydrate_variant_sizes(variants, probe_fn=lambda _urls: 9_000_000)
+
+        self.assertEqual(variants[0]["size"], 9_000_000)
+        self.assertEqual(variants[0]["size_source"], "cdn")
+
+    def test_routes_xiaohongshu_links_to_platform_parser(self):
+        with patch("android_bridge.parse_xiaohongshu_share") as parser:
+            parser.return_value = {
+                "ok": False,
+                "platform": "xiaohongshu",
+                "error_code": "DETAIL_EMPTY",
+                "message": "empty",
+            }
+
+            result = parse_share("复制 https://xhslink.cn/example 打开小红书")
+
+        self.assertEqual(parser.call_count, 1)
+        self.assertEqual(__import__("json").loads(result)["platform"], "xiaohongshu")
 
     def test_normalises_muxed_video_with_quality_ladder(self):
         detail = {
@@ -76,6 +108,12 @@ class AndroidBridgeTests(unittest.TestCase):
         result = _normalise(detail, detail["aweme_id"], "video")
 
         self.assertTrue(result["ok"])
+        self.assertEqual(result["platform"], "douyin")
+        self.assertEqual(result["content_id"], detail["aweme_id"])
+        self.assertEqual(
+            result["canonical_url"],
+            f"https://www.douyin.com/video/{detail['aweme_id']}",
+        )
         self.assertEqual(result["author"], "测试作者")
         self.assertEqual(len(result["variants"]), 2)
         self.assertEqual(result["variants"][0]["codec"], "H.265")

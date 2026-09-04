@@ -47,7 +47,7 @@ class VariantMatcherTest {
     fun retrySourceUsesStableWorkIdInsteadOfExpiredShortLink() {
         val result = ParseResult(
             ok = true,
-            awemeId = "7670820885931028910",
+            contentId = "7670820885931028910",
             kind = MediaKind.IMAGE,
         )
         val spec = TaskSpec(

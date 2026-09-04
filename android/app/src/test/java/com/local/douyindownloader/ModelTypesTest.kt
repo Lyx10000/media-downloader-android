@@ -14,6 +14,8 @@ class ModelTypesTest {
         assertEquals("AVAILABLE", FileState.AVAILABLE.wireValue)
         assertEquals("COMPLETE", TaskStatus.COMPLETE.wireValue)
         assertEquals("image", MediaKind.IMAGE.wireValue)
+        assertEquals("douyin", SourcePlatform.DOUYIN.wireValue)
+        assertEquals("xiaohongshu", SourcePlatform.XIAOHONGSHU.wireValue)
     }
 
     @Test
@@ -22,6 +24,8 @@ class ModelTypesTest {
         assertEquals(StorageMode.LEGACY, StorageMode.fromWire("unexpected"))
         assertEquals(FileState.UNKNOWN, FileState.fromWire("unexpected"))
         assertEquals(MediaKind.VIDEO, MediaKind.fromWire("unexpected"))
+        assertEquals(SourcePlatform.DOUYIN, SourcePlatform.fromWire("unexpected"))
         assertEquals("FUTURE_STATUS", TaskStatus.fromWire("FUTURE_STATUS").wireValue)
     }
+
 }

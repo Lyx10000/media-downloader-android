@@ -10,7 +10,7 @@ plugins {
 val generatedPythonDir = layout.buildDirectory.dir("generated/python/main")
 val preparePythonSources by tasks.registering(Sync::class) {
     from("../../python3") {
-        include("abogus.py", "douyin_quality.py", "android_bridge.py")
+        include("abogus.py", "douyin_quality.py", "xiaohongshu_parser.py", "android_bridge.py")
     }
     into(generatedPythonDir)
 }
@@ -29,8 +29,8 @@ android {
         applicationId = "com.local.douyindownloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 17
-        versionName = "1.1.10"
+        versionCode = 18
+        versionName = "1.2.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

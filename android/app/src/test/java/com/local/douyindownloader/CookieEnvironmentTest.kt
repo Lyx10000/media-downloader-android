@@ -9,6 +9,7 @@ class CookieEnvironmentTest {
     fun refreshesEnvironmentOnceForAuthenticationOrEmptyDetail() {
         assertTrue(shouldRefreshCookieEnvironment("AUTH_OR_RISK", refreshAttempted = false))
         assertTrue(shouldRefreshCookieEnvironment("DETAIL_EMPTY", refreshAttempted = false))
+        assertTrue(shouldRefreshCookieEnvironment("LOGIN_REQUIRED", refreshAttempted = false))
         assertFalse(shouldRefreshCookieEnvironment("AUTH_OR_RISK", refreshAttempted = true))
     }
 
@@ -16,12 +17,5 @@ class CookieEnvironmentTest {
     fun doesNotRefreshEnvironmentForOrdinaryNetworkErrors() {
         assertFalse(shouldRefreshCookieEnvironment("NETWORK", refreshAttempted = false))
         assertFalse(shouldRefreshCookieEnvironment("HTTP_ERROR", refreshAttempted = false))
-    }
-
-    @Test
-    fun recognisesOnlyDouyinHosts() {
-        assertTrue(isDouyinPage("https://www.douyin.com/"))
-        assertTrue(isDouyinPage("https://v.douyin.com/example"))
-        assertFalse(isDouyinPage("https://douyin.com.example.org/"))
     }
 }

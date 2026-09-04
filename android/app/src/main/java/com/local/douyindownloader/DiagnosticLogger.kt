@@ -46,7 +46,7 @@ class DiagnosticLogger @Inject constructor(
             put("stage", stage)
             put("event", name)
             put("app_version", BuildConfig.VERSION_NAME)
-            put("parser_version", "android-core-3")
+            put("parser_version", "android-core-4")
             put("details", JSONObject(Redactor.sanitize(details.toString())))
         }
         File(root, "$taskId.jsonl").appendText(record.toString() + "\n")
@@ -105,7 +105,7 @@ class DiagnosticLogger @Inject constructor(
             ZipOutputStream(output).use { zip ->
                 val manifest = JSONObject().apply {
                     put("app_version", BuildConfig.VERSION_NAME)
-                    put("parser_version", "android-core-3")
+                    put("parser_version", "android-core-4")
                     put("manufacturer", Build.MANUFACTURER)
                     put("model", Build.MODEL)
                     put("android", Build.VERSION.RELEASE)

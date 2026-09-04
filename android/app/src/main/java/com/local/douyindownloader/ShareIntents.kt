@@ -63,7 +63,7 @@ internal fun buildFileShareIntent(
             Intent.EXTRA_TITLE,
             if (files.size == 1) files.single().displayName else "${files.size} 个下载文件",
         )
-        clipData = ClipData.newRawUri("抖音下载文件", uris.first()).apply {
+        clipData = ClipData.newRawUri("下载文件", uris.first()).apply {
             uris.drop(1).forEach { addItem(ClipData.Item(it)) }
         }
         if (uris.size == 1) {

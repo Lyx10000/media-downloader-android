@@ -40,7 +40,8 @@ class DownloadWorker(
             val storedSpec = repository.getSpec(taskId)
                 ?: error("任务规格不存在或已经损坏")
             safeEvent(taskId, "STARTUP", "SPEC_LOADED", JSONObject().apply {
-                put("aweme_id", storedSpec.result.awemeId)
+                put("content_id", storedSpec.result.contentId)
+                put("platform", storedSpec.result.platform.wireValue)
                 put("kind", storedSpec.result.kind.wireValue)
             })
             val spec = if (storedSpec.storageMode == StorageMode.LEGACY) {
@@ -65,7 +66,8 @@ class DownloadWorker(
                 put("task_folder", spec.taskFolder)
             })
             safeEvent(taskId, "DOWNLOAD", "TASK_STARTED", JSONObject().apply {
-                put("aweme_id", spec.result.awemeId)
+                put("content_id", spec.result.contentId)
+                put("platform", spec.result.platform.wireValue)
                 put("kind", spec.result.kind.wireValue)
                 put("mode", spec.mode.wireValue)
             })
@@ -124,7 +126,7 @@ class DownloadWorker(
         val complete = stage == "下载完成"
         val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("抖音下载器")
+            .setContentTitle("原画质下载器")
             .setContentText(stage)
             .setContentIntent(pending)
             .setOnlyAlertOnce(true)

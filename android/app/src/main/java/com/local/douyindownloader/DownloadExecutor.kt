@@ -42,17 +42,26 @@ class DownloadExecutor @Inject constructor(
             spec.result.imageUrls.map(::listOf)
         }
         imageCandidates.forEachIndexed { index, urls ->
-            val name = "image_${index + 1}.${extensionFromUrl(urls.first(), "jpg")}"
-            val file = File(folder, name)
+            val fallbackExtension = extensionFromUrl(urls.first(), "jpg")
+            val provisional = File(folder, "image_${index + 1}.download")
             val label = "原图 ${index + 1}/${imageCandidates.size}"
             progress("准备下载$label", 0, true)
             download(
                 taskId = taskId,
                 urls = urls,
-                target = file,
+                target = provisional,
                 label = label,
+                referer = spec.result.referer,
                 progress = progress,
             )
+            val extension = provisional.inputStream().use { input ->
+                val header = ByteArray(16)
+                val count = input.read(header).coerceAtLeast(0)
+                imageExtension(header.copyOf(count), fallbackExtension)
+            }
+            val name = "image_${index + 1}.$extension"
+            val file = File(folder, name)
+            check(provisional.renameTo(file)) { "无法按真实图片格式命名：$name" }
             files += file to name
         }
         spec.result.musicUrls.firstOrNull()?.let { url ->
@@ -64,6 +73,7 @@ class DownloadExecutor @Inject constructor(
                 urls = spec.result.musicUrls,
                 target = file,
                 label = "BGM",
+                referer = spec.result.referer,
                 progress = progress,
             )
             files += file to name
@@ -92,6 +102,7 @@ class DownloadExecutor @Inject constructor(
             urls = variant.urls,
             target = source,
             label = "视频",
+            referer = spec.result.referer,
             fallbackTotalBytes = variant.size.takeIf {
                 it > 0L && variant.sizeSource != "estimated"
             } ?: -1L,
@@ -135,13 +146,17 @@ class DownloadExecutor @Inject constructor(
                 audioTrack = audioTrack,
                 merged = merged,
                 audioUrls = audioUrls,
+                referer = spec.result.referer,
                 mode = mode,
                 progress = progress,
             )
             VideoAudioSource.MISSING -> {
-                if (mode != DownloadMode.VIDEO_ONLY) {
+                if (mode == DownloadMode.AUDIO_ONLY) {
                     error("视频文件没有音频轨，也没有可用的独立音频地址")
                 }
+                logger.event(taskId, "MEDIA_PROCESS", "SILENT_VIDEO_PRESERVED", JSONObject().apply {
+                    put("requested_mode", mode.wireValue)
+                })
                 listOf(source to videoTrack.name)
             }
         }
@@ -189,6 +204,7 @@ class DownloadExecutor @Inject constructor(
         audioTrack: File,
         merged: File,
         audioUrls: List<String>,
+        referer: String,
         mode: DownloadMode,
         progress: DownloadProgress,
     ): List<Pair<File, String>> {
@@ -202,6 +218,7 @@ class DownloadExecutor @Inject constructor(
             urls = audioUrls,
             target = audioTrack,
             label = "独立音频",
+            referer = referer,
             progress = progress,
         )
         return when (mode) {
@@ -246,6 +263,7 @@ class DownloadExecutor @Inject constructor(
         urls: List<String>,
         target: File,
         label: String,
+        referer: String,
         fallbackTotalBytes: Long = -1L,
         progress: DownloadProgress,
     ) {
@@ -259,7 +277,7 @@ class DownloadExecutor @Inject constructor(
                     connection.readTimeout = 120_000
                     connection.instanceFollowRedirects = true
                     connection.setRequestProperty("User-Agent", USER_AGENT)
-                    connection.setRequestProperty("Referer", "https://www.douyin.com/")
+                    connection.setRequestProperty("Referer", referer)
                     try {
                         val status = connection.responseCode
                         if (status !in 200..299) error("CDN HTTP $status")
@@ -353,5 +371,23 @@ class DownloadExecutor @Inject constructor(
         private const val PROGRESS_REPORT_INTERVAL_NANOS = 750_000_000L
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+    }
+}
+
+internal fun imageExtension(header: ByteArray, fallback: String): String {
+    fun startsWith(vararg bytes: Int): Boolean = bytes.indices.all { index ->
+        header.getOrNull(index)?.toInt()?.and(0xff) == bytes[index]
+    }
+    val ascii = header.toString(Charsets.ISO_8859_1)
+    return when {
+        startsWith(0xff, 0xd8, 0xff) -> "jpg"
+        startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a) -> "png"
+        ascii.startsWith("GIF87a") || ascii.startsWith("GIF89a") -> "gif"
+        ascii.startsWith("RIFF") && ascii.drop(8).startsWith("WEBP") -> "webp"
+        startsWith(0x42, 0x4d) -> "bmp"
+        ascii.drop(4).startsWith("ftypavif") || ascii.drop(4).startsWith("ftypavis") -> "avif"
+        ascii.drop(4).startsWith("ftypheic") || ascii.drop(4).startsWith("ftypheix") -> "heic"
+        ascii.drop(4).startsWith("ftypheif") || ascii.drop(4).startsWith("ftypmif1") -> "heif"
+        else -> fallback
     }
 }

@@ -22,7 +22,7 @@ class TaskRedownloadCoordinator @Inject constructor(
     ): String {
         val originalSpec = repository.getSpec(task.id)
             ?: return "旧任务缺少作品 ID，无法自动重新解析"
-        if (originalSpec.result.awemeId.isBlank()) {
+        if (originalSpec.result.contentId.isBlank() && originalSpec.stableSource().isBlank()) {
             return "旧任务缺少作品 ID，无法自动重新解析"
         }
         val resolvedStorage = resolveStorage(originalSpec, customTreeUri)
@@ -30,13 +30,19 @@ class TaskRedownloadCoordinator @Inject constructor(
 
         repository.update(task.id, TaskStatus.RUNNING, "正在重新解析作品", 0)
         logger.event(task.id, "REDOWNLOAD", "REPARSE_STARTED", JSONObject().apply {
-            put("aweme_id", originalSpec.result.awemeId)
+            put("content_id", originalSpec.result.contentId)
+            put("platform", originalSpec.result.platform.wireValue)
             put("kind", originalSpec.result.kind.wireValue)
         })
         val refreshed = parser.parse(originalSpec.stableSource(), cookieHeader)
         if (!refreshed.ok) {
-            val hint = if (refreshed.errorCode == "AUTH_OR_RISK") {
-                "请到设置中登录或刷新抖音环境后重试"
+            val hint = if (refreshed.errorCode in setOf(
+                    "AUTH_OR_RISK",
+                    "DETAIL_EMPTY",
+                    "LOGIN_REQUIRED",
+                )
+            ) {
+                "请到设置中登录或刷新${task.platform.displayName}环境后重试"
             } else {
                 refreshed.message
             }

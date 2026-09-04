@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: UTF-8 -*-
 
-"""Android/Chaquopy 调用的纯 Python 抖音解析桥。"""
+"""Android/Chaquopy 调用的多平台媒体解析桥。"""
 
 import json
 import re
@@ -17,6 +17,12 @@ from douyin_quality import (
     extract_image_urls,
     extract_video_variants,
     fetch_douyin_detail,
+)
+from xiaohongshu_parser import (
+    XHS_HOME_URL,
+    XHS_USER_AGENT,
+    is_xiaohongshu_share,
+    parse_xiaohongshu_share,
 )
 
 
@@ -83,15 +89,20 @@ def _resolve_item(share_text):
     raise ValueError("短链已打开，但没有识别到作品 ID")
 
 
-def _probe_content_length(url, request_get=requests.get):
+def _probe_content_length(
+    url,
+    request_get=requests.get,
+    user_agent=DOUYIN_API_USER_AGENT,
+    referer="https://www.douyin.com/",
+):
     """通过单字节范围请求读取总大小，不消费视频正文。"""
     response = None
     try:
         response = request_get(
             url,
             headers={
-                "User-Agent": DOUYIN_API_USER_AGENT,
-                "Referer": "https://www.douyin.com/",
+                "User-Agent": user_agent,
+                "Referer": referer,
                 "Range": "bytes=0-0",
                 "Accept-Encoding": "identity",
             },
@@ -113,9 +124,13 @@ def _probe_content_length(url, request_get=requests.get):
     return 0
 
 
-def _probe_variant_size(urls):
+def _probe_variant_size(
+    urls,
+    user_agent=DOUYIN_API_USER_AGENT,
+    referer="https://www.douyin.com/",
+):
     for url in (urls or [])[:2]:
-        size = _probe_content_length(url)
+        size = _probe_content_length(url, user_agent=user_agent, referer=referer)
         if size > 0:
             return size
     return 0
@@ -126,13 +141,14 @@ def _hydrate_variant_sizes(variants, probe_fn=None):
     probe = probe_fn or _probe_variant_size
     candidates = [
         variant for variant in variants
-        if variant.get("size_source") != "api" and variant.get("addrs")
+        if variant.get("size_source") != "api"
+        and (variant.get("addrs") or variant.get("urls"))
     ]
     if not candidates:
         return variants
     with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as executor:
         futures = {
-            executor.submit(probe, variant.get("addrs") or []): variant
+            executor.submit(probe, variant.get("addrs") or variant.get("urls") or []): variant
             for variant in candidates
         }
         for future in as_completed(futures):
@@ -149,10 +165,16 @@ def _hydrate_variant_sizes(variants, probe_fn=None):
 
 def _normalise(detail, item_id, item_kind, probe_sizes=False):
     author = detail.get("author") or {}
+    content_id = str(detail.get("aweme_id") or detail.get("awemeId") or item_id)
+    kind = "image" if detail.get("images") else item_kind
     result = {
         "ok": True,
-        "aweme_id": str(detail.get("aweme_id") or detail.get("awemeId") or item_id),
-        "kind": "image" if detail.get("images") else item_kind,
+        "platform": "douyin",
+        "content_id": content_id,
+        "aweme_id": content_id,
+        "canonical_url": f"https://www.douyin.com/{'note' if kind == 'image' else 'video'}/{content_id}",
+        "referer": "https://www.douyin.com/",
+        "kind": kind,
         "author": author.get("nickname") or author.get("name") or "",
         "description": detail.get("desc") or detail.get("description") or "",
         "cover_url": "",
@@ -206,12 +228,28 @@ def _normalise(detail, item_id, item_kind, probe_sizes=False):
 
 def parse_share(share_text, cookie_header=""):
     """返回稳定 JSON；错误也编码为 JSON，避免跨语言丢失阶段信息。"""
+    if is_xiaohongshu_share(share_text):
+        result = parse_xiaohongshu_share(share_text, cookie_header)
+        if result.get("ok"):
+            _hydrate_variant_sizes(
+                result.get("variants") or [],
+                probe_fn=lambda urls: _probe_variant_size(
+                    urls,
+                    user_agent=XHS_USER_AGENT,
+                    referer=XHS_HOME_URL,
+                ),
+            )
+        return json.dumps(
+            result,
+            ensure_ascii=False,
+        )
     try:
         item_id, item_kind, _ = _resolve_item(share_text)
         detail = fetch_douyin_detail(item_id, _cookie_list(cookie_header), timeout=25)
         if not detail:
             return json.dumps({
                 "ok": False,
+                "platform": "douyin",
                 "error_code": "DETAIL_EMPTY",
                 "message": "抖音详情接口没有返回作品信息，请刷新解析环境",
             }, ensure_ascii=False)
@@ -224,18 +262,21 @@ def parse_share(share_text, cookie_header=""):
         code = "AUTH_OR_RISK" if status in (401, 403) else "HTTP_ERROR"
         return json.dumps({
             "ok": False,
+            "platform": "douyin",
             "error_code": code,
             "message": f"详情请求失败（HTTP {status}）",
         }, ensure_ascii=False)
     except requests.RequestException as error:
         return json.dumps({
             "ok": False,
+            "platform": "douyin",
             "error_code": "NETWORK",
             "message": f"网络请求失败：{type(error).__name__}",
         }, ensure_ascii=False)
     except Exception as error:
         return json.dumps({
             "ok": False,
+            "platform": "douyin",
             "error_code": "PARSE_FAILED",
             "message": str(error),
         }, ensure_ascii=False)
