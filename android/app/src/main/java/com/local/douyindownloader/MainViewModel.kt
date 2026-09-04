@@ -45,11 +45,14 @@ enum class CookieReadySource(val wireValue: String) {
 internal fun shouldRefreshCookieEnvironment(
     errorCode: String,
     refreshAttempted: Boolean,
-): Boolean = !refreshAttempted && errorCode in setOf(
-    "AUTH_OR_RISK",
-    "DETAIL_EMPTY",
-    "LOGIN_REQUIRED",
-)
+    platform: SourcePlatform = SourcePlatform.DOUYIN,
+    hadCookie: Boolean = false,
+): Boolean {
+    if (refreshAttempted || errorCode !in setOf("AUTH_OR_RISK", "DETAIL_EMPTY", "LOGIN_REQUIRED")) {
+        return false
+    }
+    return platform != SourcePlatform.ZHIHU || !hadCookie
+}
 
 private data class TaskCapabilities(
     val requiresAllFilesAccess: Boolean = false,
@@ -128,6 +131,7 @@ class MainViewModel @Inject internal constructor(
     private var sessionPlatform = SourcePlatform.DOUYIN
     private var parsingStarted = false
     private var environmentRefreshAttempted = false
+    private var sessionHadCookie = false
     private val refreshMutex = Mutex()
     private var taskCapabilities = emptyMap<String, TaskCapabilities>()
     private var tasksVisible = false
@@ -173,7 +177,7 @@ class MainViewModel @Inject internal constructor(
     fun beginParse() {
         val source = extractSupportedSource(inputText)
         if (source == null) {
-            message = "没有找到抖音或小红书链接"
+            message = "没有找到抖音、小红书或知乎链接"
             return
         }
         sessionPlatform = source.platform
@@ -187,6 +191,7 @@ class MainViewModel @Inject internal constructor(
         val cookieHeader = CookieManager.getInstance()
             .getCookie(source.platform.homeUrl)
             .orEmpty()
+        sessionHadCookie = cookieHeader.isNotBlank()
         if (cookieHeader.isNotBlank() || source.platform.anonymousFirst) {
             logger.event(
                 sessionId,
@@ -212,10 +217,17 @@ class MainViewModel @Inject internal constructor(
     private fun startParse(cookieHeader: String) {
         if (parsingStarted) return
         parsingStarted = true
+        if (cookieHeader.isNotBlank()) sessionHadCookie = true
         parseState = ParseUiState.Parsing
         viewModelScope.launch {
             val result = parser.parse(inputText, cookieHeader)
-            if (shouldRefreshCookieEnvironment(result.errorCode, environmentRefreshAttempted)) {
+            if (shouldRefreshCookieEnvironment(
+                    result.errorCode,
+                    environmentRefreshAttempted,
+                    sessionPlatform,
+                    sessionHadCookie,
+                )
+            ) {
                 logger.event(sessionId, "COOKIE", "COOKIE_REFRESH_REQUIRED", JSONObject().apply {
                     put("code", result.errorCode)
                 })
@@ -230,6 +242,7 @@ class MainViewModel @Inject internal constructor(
                     put("kind", result.kind.wireValue)
                     put("variants", result.variants.size)
                     put("images", result.imageUrls.size)
+                    put("document_assets", result.document?.assets?.size ?: 0)
                     put("separate_audio", result.audioUrls.isNotEmpty())
                 })
                 logger.saveResponseShape(sessionId, result.responseShape)
@@ -365,7 +378,7 @@ class MainViewModel @Inject internal constructor(
     internal suspend fun resolveTaskPreview(
         taskId: String,
         outputs: List<TaskOutput>,
-    ): TaskPreviewMedia? = taskPreviewResolver.resolve(taskId, outputs)
+    ): List<TaskPreviewMedia> = taskPreviewResolver.resolve(taskId, outputs)
 
     internal fun toggleMediaPreview(taskId: String, media: TaskPreviewMedia) {
         if (_expandedTaskId.value != taskId) _expandedTaskId.value = taskId

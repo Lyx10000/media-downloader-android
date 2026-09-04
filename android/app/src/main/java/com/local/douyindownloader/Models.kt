@@ -68,7 +68,8 @@ enum class DownloadMode(val wireValue: String) {
 
 enum class MediaKind(val wireValue: String) {
     VIDEO("video"),
-    IMAGE("image");
+    IMAGE("image"),
+    DOCUMENT("document");
 
     companion object {
         fun fromWire(value: String): MediaKind = entries.firstOrNull { it.wireValue == value }
@@ -129,6 +130,7 @@ data class ParseResult(
     val imageUrls: List<String> = emptyList(),
     val imageCandidates: List<List<String>> = emptyList(),
     val musicUrls: List<String> = emptyList(),
+    val document: DocumentContent? = null,
     val responseShape: String = "{}",
     val errorCode: String = "",
     val message: String = "",
@@ -158,6 +160,7 @@ data class ParseResult(
                     },
                 )
                 put("music_urls", JSONArray(musicUrls))
+                document?.let { put("document", it.toJson()) }
                 put(
                     "response_shape",
                     runCatching { JSONObject(responseShape) }.getOrElse { JSONObject() },
@@ -217,6 +220,7 @@ data class ParseResult(
                 imageUrls = imageCandidates.mapNotNull(List<String>::firstOrNull),
                 imageCandidates = imageCandidates,
                 musicUrls = root.optJSONArray("music_urls").toStrings(),
+                document = root.optJSONObject("document")?.let(DocumentContent::fromJson),
                 responseShape = root.optJSONObject("response_shape")?.toString(2) ?: "{}",
                 rawJson = text,
             )
@@ -284,12 +288,14 @@ data class TaskOutput(
     val displayName: String = "",
     val mimeType: String = "",
     val sizeBytes: Long = 0L,
+    val relativePath: String = displayName,
 ) {
     fun toJson() = JSONObject().apply {
         put("uri", uri)
         put("display_name", displayName)
         put("mime_type", mimeType)
         put("size_bytes", sizeBytes)
+        put("relative_path", relativePath.ifBlank { displayName })
     }
 
     companion object {
@@ -299,6 +305,9 @@ data class TaskOutput(
                 displayName = value.optString("display_name"),
                 mimeType = value.optString("mime_type"),
                 sizeBytes = value.optLong("size_bytes").coerceAtLeast(0L),
+                relativePath = value.optString("relative_path").ifBlank {
+                    value.optString("display_name")
+                },
             ).takeIf { it.uri.isNotBlank() }
             is String -> TaskOutput(uri = value).takeIf { it.uri.isNotBlank() }
             else -> null

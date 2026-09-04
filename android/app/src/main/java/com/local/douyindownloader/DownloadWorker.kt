@@ -71,18 +71,26 @@ class DownloadWorker(
                 put("kind", spec.result.kind.wireValue)
                 put("mode", spec.mode.wireValue)
             })
-            val outputs = executor.execute(taskId, spec, activeTaskFolder) { stage, progress, persist ->
+            val execution = executor.execute(taskId, spec, activeTaskFolder) { stage, progress, persist ->
                 if (persist) repository.update(taskId, TaskStatus.RUNNING, stage, progress)
                 setForeground(createForeground(taskId, stage, progress))
             }
-            repository.complete(taskId, outputs)
+            val completionStage = if (execution.warningCount > 0) {
+                "已完成（${execution.warningCount} 项未下载）"
+            } else {
+                "已完成"
+            }
+            repository.complete(taskId, execution.outputs, completionStage)
             safeEvent(
                 taskId,
                 "COMPLETE",
                 "TASK_COMPLETE",
-                JSONObject().put("files", outputs.size),
+                JSONObject().apply {
+                    put("files", execution.outputs.size)
+                    put("warnings", execution.warningCount)
+                },
             )
-            setForeground(createForeground(taskId, "下载完成", 100))
+            setForeground(createForeground(taskId, completionStage, 100))
             activeTaskFolder.deleteRecursively()
             Result.success()
         } catch (cancelled: CancellationException) {
@@ -123,7 +131,7 @@ class DownloadWorker(
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val showProgress = shouldShowDownloadProgress(stage)
-        val complete = stage == "下载完成"
+        val complete = stage == "已完成" || stage.startsWith("已完成（")
         val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("聚合下载器")

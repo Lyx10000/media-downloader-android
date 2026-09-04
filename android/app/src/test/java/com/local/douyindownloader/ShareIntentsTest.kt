@@ -53,10 +53,7 @@ class ShareIntentsTest {
             true,
             canShareTogether(listOf("audio/mpeg", "audio/mp4")),
         )
-        assertEquals(
-            false,
-            canShareTogether(listOf("video/mp4", "audio/mp4")),
-        )
+        assertEquals(false, canShareTogether(listOf("text/markdown", "image/jpeg", "video/mp4")))
     }
 
     @Test

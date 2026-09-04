@@ -102,12 +102,12 @@ interface TaskDao {
 
     @Query(
         """
-        UPDATE tasks SET status = 'COMPLETE', stage = '已完成', progress = 100,
+        UPDATE tasks SET status = 'COMPLETE', stage = :stage, progress = 100,
         outputs = :outputs, error = '', file_status = 'AVAILABLE'
         WHERE id = :taskId AND status != 'DELETING'
         """,
     )
-    suspend fun complete(taskId: String, outputs: String)
+    suspend fun complete(taskId: String, outputs: String, stage: String)
 }
 
 @Database(entities = [TaskEntity::class], version = 3, exportSchema = true)

@@ -84,7 +84,7 @@ internal fun HomeScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "粘贴抖音或小红书分享文本，也可以从对应应用直接分享到这里。解析、下载和媒体处理全部在本机完成。",
+                    "粘贴抖音、小红书或知乎分享文本，也可以从对应应用直接分享到这里。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -93,7 +93,7 @@ internal fun HomeScreen(
                     value = uiState.inputText,
                     onValueChange = viewModel::setIncomingText,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("抖音或小红书分享文本/链接") },
+                    label = { Text("抖音、小红书或知乎分享文本/链接") },
                     minLines = 4,
                     supportingText = { Text("剪贴板只会在你点击“粘贴”后读取") },
                     trailingIcon = {
@@ -331,47 +331,64 @@ private fun ResultScreen(
                 )
             }
         }
-        if (result.kind == MediaKind.IMAGE) {
-            item {
-                OutlinedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("原图 × ${result.imageUrls.size}", style = MaterialTheme.typography.titleMedium)
-                        if (result.musicUrls.isNotEmpty()) Text("包含 BGM")
-                    }
-                }
-            }
-        } else {
-            item { Text("选择清晰度", style = MaterialTheme.typography.titleMedium) }
-            items(result.variants.size) { index ->
-                val variant = result.variants[index]
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .selectable(selectedVariant == index) { onVariant(index) }
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(selected = selectedVariant == index, onClick = { onVariant(index) })
-                    Column(Modifier.padding(start = 8.dp)) {
-                        Text(variant.label)
-                        if (index == 0) Text("最高档", color = MaterialTheme.colorScheme.primary)
-                        if (variant.codec.contains("265")) {
-                            Text("H.265：旧播放器可能不兼容", style = MaterialTheme.typography.bodySmall)
+        when (result.kind) {
+            MediaKind.IMAGE -> {
+                item {
+                    OutlinedCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("原图 × ${result.imageUrls.size}", style = MaterialTheme.typography.titleMedium)
+                            if (result.musicUrls.isNotEmpty()) Text("包含 BGM")
                         }
                     }
                 }
             }
-            item { Text("保存模式", style = MaterialTheme.typography.titleMedium) }
-            items(videoModes(result.audioUrls.isEmpty())) { (mode, label) ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .selectable(selectedMode == mode) { onMode(mode) }
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(selected = selectedMode == mode, onClick = { onMode(mode) })
-                    Text(label, Modifier.padding(start = 8.dp))
+            MediaKind.DOCUMENT -> {
+                item {
+                    val document = result.document
+                    val images = document?.assets?.count { it.kind == DocumentAssetKind.IMAGE } ?: 0
+                    val videos = document?.assets?.count { it.kind == DocumentAssetKind.VIDEO } ?: 0
+                    OutlinedCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("知乎${document?.type?.displayLabel.orEmpty()}", style = MaterialTheme.typography.titleMedium)
+                            Text("正文将保存为 Markdown")
+                            Text("图片 $images 张 · 内嵌视频 $videos 个")
+                        }
+                    }
+                }
+            }
+            MediaKind.VIDEO -> {
+                item { Text("选择清晰度", style = MaterialTheme.typography.titleMedium) }
+                items(result.variants.size) { index ->
+                    val variant = result.variants[index]
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .selectable(selectedVariant == index) { onVariant(index) }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selectedVariant == index, onClick = { onVariant(index) })
+                        Column(Modifier.padding(start = 8.dp)) {
+                            Text(variant.label)
+                            if (index == 0) Text("最高档", color = MaterialTheme.colorScheme.primary)
+                            if (variant.codec.contains("265")) {
+                                Text("H.265：旧播放器可能不兼容", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+                item { Text("保存模式", style = MaterialTheme.typography.titleMedium) }
+                items(videoModes(result.audioUrls.isEmpty())) { (mode, label) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .selectable(selectedMode == mode) { onMode(mode) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selectedMode == mode, onClick = { onMode(mode) })
+                        Text(label, Modifier.padding(start = 8.dp))
+                    }
                 }
             }
         }
@@ -380,8 +397,16 @@ private fun ResultScreen(
                 OutlinedButton(onClick = onBack) { Text("返回") }
                 Button(
                     onClick = onDownload,
-                    enabled = result.kind == MediaKind.IMAGE || result.variants.isNotEmpty(),
-                ) { Text(if (result.kind == MediaKind.IMAGE) "下载原图" else "开始下载") }
+                    enabled = result.kind != MediaKind.VIDEO || result.variants.isNotEmpty(),
+                ) {
+                    Text(
+                        when (result.kind) {
+                            MediaKind.IMAGE -> "下载原图"
+                            MediaKind.DOCUMENT -> "下载完整内容"
+                            MediaKind.VIDEO -> "开始下载"
+                        },
+                    )
+                }
             }
         }
     }

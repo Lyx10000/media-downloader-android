@@ -55,9 +55,12 @@ class TaskRedownloadCoordinator @Inject constructor(
         }
 
         val previous = originalSpec.result.variants.getOrNull(originalSpec.variantIndex)
-        val match = if (refreshed.kind == MediaKind.IMAGE) VariantMatch(0, true)
-        else matchVariant(previous, refreshed.variants)
-        if (refreshed.kind != MediaKind.IMAGE && match.index < 0) {
+        val match = if (refreshed.kind == MediaKind.VIDEO) {
+            matchVariant(previous, refreshed.variants)
+        } else {
+            VariantMatch(0, true)
+        }
+        if (refreshed.kind == MediaKind.VIDEO && match.index < 0) {
             repository.update(
                 task.id,
                 TaskStatus.FAILED,
@@ -96,7 +99,7 @@ class TaskRedownloadCoordinator @Inject constructor(
             repository.update(task.id, TaskStatus.FAILED, "启动重新下载失败", 0, message)
             return "启动重新下载失败：$message"
         }
-        return if (refreshed.kind != MediaKind.IMAGE && !match.exact) {
+        return if (refreshed.kind == MediaKind.VIDEO && !match.exact) {
             if (previous == null) "已选择当前可获得的最高档位"
             else "原清晰度已不可用，已选择当前最接近的档位"
         } else {

@@ -18,13 +18,176 @@ internal interface PlatformParser {
 class KotlinParserRouter @Inject internal constructor(
     douyinParser: DouyinPlatformParser,
     xiaohongshuParser: XiaohongshuPlatformParser,
+    zhihuParser: ZhihuPlatformParser,
 ) {
-    private val parsers = listOf(douyinParser, xiaohongshuParser).associateBy(PlatformParser::platform)
+    private val parsers = listOf(douyinParser, xiaohongshuParser, zhihuParser)
+        .associateBy(PlatformParser::platform)
 
     internal fun parse(shareText: String, cookieHeader: String): ParseResult {
         val source = extractSupportedSource(shareText)
             ?: return parseFailure(SourcePlatform.DOUYIN, "UNSUPPORTED_URL", "没有找到支持的作品链接")
         return parsers.getValue(source.platform).parse(shareText, cookieHeader)
+    }
+}
+
+@Singleton
+internal class ZhihuPlatformParser @Inject constructor(
+    private val httpClient: ParserHttpClient,
+) : PlatformParser {
+    override val platform = SourcePlatform.ZHIHU
+
+    override fun parse(shareText: String, cookieHeader: String): ParseResult = try {
+        val sourceUrl = extractSupportedSource(shareText)
+            ?.takeIf { it.platform == platform }
+            ?.url
+            ?: throw PlatformParseException("UNSUPPORTED_URL", "没有找到知乎链接")
+        val source = ZhihuSourceResolver.resolve(sourceUrl)
+        if (source.type == ZhihuContentType.VIDEO) {
+            val payload = fetchStandaloneVideo(source, cookieHeader)
+            hydrateSizes(
+                ZhihuMediaParser.normalizeStandaloneVideo(payload, source.contentId, source.canonicalUrl),
+            )
+        } else {
+            val payload = fetchDocument(source, cookieHeader)
+            hydrateSizes(
+                ZhihuMediaParser.normalizeDocument(payload, source) { videoId ->
+                    fetchLensVideo(videoId, source.canonicalUrl, cookieHeader)
+                },
+            )
+        }
+    } catch (error: PlatformParseException) {
+        parseFailure(platform, error.code, error.message.orEmpty())
+    } catch (error: IOException) {
+        parseFailure(platform, "NETWORK", "网络请求失败：${error.javaClass.simpleName}")
+    } catch (error: Exception) {
+        parseFailure(platform, "PARSE_FAILED", error.message ?: error.javaClass.simpleName)
+    }
+
+    private fun fetchStandaloneVideo(
+        source: ResolvedZhihuSource,
+        cookieHeader: String,
+    ): JSONObject {
+        val endpoints = listOf(
+            "https://api.zhihu.com/zvideos/${source.contentId}",
+            "https://www.zhihu.com/api/v4/zvideos/${source.contentId}",
+        )
+        var lastStatus = 0
+        endpoints.forEach { endpoint ->
+            val response = request(endpoint, source.canonicalUrl, cookieHeader)
+            lastStatus = response.statusCode
+            if (response.statusCode in 200..299 && response.body.isNotBlank()) {
+                return JSONObject(response.body)
+            }
+        }
+        throw statusError(lastStatus)
+    }
+
+    private fun fetchDocument(source: ResolvedZhihuSource, cookieHeader: String): JSONObject {
+        val (apiName, entityName) = when (source.type) {
+            ZhihuContentType.ARTICLE -> "articles" to "articles"
+            ZhihuContentType.ANSWER -> "answers" to "answers"
+            ZhihuContentType.PIN -> "pins" to "pins"
+            ZhihuContentType.VIDEO -> error("不可达的视频文档类型")
+        }
+        val api = "https://www.zhihu.com/api/v4/$apiName/${source.contentId}?include=content"
+        val apiResponse = request(api, source.canonicalUrl, cookieHeader)
+        if (apiResponse.statusCode in 200..299 && apiResponse.body.isNotBlank()) {
+            return JSONObject(apiResponse.body)
+        }
+
+        val pageResponse = request(source.canonicalUrl, SourcePlatform.ZHIHU.referer, cookieHeader, html = true)
+        if (pageResponse.statusCode !in 200..299) {
+            throw statusError(pageResponse.statusCode)
+        }
+        if (RESTRICTED.containsMatchIn(pageResponse.body)) {
+            throw PlatformParseException("CONTENT_RESTRICTED", "当前知乎内容需要登录、付费或额外权限")
+        }
+        return ZhihuPageStateExtractor.findEntity(pageResponse.body, entityName, source.contentId)
+            ?: throw PlatformParseException("DETAIL_EMPTY", "知乎页面中没有找到目标内容")
+    }
+
+    private fun fetchLensVideo(
+        videoId: String,
+        referer: String,
+        cookieHeader: String,
+    ): JSONObject? {
+        val response = request(
+            "https://lens.zhihu.com/api/v4/videos/$videoId",
+            referer,
+            cookieHeader,
+        )
+        return response.takeIf { it.statusCode in 200..299 && it.body.isNotBlank() }
+            ?.let { runCatching { JSONObject(it.body) }.getOrNull() }
+    }
+
+    private fun request(
+        url: String,
+        referer: String,
+        cookieHeader: String,
+        html: Boolean = false,
+    ): ParserHttpResponse = httpClient.get(
+        url,
+        headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to referer,
+            "Accept" to if (html) {
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            } else {
+                "application/json, text/plain, */*"
+            },
+            "Accept-Language" to "zh-CN,zh;q=0.9",
+        ),
+        cookieHeader = cookieHeader,
+        timeoutSeconds = 25,
+    )
+
+    private fun statusError(status: Int): PlatformParseException = when (status) {
+        401, 403, 429 -> PlatformParseException("AUTH_OR_RISK", "知乎认证或风控拒绝了本次请求")
+        404, 410 -> PlatformParseException("CONTENT_UNAVAILABLE", "知乎内容不存在或已被删除")
+        else -> PlatformParseException("HTTP_ERROR", "知乎请求失败（HTTP $status）")
+    }
+
+    private fun hydrateSizes(result: ParseResult): ParseResult {
+        fun hydrate(variants: List<MediaVariant>): List<MediaVariant> = MediaSizeHydrator.hydrate(
+            variants = variants,
+            probe = { urls ->
+                urls.take(2).firstNotNullOfOrNull { url ->
+                    runCatching {
+                        httpClient.probeContentLength(
+                            url,
+                            headers = mapOf(
+                                "User-Agent" to USER_AGENT,
+                                "Referer" to result.referer,
+                            ),
+                        )
+                    }.getOrDefault(0L).takeIf { it > 0L }
+                } ?: 0L
+            },
+        )
+        return if (result.kind == MediaKind.DOCUMENT) {
+            result.copy(
+                document = result.document?.let { document ->
+                    document.copy(
+                        assets = document.assets.map { asset ->
+                            if (asset.kind == DocumentAssetKind.VIDEO) {
+                                asset.copy(variants = hydrate(asset.variants))
+                            } else {
+                                asset
+                            }
+                        },
+                    )
+                },
+            )
+        } else {
+            result.copy(variants = hydrate(result.variants))
+        }
+    }
+
+    companion object {
+        const val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
+        private val RESTRICTED = Regex("登录后查看|盐选|付费|私密内容|无权查看|内容不可见")
     }
 }
 

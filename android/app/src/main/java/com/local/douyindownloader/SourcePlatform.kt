@@ -22,6 +22,13 @@ enum class SourcePlatform(
         homeUrl = "https://www.xiaohongshu.com/",
         referer = "https://www.xiaohongshu.com/",
         anonymousFirst = true,
+    ),
+    ZHIHU(
+        wireValue = "zhihu",
+        displayName = "知乎",
+        homeUrl = "https://www.zhihu.com/",
+        referer = "https://www.zhihu.com/",
+        anonymousFirst = true,
     );
 
     fun matchesHost(host: String): Boolean = when (this) {
@@ -30,6 +37,7 @@ enum class SourcePlatform(
         XIAOHONGSHU -> host == "xiaohongshu.com" || host.endsWith(".xiaohongshu.com") ||
             host == "xhslink.cn" || host.endsWith(".xhslink.cn") ||
             host == "xhslink.com" || host.endsWith(".xhslink.com")
+        ZHIHU -> host == "zhihu.com" || host.endsWith(".zhihu.com")
     }
 
     companion object {

@@ -171,6 +171,11 @@ internal fun SettingsScreen(
                 Text("登录或刷新小红书环境")
             }
         }
+        item {
+            OutlinedButton(onClick = { showWebViewPlatform = SourcePlatform.ZHIHU }) {
+                Text("登录或刷新知乎环境")
+            }
+        }
         item { HorizontalDivider() }
         item {
             Text("版本", style = MaterialTheme.typography.titleMedium)

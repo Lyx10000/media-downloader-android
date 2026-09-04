@@ -88,6 +88,35 @@ internal fun selectTaskPreview(candidates: List<PreviewCandidate>): TaskPreviewM
     )
 }
 
+internal fun selectTaskPreviews(candidates: List<PreviewCandidate>): List<TaskPreviewMedia> {
+    val groups = documentPreviewGroups(candidates.map(PreviewCandidate::output))
+    val documentMedia = candidates.filter { it.output.relativePath.startsWith("media/") }
+    if (documentMedia.isEmpty()) return listOfNotNull(selectTaskPreview(candidates))
+    val images = candidates.filter { it.output in groups.images }
+    val videos = candidates.filter { it.output in groups.videos }
+    return buildList {
+        selectTaskPreview(images)?.let(::add)
+        videos.mapNotNullTo(this) { video -> selectTaskPreview(listOf(video)) }
+        if (isEmpty()) selectTaskPreview(documentMedia)?.let(::add)
+    }
+}
+
+internal data class DocumentPreviewGroups(
+    val images: List<TaskOutput>,
+    val videos: List<TaskOutput>,
+)
+
+internal fun documentPreviewGroups(outputs: List<TaskOutput>): DocumentPreviewGroups {
+    val media = outputs.filter { it.relativePath.startsWith("media/") }
+    return DocumentPreviewGroups(
+        images = media.filter {
+            mediaMimeType(it.displayName, it.mimeType).startsWith("image/") &&
+                "_cover." !in it.displayName
+        },
+        videos = media.filter { mediaMimeType(it.displayName, it.mimeType).startsWith("video/") },
+    )
+}
+
 internal fun selectPreviewOutput(
     outputs: List<TaskOutput>,
     mimeTypeFor: (TaskOutput) -> String = { output ->
@@ -227,7 +256,7 @@ class TaskPreviewResolver @Inject constructor(
 ) {
     private val resolver = context.contentResolver
 
-    internal suspend fun resolve(taskId: String, outputs: List<TaskOutput>): TaskPreviewMedia? =
+    internal suspend fun resolve(taskId: String, outputs: List<TaskOutput>): List<TaskPreviewMedia> =
         withContext(Dispatchers.IO) {
             val candidates = outputs.mapNotNull { output ->
                 val uri = runCatching { Uri.parse(output.uri) }.getOrNull() ?: return@mapNotNull null
@@ -244,11 +273,11 @@ class TaskPreviewResolver @Inject constructor(
                 }
                 PreviewCandidate(output, uri, mimeType, tracks)
             }
-            selectTaskPreview(candidates).also { media ->
+            selectTaskPreviews(candidates).also { media ->
                 runCatching {
                     logger.event(taskId, "PREVIEW_MEDIA", "SOURCE_RESOLVED", JSONObject().apply {
-                        put("kind", media?.kind?.name?.lowercase() ?: "none")
-                        put("video_audio_mode", media?.videoAudioMode?.name?.lowercase() ?: "none")
+                        put("kind", media.joinToString(",") { it.kind.name.lowercase() }.ifBlank { "none" })
+                        put("preview_groups", media.size)
                         put("readable_outputs", candidates.size)
                         put("image_outputs", candidates.count {
                             previewKind(it.mimeType) == TaskPreviewKind.IMAGE

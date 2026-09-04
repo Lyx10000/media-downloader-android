@@ -18,4 +18,24 @@ class CookieEnvironmentTest {
         assertFalse(shouldRefreshCookieEnvironment("NETWORK", refreshAttempted = false))
         assertFalse(shouldRefreshCookieEnvironment("HTTP_ERROR", refreshAttempted = false))
     }
+
+    @Test
+    fun zhihuOnlyWarmsUpAutomaticallyWhenAnonymousSessionHasNoCookie() {
+        assertTrue(
+            shouldRefreshCookieEnvironment(
+                "AUTH_OR_RISK",
+                refreshAttempted = false,
+                platform = SourcePlatform.ZHIHU,
+                hadCookie = false,
+            ),
+        )
+        assertFalse(
+            shouldRefreshCookieEnvironment(
+                "AUTH_OR_RISK",
+                refreshAttempted = false,
+                platform = SourcePlatform.ZHIHU,
+                hadCookie = true,
+            ),
+        )
+    }
 }

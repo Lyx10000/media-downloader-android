@@ -25,7 +25,15 @@ object PublicStorage {
         }
     }
 
-    fun publish(context: Context, source: File, spec: TaskSpec, displayName: String): TaskOutput {
+    fun publish(
+        context: Context,
+        source: File,
+        spec: TaskSpec,
+        displayName: String,
+        relativeDirectory: String = "",
+    ): TaskOutput {
+        val safeDirectory = validatedRelativeDirectory(relativeDirectory)
+        val relativePath = listOf(safeDirectory, displayName).filter(String::isNotBlank).joinToString("/")
         if (effectiveMode(spec) == StorageMode.SAF) {
             val uri = publishToTree(
                 context,
@@ -33,12 +41,14 @@ object PublicStorage {
                 source,
                 spec.taskFolder,
                 displayName,
+                safeDirectory,
             )
             return TaskOutput(
                 uri.toString(),
                 displayName,
                 mediaMimeType(displayName),
                 source.length(),
+                relativePath,
             )
         }
         val mime = mediaMimeType(displayName)
@@ -47,7 +57,8 @@ object PublicStorage {
             put(MediaStore.Downloads.MIME_TYPE, mime)
             put(
                 MediaStore.Downloads.RELATIVE_PATH,
-                "${Environment.DIRECTORY_DOWNLOADS}/DouyinDownloader/${spec.taskFolder}",
+                "${Environment.DIRECTORY_DOWNLOADS}/DouyinDownloader/${spec.taskFolder}" +
+                    safeDirectory.takeIf(String::isNotBlank)?.let { "/$it" }.orEmpty(),
             )
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
@@ -61,7 +72,7 @@ object PublicStorage {
             values.clear()
             values.put(MediaStore.Downloads.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
-            return TaskOutput(uri.toString(), displayName, mime, source.length())
+            return TaskOutput(uri.toString(), displayName, mime, source.length(), relativePath)
         } catch (error: Throwable) {
             resolver.delete(uri, null, null)
             throw error
@@ -74,15 +85,21 @@ object PublicStorage {
         source: File,
         relativeFolder: String,
         displayName: String,
+        relativeDirectory: String,
     ): Uri {
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?: error("自定义保存目录授权已经失效")
         val taskFolder = root.findFile(relativeFolder)
             ?: root.createDirectory(relativeFolder)
             ?: error("无法创建任务目录 $relativeFolder")
-        taskFolder.findFile(displayName)?.delete()
+        val destination = relativeDirectory.split('/').filter(String::isNotBlank).fold(taskFolder) { parent, name ->
+            parent.findFile(name)?.takeIf(DocumentFile::isDirectory)
+                ?: parent.createDirectory(name)
+                ?: error("无法创建子目录 $relativeDirectory")
+        }
+        destination.findFile(displayName)?.delete()
         val mime = mediaMimeType(displayName)
-        val target = taskFolder.createFile(mime, displayName)
+        val target = destination.createFile(mime, displayName)
             ?: error("无法在自定义目录创建 $displayName")
         context.contentResolver.openOutputStream(target.uri, "w")?.use { output ->
             source.inputStream().use { input -> input.copyTo(output) }
@@ -95,4 +112,13 @@ object PublicStorage {
         else if (effectiveRoot(spec).isNotBlank()) StorageMode.SAF else StorageMode.DEFAULT
 
     private fun effectiveRoot(spec: TaskSpec): String = spec.storageRoot
+
+    private fun validatedRelativeDirectory(value: String): String {
+        val normalized = value.trim().trim('/').replace('\\', '/')
+        if (normalized.isBlank()) return ""
+        require(normalized.split('/').all { segment ->
+            segment.isNotBlank() && segment != "." && segment != ".." && '\u0000' !in segment
+        }) { "保存子目录不合法" }
+        return normalized
+    }
 }

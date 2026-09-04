@@ -24,6 +24,8 @@ internal fun mediaMimeType(
         "heic" -> "image/heic"
         "heif" -> "image/heif"
         "avif" -> "image/avif"
+        "md", "markdown" -> "text/markdown"
+        "txt" -> "text/plain"
         else -> null
     }
     return extensionType

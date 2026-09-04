@@ -14,8 +14,8 @@ android {
         applicationId = "com.local.douyindownloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 23
-        versionName = "1.3.2"
+        versionCode = 24
+        versionName = "1.4.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -89,6 +89,7 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.coil-kt:coil-video:2.7.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jsoup:jsoup:1.23.2")
     implementation("androidx.media3:media3-exoplayer:1.9.2")
     implementation("androidx.media3:media3-ui-compose:1.9.2")
 

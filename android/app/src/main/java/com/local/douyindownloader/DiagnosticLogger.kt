@@ -15,7 +15,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-internal const val PARSER_VERSION = "kotlin-core-1"
+internal const val PARSER_VERSION = "kotlin-core-2"
 
 object Redactor {
     private val secret = Regex(

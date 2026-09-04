@@ -6,6 +6,18 @@ import org.junit.Test
 
 class TaskPreviewTest {
     @Test
+    fun documentPreviewIncludesImageGalleryAndEveryEmbeddedVideo() {
+        val image = TaskOutput("image", "image_001.jpg", "image/jpeg", relativePath = "media/image_001.jpg")
+        val cover = TaskOutput("cover", "video_001_cover.jpg", "image/jpeg", relativePath = "media/video_001_cover.jpg")
+        val firstVideo = TaskOutput("video1", "video_001.mp4", "video/mp4", relativePath = "media/video_001.mp4")
+        val secondVideo = TaskOutput("video2", "video_002.mp4", "video/mp4", relativePath = "media/video_002.mp4")
+        val groups = documentPreviewGroups(listOf(image, cover, firstVideo, secondVideo))
+
+        assertEquals(listOf(image), groups.images)
+        assertEquals(listOf(firstVideo, secondVideo), groups.videos)
+    }
+
+    @Test
     fun `image preview wins over video and background audio`() {
         val audio = TaskOutput("audio", "track.mp3", "audio/mpeg")
         val video = TaskOutput("video", "clip.mp4", "video/mp4")

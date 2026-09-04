@@ -15,7 +15,23 @@ class SourcePlatformTest {
             SourcePlatform.fromUrl("https://www.xiaohongshu.com/explore/abc"),
         )
         assertEquals(SourcePlatform.XIAOHONGSHU, SourcePlatform.fromUrl("https://xhslink.cn/abc"))
+        assertEquals(SourcePlatform.ZHIHU, SourcePlatform.fromUrl("https://zhuanlan.zhihu.com/p/123"))
+        assertEquals(SourcePlatform.ZHIHU, SourcePlatform.fromUrl("https://www.zhihu.com/zvideo/123"))
         assertNull(SourcePlatform.fromUrl("https://xiaohongshu.com.example.org/explore/abc"))
+        assertNull(SourcePlatform.fromUrl("https://zhihu.com.example.org/question/1"))
+    }
+
+    @Test
+    fun extractsZhihuAnswerFromShareText() {
+        val source = extractSupportedSource(
+            "看看这个回答 https://www.zhihu.com/question/26730775/answer/2079127079271011205，",
+        )
+
+        assertEquals(SourcePlatform.ZHIHU, source?.platform)
+        assertEquals(
+            "https://www.zhihu.com/question/26730775/answer/2079127079271011205",
+            source?.url,
+        )
     }
 
     @Test

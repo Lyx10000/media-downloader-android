@@ -22,7 +22,7 @@ interface DownloadTaskRepository {
     suspend fun replaceOutputs(taskId: String, outputs: List<TaskOutput>)
     suspend fun setDeleteFailed(taskId: String, progress: Int, error: String)
     suspend fun delete(taskId: String)
-    suspend fun complete(taskId: String, outputs: List<TaskOutput>)
+    suspend fun complete(taskId: String, outputs: List<TaskOutput>, stage: String = "已完成")
     suspend fun list(): List<TaskRecord>
     fun observe(): Flow<List<TaskRecord>>
     suspend fun get(taskId: String): TaskRecord?
@@ -33,8 +33,10 @@ class RoomDownloadTaskRepository @Inject constructor(
     private val dao: TaskDao,
 ) : DownloadTaskRepository {
     override suspend fun insert(spec: TaskSpec) {
-        val title = spec.result.author.ifBlank {
-            spec.result.description.take(30).ifBlank { spec.result.contentId }
+        val title = spec.result.document?.title?.take(40).orEmpty().ifBlank {
+            spec.result.author.ifBlank {
+                spec.result.description.take(30).ifBlank { spec.result.contentId }
+            }
         }
         dao.insert(
             TaskEntity(
@@ -98,8 +100,8 @@ class RoomDownloadTaskRepository @Inject constructor(
 
     override suspend fun delete(taskId: String) = dao.delete(taskId)
 
-    override suspend fun complete(taskId: String, outputs: List<TaskOutput>) {
-        dao.complete(taskId, outputs.toJson())
+    override suspend fun complete(taskId: String, outputs: List<TaskOutput>, stage: String) {
+        dao.complete(taskId, outputs.toJson(), stage)
     }
 
     override suspend fun list(): List<TaskRecord> = dao.list().map(TaskEntity::toRecord)

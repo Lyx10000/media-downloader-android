@@ -426,7 +426,7 @@ private fun PlatformBadge(platform: SourcePlatform) {
 private sealed interface TaskPreviewLoadState {
     data object Loading : TaskPreviewLoadState
     data object Unavailable : TaskPreviewLoadState
-    data class Ready(val media: TaskPreviewMedia) : TaskPreviewLoadState
+    data class Ready(val media: List<TaskPreviewMedia>) : TaskPreviewLoadState
 }
 
 @Composable
@@ -442,6 +442,7 @@ private fun TaskPreviewPanel(
     }
     LaunchedEffect(task.id, task.outputs) {
         previewState = viewModel.resolveTaskPreview(task.id, task.outputs)
+            .takeIf(List<TaskPreviewMedia>::isNotEmpty)
             ?.let(TaskPreviewLoadState::Ready)
             ?: TaskPreviewLoadState.Unavailable
     }
@@ -461,30 +462,29 @@ private fun TaskPreviewPanel(
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodyMedium,
             )
-            is TaskPreviewLoadState.Ready -> when (state.media.kind) {
-                TaskPreviewKind.IMAGE -> ImagePreview(
-                    media = state.media,
-                    imageLoader = imageLoader,
-                )
-                TaskPreviewKind.VIDEO -> VideoPreview(
-                    taskId = task.id,
-                    media = state.media,
-                    state = mediaState,
-                    imageLoader = imageLoader,
-                    isFullscreen = isFullscreen,
-                    onToggle = { viewModel.toggleMediaPreview(task.id, state.media) },
-                    onSeek = { viewModel.seekMediaPreview(task.id, it) },
-                    onToggleMute = { viewModel.toggleMediaMute(task.id) },
-                    onFullscreen = { viewModel.enterFullscreen(task.id, state.media) },
-                )
-                TaskPreviewKind.AUDIO -> MediaPreviewControls(
-                    taskId = task.id,
-                    media = state.media,
-                    state = mediaState,
-                    onToggle = { viewModel.toggleMediaPreview(task.id, state.media) },
-                    onSeek = { viewModel.seekMediaPreview(task.id, it) },
-                    onToggleMute = { viewModel.toggleMediaMute(task.id) },
-                )
+            is TaskPreviewLoadState.Ready -> state.media.forEach { media ->
+                when (media.kind) {
+                    TaskPreviewKind.IMAGE -> ImagePreview(media = media, imageLoader = imageLoader)
+                    TaskPreviewKind.VIDEO -> VideoPreview(
+                        taskId = task.id,
+                        media = media,
+                        state = mediaState,
+                        imageLoader = imageLoader,
+                        isFullscreen = isFullscreen,
+                        onToggle = { viewModel.toggleMediaPreview(task.id, media) },
+                        onSeek = { viewModel.seekMediaPreview(task.id, it) },
+                        onToggleMute = { viewModel.toggleMediaMute(task.id) },
+                        onFullscreen = { viewModel.enterFullscreen(task.id, media) },
+                    )
+                    TaskPreviewKind.AUDIO -> MediaPreviewControls(
+                        taskId = task.id,
+                        media = media,
+                        state = mediaState,
+                        onToggle = { viewModel.toggleMediaPreview(task.id, media) },
+                        onSeek = { viewModel.seekMediaPreview(task.id, it) },
+                        onToggleMute = { viewModel.toggleMediaMute(task.id) },
+                    )
+                }
             }
         }
     }

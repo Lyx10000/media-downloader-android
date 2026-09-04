@@ -97,6 +97,7 @@ internal fun TaskFileManagerScreen(
     var selectedUris by remember(task.id) { mutableStateOf(emptySet<String>()) }
     var renameTarget by remember { mutableStateOf<ManagedFileItem?>(null) }
     var deleteRequested by remember { mutableStateOf(false) }
+    var linkedMoveRequested by remember { mutableStateOf(false) }
     var pendingTransfer by remember { mutableStateOf<PendingTransfer?>(null) }
     val imageLoader = remember(context.applicationContext) {
         ImageLoader.Builder(context.applicationContext)
@@ -223,8 +224,12 @@ internal fun TaskFileManagerScreen(
                         destinationPicker.launch(null)
                     },
                     onMove = {
-                        pendingTransfer = PendingTransfer(ManagedTransferMode.MOVE, selectedUris)
-                        destinationPicker.launch(null)
+                        if (selectedFiles.any { it.output.isLinkedDocumentMedia() }) {
+                            linkedMoveRequested = true
+                        } else {
+                            pendingTransfer = PendingTransfer(ManagedTransferMode.MOVE, selectedUris)
+                            destinationPicker.launch(null)
+                        }
                     },
                     onDelete = { deleteRequested = true },
                 )
@@ -290,6 +295,7 @@ internal fun TaskFileManagerScreen(
     renameTarget?.let { target ->
         RenameFileDialog(
             target = target,
+            warnAboutDocumentLink = target.output.isLinkedDocumentMedia(),
             onDismiss = { renameTarget = null },
             onConfirm = { requestedBase ->
                 renameTarget = null
@@ -302,7 +308,15 @@ internal fun TaskFileManagerScreen(
         AlertDialog(
             onDismissRequest = { deleteRequested = false },
             title = { Text("删除所选文件？") },
-            text = { Text("将永久删除 ${selectedFiles.size} 个文件，删除后可通过任务重新下载。") },
+            text = {
+                Text(
+                    if (selectedFiles.any { it.output.isLinkedDocumentMedia() }) {
+                        "将永久删除 ${selectedFiles.size} 个文件，其中包含 Markdown 正文引用的媒体；删除后正文中的本地链接会失效。"
+                    } else {
+                        "将永久删除 ${selectedFiles.size} 个文件，删除后可通过任务重新下载。"
+                    },
+                )
+            },
             confirmButton = {
                 Button(onClick = {
                     val targets = selectedUris
@@ -315,6 +329,23 @@ internal fun TaskFileManagerScreen(
             },
             dismissButton = {
                 TextButton(onClick = { deleteRequested = false }) { Text("取消") }
+            },
+        )
+    }
+    if (linkedMoveRequested) {
+        AlertDialog(
+            onDismissRequest = { linkedMoveRequested = false },
+            title = { Text("移动文档媒体？") },
+            text = { Text("所选文件被 Markdown 正文通过相对路径引用，移动后正文中的本地链接会失效。") },
+            confirmButton = {
+                Button(onClick = {
+                    linkedMoveRequested = false
+                    pendingTransfer = PendingTransfer(ManagedTransferMode.MOVE, selectedUris)
+                    destinationPicker.launch(null)
+                }) { Text("继续移动") }
+            },
+            dismissButton = {
+                TextButton(onClick = { linkedMoveRequested = false }) { Text("取消") }
             },
         )
     }
@@ -474,6 +505,7 @@ private fun ManagedFileTypeIcon(category: String) {
 @Composable
 private fun RenameFileDialog(
     target: ManagedFileItem,
+    warnAboutDocumentLink: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
@@ -508,6 +540,13 @@ private fun RenameFileDialog(
                         Text(error ?: "扩展名将保持不变")
                     },
                 )
+                if (warnAboutDocumentLink) {
+                    Text(
+                        "此文件被 Markdown 正文引用，重命名后正文中的本地链接会失效。",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         },
         confirmButton = {
@@ -519,3 +558,6 @@ private fun RenameFileDialog(
 
 private fun Set<String>.toggle(value: String): Set<String> =
     if (value in this) this - value else this + value
+
+private fun TaskOutput.isLinkedDocumentMedia(): Boolean = relativePath.startsWith("media/") &&
+    "_cover." !in displayName
