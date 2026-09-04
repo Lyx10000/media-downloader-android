@@ -224,7 +224,7 @@ internal class DouyinPlatformParser @Inject constructor(
             ?: throw PlatformParseException("UNSUPPORTED_URL", "没有找到抖音链接")
         val resolved = resolveItem(sourceUrl)
         val detail = fetchDetail(resolved.id, cookieHeader)
-            ?: return parseFailure(platform, "DETAIL_EMPTY", "抖音详情接口没有返回作品信息，请刷新解析环境")
+            ?: return parseFailure(platform, "DETAIL_EMPTY", "抖音详情接口没有返回作品信息，请返回首页点击抖音登录状态")
         hydrateVariantSizes(DouyinMediaNormalizer.normalize(detail, resolved.id, resolved.kind))
     } catch (error: PlatformParseException) {
         parseFailure(platform, error.code, error.message.orEmpty())
@@ -384,7 +384,7 @@ internal class XiaohongshuPlatformParser @Inject constructor(
             throw PlatformParseException("CONTENT_UNAVAILABLE", "小红书笔记$unavailable")
         }
         if ("/login" in canonicalUrl || "登录后查看" in response.body) {
-            throw PlatformParseException("LOGIN_REQUIRED", "需要登录或刷新小红书解析环境")
+            throw PlatformParseException("LOGIN_REQUIRED", "请返回首页点击小红书登录状态")
         }
         val state = XiaohongshuMediaParser.extractInitialState(response.body)
             ?: throw PlatformParseException("DETAIL_EMPTY", "页面没有返回小红书笔记状态")

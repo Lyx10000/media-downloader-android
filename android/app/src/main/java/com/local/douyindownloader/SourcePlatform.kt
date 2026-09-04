@@ -6,6 +6,7 @@ enum class SourcePlatform(
     val wireValue: String,
     val displayName: String,
     val homeUrl: String,
+    val loginUrl: String,
     val referer: String,
     val anonymousFirst: Boolean,
 ) {
@@ -13,6 +14,7 @@ enum class SourcePlatform(
         wireValue = "douyin",
         displayName = "抖音",
         homeUrl = "https://www.douyin.com/",
+        loginUrl = "https://www.douyin.com/",
         referer = "https://www.douyin.com/",
         anonymousFirst = false,
     ),
@@ -20,6 +22,7 @@ enum class SourcePlatform(
         wireValue = "xiaohongshu",
         displayName = "小红书",
         homeUrl = "https://www.xiaohongshu.com/",
+        loginUrl = "https://www.xiaohongshu.com/",
         referer = "https://www.xiaohongshu.com/",
         anonymousFirst = true,
     ),
@@ -27,6 +30,7 @@ enum class SourcePlatform(
         wireValue = "zhihu",
         displayName = "知乎",
         homeUrl = "https://www.zhihu.com/",
+        loginUrl = "https://www.zhihu.com/signin?next=%2F",
         referer = "https://www.zhihu.com/",
         anonymousFirst = true,
     );
@@ -64,6 +68,21 @@ internal fun extractSupportedSource(text: String): SupportedSource? = WEB_URL.fi
 
 internal fun isPlatformPage(url: String, platform: SourcePlatform): Boolean =
     SourcePlatform.fromUrl(url) == platform
+
+internal enum class WebNavigationTarget {
+    WEB,
+    EXTERNAL_APP,
+    BLOCKED,
+}
+
+internal fun classifyWebNavigation(url: String): WebNavigationTarget {
+    val scheme = runCatching { URI(url).scheme.orEmpty().lowercase() }.getOrDefault("")
+    return when (scheme) {
+        "http", "https", "about", "data", "blob" -> WebNavigationTarget.WEB
+        "", "javascript", "file", "content" -> WebNavigationTarget.BLOCKED
+        else -> WebNavigationTarget.EXTERNAL_APP
+    }
+}
 
 private val WEB_URL = Regex(
     "https?://[^\\s，。；：！？）】》]+",

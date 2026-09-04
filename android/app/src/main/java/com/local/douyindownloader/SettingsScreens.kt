@@ -87,7 +87,6 @@ internal fun SettingsScreen(
     viewModel: MainViewModel,
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
-    onOpenLoginEnvironment: (SourcePlatform) -> Unit,
 ) {
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -154,23 +153,6 @@ internal fun SettingsScreen(
                     }
                 },
             )
-        }
-        item { HorizontalDivider() }
-        item { Text("解析环境", style = MaterialTheme.typography.titleMedium) }
-        item {
-            Button(onClick = { onOpenLoginEnvironment(SourcePlatform.DOUYIN) }) {
-                Text("登录或刷新抖音环境")
-            }
-        }
-        item {
-            OutlinedButton(onClick = { onOpenLoginEnvironment(SourcePlatform.XIAOHONGSHU) }) {
-                Text("登录或刷新小红书环境")
-            }
-        }
-        item {
-            OutlinedButton(onClick = { onOpenLoginEnvironment(SourcePlatform.ZHIHU) }) {
-                Text("登录或刷新知乎环境")
-            }
         }
         item { HorizontalDivider() }
         item {

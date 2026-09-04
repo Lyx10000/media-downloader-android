@@ -47,4 +47,27 @@ class SourcePlatformTest {
         assertTrue(isPlatformPage("https://www.xiaohongshu.com/", SourcePlatform.XIAOHONGSHU))
         assertFalse(isPlatformPage("https://www.douyin.com/", SourcePlatform.XIAOHONGSHU))
     }
+
+    @Test
+    fun zhihuUsesExplicitWebLoginPage() {
+        assertEquals(
+            "https://www.zhihu.com/signin?next=%2F",
+            SourcePlatform.ZHIHU.loginUrl,
+        )
+        assertEquals(SourcePlatform.DOUYIN.homeUrl, SourcePlatform.DOUYIN.loginUrl)
+        assertEquals(SourcePlatform.XIAOHONGSHU.homeUrl, SourcePlatform.XIAOHONGSHU.loginUrl)
+    }
+
+    @Test
+    fun classifiesWebAndExternalNavigationSchemes() {
+        assertEquals(WebNavigationTarget.WEB, classifyWebNavigation("https://www.zhihu.com/signin"))
+        assertEquals(WebNavigationTarget.WEB, classifyWebNavigation("about:blank"))
+        assertEquals(WebNavigationTarget.EXTERNAL_APP, classifyWebNavigation("zhihu://answers/123"))
+        assertEquals(
+            WebNavigationTarget.EXTERNAL_APP,
+            classifyWebNavigation("intent://www.zhihu.com/#Intent;scheme=zhihu;end"),
+        )
+        assertEquals(WebNavigationTarget.BLOCKED, classifyWebNavigation("javascript:alert(1)"))
+        assertEquals(WebNavigationTarget.BLOCKED, classifyWebNavigation("file:///data/local/tmp/test"))
+    }
 }

@@ -42,7 +42,7 @@ class TaskRedownloadCoordinator @Inject constructor(
                     "LOGIN_REQUIRED",
                 )
             ) {
-                "请到设置中登录或刷新${task.platform.displayName}环境后重试"
+                "请返回首页，点击${task.platform.displayName}登录状态后重试"
             } else {
                 refreshed.message
             }

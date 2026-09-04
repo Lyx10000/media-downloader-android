@@ -39,7 +39,7 @@ internal object ZhihuWebSnapshotExtractor {
         val visible = snapshot.visibleText.take(8_000)
         if (!SourcePlatform.ZHIHU.matchesHost(finalHost) ||
             finalPath.contains("signin") || finalPath.contains("account")) {
-            throw PlatformParseException("LOGIN_REQUIRED", "知乎页面要求登录或人机验证")
+            throw PlatformParseException("LOGIN_REQUIRED", "知乎页面要求登录或人机验证，请返回首页点击知乎登录状态")
         }
 
         snapshot.initialData.takeIf(String::isNotBlank)?.let { initialData ->
@@ -58,7 +58,7 @@ internal object ZhihuWebSnapshotExtractor {
             throw PlatformParseException("DETAIL_EMPTY", "知乎页面跳转后没有停留在目标内容")
         }
         if (snapshot.contentHtml.isBlank() && BLOCKED_PAGE.containsMatchIn(visible)) {
-            throw PlatformParseException("LOGIN_REQUIRED", "知乎页面要求登录或人机验证")
+            throw PlatformParseException("LOGIN_REQUIRED", "知乎页面要求登录或人机验证，请返回首页点击知乎登录状态")
         }
         if (snapshot.contentHtml.isBlank()) {
             throw PlatformParseException("DETAIL_EMPTY", "知乎页面已打开，但没有提取到目标正文")

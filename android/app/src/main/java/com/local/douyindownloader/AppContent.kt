@@ -115,6 +115,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     if (activeLoginPlatform != null) {
         FullScreenWebEnvironment(
             platform = activeLoginPlatform,
+            snackbarHostState = snackbar,
             onDismiss = {
                 viewModel.onLoginEnvironmentClosed(activeLoginPlatform)
                 loginPlatform = null
@@ -125,6 +126,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             onPageError = { url, code, description ->
                 viewModel.onLoginPageError(activeLoginPlatform, url, code, description)
             },
+            onExternalNavigationFailed = viewModel::showMessage,
         )
         return
     }
@@ -206,7 +208,6 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                     viewModel = viewModel,
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,
-                    onOpenLoginEnvironment = openLoginEnvironment,
                 )
             }
         }

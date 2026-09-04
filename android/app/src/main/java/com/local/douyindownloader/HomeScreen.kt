@@ -3,6 +3,7 @@ package com.local.douyindownloader
 import android.annotation.SuppressLint
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -47,6 +48,8 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -93,12 +96,6 @@ internal fun HomeScreen(
                 )
             }
             item {
-                PlatformCredentialCard(
-                    states = uiState.platformCredentialStates,
-                    onOpenLoginEnvironment = onOpenLoginEnvironment,
-                )
-            }
-            item {
                 OutlinedTextField(
                     value = uiState.inputText,
                     onValueChange = viewModel::setIncomingText,
@@ -113,6 +110,12 @@ internal fun HomeScreen(
                             }
                         }
                     },
+                )
+            }
+            item {
+                PlatformCredentialCard(
+                    states = uiState.platformCredentialStates,
+                    onOpenLoginEnvironment = onOpenLoginEnvironment,
                 )
             }
             item {
@@ -296,6 +299,7 @@ private fun PlatformWebView(
     desktopMode: Boolean = true,
     onPageFinishedEvent: (String) -> Unit = {},
     onMainFrameError: (String, Int, String) -> Unit = { _, _, _ -> },
+    onExternalNavigationFailed: (String) -> Unit = {},
 ) {
     AndroidView(
         modifier = modifier,
@@ -341,6 +345,33 @@ private fun PlatformWebView(
                                 CookieReadySource.PAGE_READY,
                                 if (capturePage) WEB_PAGE_SNAPSHOT_DELAY_MS else WEB_COOKIE_SETTLE_DELAY_MS,
                             )
+                        }
+                    }
+
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView,
+                        request: WebResourceRequest,
+                    ): Boolean = when (classifyWebNavigation(request.url.toString())) {
+                        WebNavigationTarget.WEB -> false
+                        WebNavigationTarget.BLOCKED -> {
+                            onExternalNavigationFailed("已阻止不安全的链接")
+                            true
+                        }
+                        WebNavigationTarget.EXTERNAL_APP -> {
+                            val launched = runCatching {
+                                val intent = if (request.url.scheme == "intent") {
+                                    Intent.parseUri(request.url.toString(), Intent.URI_INTENT_SCHEME)
+                                } else {
+                                    Intent(Intent.ACTION_VIEW, request.url)
+                                }.apply {
+                                    addCategory(Intent.CATEGORY_BROWSABLE)
+                                    component = null
+                                    selector = null
+                                }
+                                view.context.startActivity(intent)
+                            }.isSuccess
+                            if (!launched) onExternalNavigationFailed("未找到可处理该链接的应用")
+                            true
                         }
                     }
 
@@ -532,13 +563,16 @@ private fun ErrorScreen(state: ParseUiState.Error, retry: () -> Unit, back: () -
 @Composable
 internal fun FullScreenWebEnvironment(
     platform: SourcePlatform,
+    snackbarHostState: SnackbarHostState,
     onDismiss: () -> Unit,
     onPageFinished: (String) -> Unit,
     onPageError: (String, Int, String) -> Unit,
+    onExternalNavigationFailed: (String) -> Unit,
 ) {
     BackHandler(onBack = onDismiss)
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("${platform.displayName}登录环境") },
@@ -552,7 +586,7 @@ internal fun FullScreenWebEnvironment(
     ) { innerPadding ->
         PlatformWebView(
             platform = platform,
-            url = platform.homeUrl,
+            url = platform.loginUrl,
             onReady = { _, _ -> },
             modifier = Modifier
                 .fillMaxSize()
@@ -562,6 +596,7 @@ internal fun FullScreenWebEnvironment(
             desktopMode = false,
             onPageFinishedEvent = onPageFinished,
             onMainFrameError = onPageError,
+            onExternalNavigationFailed = onExternalNavigationFailed,
         )
     }
 }
