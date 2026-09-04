@@ -4,21 +4,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
     id("com.google.dagger.hilt.android")
-    id("com.chaquo.python")
-}
-
-val generatedPythonDir = layout.buildDirectory.dir("generated/python/main")
-val preparePythonSources by tasks.registering(Sync::class) {
-    from("../../python3") {
-        include("abogus.py", "douyin_quality.py", "xiaohongshu_parser.py", "android_bridge.py")
-    }
-    into(generatedPythonDir)
-}
-
-tasks.configureEach {
-    if (name.contains("PythonSources") && name != "preparePythonSources") {
-        dependsOn(preparePythonSources)
-    }
 }
 
 android {
@@ -29,8 +14,8 @@ android {
         applicationId = "com.local.douyindownloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 21
-        versionName = "1.3.0"
+        versionCode = 22
+        versionName = "1.3.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -72,21 +57,6 @@ android {
         )
     }
 
-}
-
-chaquopy {
-    defaultConfig {
-        version = "3.13"
-        pip {
-            install("requests>=2.31,<3")
-            install("gmssl>=3.2,<4")
-        }
-    }
-    sourceSets {
-        getByName("main") {
-            setSrcDirs(listOf(generatedPythonDir.get().asFile))
-        }
-    }
 }
 
 dependencies {

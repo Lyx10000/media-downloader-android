@@ -1,2 +1,1 @@
-# Chaquopy and Compose are retained by their published consumer rules.
-
+# AndroidX, Compose, Hilt, Room, OkHttp and Media3 publish their required consumer rules.

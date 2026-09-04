@@ -4,8 +4,6 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Process
-import com.chaquo.python.Python
-import com.chaquo.python.android.AndroidPlatform
 import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -22,7 +20,6 @@ class DownloaderApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         installCrashLogger()
-        if (!Python.isStarted()) Python.start(AndroidPlatform(this))
         val channel = NotificationChannel(
             DownloadWorker.CHANNEL_ID,
             "下载任务",
