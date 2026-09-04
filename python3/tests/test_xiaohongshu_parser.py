@@ -11,6 +11,7 @@ if PYTHON_DIR not in sys.path:
 
 from xiaohongshu_parser import (  # noqa: E402
     _is_direct_video_url,
+    _secure_xhscdn_url,
     extract_image_candidates,
     extract_initial_state,
     extract_video_variants,
@@ -23,6 +24,20 @@ from xiaohongshu_parser import (  # noqa: E402
 
 
 class XiaohongshuParserTests(unittest.TestCase):
+    def test_upgrades_only_trusted_xhscdn_urls_to_https(self):
+        self.assertEqual(
+            _secure_xhscdn_url("http://sns-video-v2.xhscdn.com/video.mp4?token=abc"),
+            "https://sns-video-v2.xhscdn.com/video.mp4?token=abc",
+        )
+        self.assertEqual(
+            _secure_xhscdn_url("http://sns-bak-v1.xhscdn.com/video.mp4"),
+            "https://sns-bak-v1.xhscdn.com/video.mp4",
+        )
+        self.assertEqual(
+            _secure_xhscdn_url("http://xhscdn.com.evil.example/video.mp4"),
+            "http://xhscdn.com.evil.example/video.mp4",
+        )
+
     def test_recognises_public_and_short_links(self):
         self.assertTrue(is_xiaohongshu_share("https://www.xiaohongshu.com/explore/abc123"))
         self.assertTrue(is_xiaohongshu_share("复制 https://xhslink.cn/AbCdEf 打开小红书"))
@@ -93,7 +108,7 @@ class XiaohongshuParserTests(unittest.TestCase):
                             "size": 80_000_000,
                         }],
                         "h264": [{
-                            "masterUrl": "https://sns-video-bd.xhscdn.com/4k-avc.mp4",
+                            "masterUrl": "http://sns-video-bd.xhscdn.com/4k-avc.mp4",
                             "width": 2160,
                             "height": 3840,
                             "fps": 60,
@@ -111,6 +126,7 @@ class XiaohongshuParserTests(unittest.TestCase):
         variants = extract_video_variants(note)
         self.assertEqual(variants[0]["codec"], "H.264")
         self.assertEqual(variants[0]["width"], 2160)
+        self.assertTrue(variants[0]["url"].startswith("https://"))
         self.assertEqual(variants[-1]["width"], 1080)
 
     def test_normalises_image_and_video_notes(self):

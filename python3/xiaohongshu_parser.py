@@ -189,6 +189,14 @@ def _value(root, *names):
     return None
 
 
+def _secure_xhscdn_url(url):
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() == "http" and host.endswith(".xhscdn.com"):
+        return parsed._replace(scheme="https").geturl()
+    return url
+
+
 def _note_id(note):
     return str(_value(note, "noteId", "note_id", "id", "note_id_str") or "")
 
@@ -220,7 +228,7 @@ def find_target_note(state, target_note_id):
 
 def _as_urls(value):
     if isinstance(value, str):
-        return [value] if value.startswith(("http://", "https://")) else []
+        return [_secure_xhscdn_url(value)] if value.startswith(("http://", "https://")) else []
     if isinstance(value, list):
         result = []
         for child in value:
@@ -336,7 +344,7 @@ def _recursive_video_urls(value, depth=0):
     if depth > 10:
         return []
     if isinstance(value, str):
-        return [value] if _is_direct_video_url(value) else []
+        return [_secure_xhscdn_url(value)] if _is_direct_video_url(value) else []
     if isinstance(value, list):
         result = []
         for child in value:
@@ -369,6 +377,7 @@ def extract_video_variants(note):
         origin_url = origin_key if origin_key.startswith("http") else (
             "https://sns-video-bd.xhscdn.com/" + origin_key.lstrip("/")
         )
+        origin_url = _secure_xhscdn_url(origin_url)
         if _is_direct_video_url(origin_url):
             variants.append({
                 "url": origin_url,

@@ -268,7 +268,17 @@ class DownloadExecutor @Inject constructor(
         progress: DownloadProgress,
     ) {
         var lastError: Throwable? = null
-        urls.distinct().forEachIndexed { addressIndex, address ->
+        val securedUrls = urls.mapIndexed { addressIndex, originalAddress ->
+            secureDownloadUrl(originalAddress).also { address ->
+                if (address != originalAddress) {
+                    logger.event(taskId, "DOWNLOAD", "CDN_HTTPS_UPGRADED", JSONObject().apply {
+                        put("cdn_index", addressIndex)
+                        put("cdn_host", URL(address).host)
+                    })
+                }
+            }
+        }.distinct()
+        securedUrls.forEachIndexed { addressIndex, address ->
             repeat(3) { attempt ->
                 currentCoroutineContext().ensureActive()
                 try {
@@ -391,3 +401,17 @@ internal fun imageExtension(header: ByteArray, fallback: String): String {
         else -> fallback
     }
 }
+
+internal fun secureDownloadUrl(address: String): String {
+    val parsed = runCatching { URL(address) }.getOrNull() ?: return address
+    val host = parsed.host.lowercase()
+    val hasUserInfo = runCatching { parsed.toURI().userInfo != null }.getOrDefault(true)
+    if (!parsed.protocol.equals("http", ignoreCase = true) ||
+        !host.endsWith(".xhscdn.com") || hasUserInfo
+    ) {
+        return address
+    }
+    return address.replaceFirst(HTTP_SCHEME, "https://")
+}
+
+private val HTTP_SCHEME = Regex("^http://", RegexOption.IGNORE_CASE)
