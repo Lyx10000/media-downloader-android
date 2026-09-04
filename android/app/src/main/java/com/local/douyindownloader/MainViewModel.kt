@@ -451,24 +451,64 @@ class MainViewModel @Inject internal constructor(
     internal suspend fun describeManagedFiles(outputs: List<TaskOutput>): List<ManagedFileItem> =
         taskFileOperationCoordinator.describe(outputs)
 
+    internal suspend fun loadDocumentReader(task: TaskRecord): DocumentReaderData? =
+        withContext(Dispatchers.IO) {
+            val document = store.getSpec(task.id)?.result?.document ?: return@withContext null
+            val availableOutputs = task.outputs.filter { inspector.outputExists(it.uri) }
+            val assetOutputs = resolveDocumentAssetOutputs(document, availableOutputs)
+            runCatching {
+                logger.event(task.id, "DOCUMENT_READER", "DOCUMENT_OPENED", JSONObject().apply {
+                    put("assets", document.assets.size)
+                    put("local_assets", assetOutputs.size)
+                    put("missing_assets", document.assets.size - assetOutputs.size)
+                })
+            }
+            DocumentReaderData(document, assetOutputs)
+        }
+
+    internal fun openDocumentMedia(context: Context, taskId: String, output: TaskOutput) {
+        val uri = runCatching { Uri.parse(output.uri) }.getOrNull()
+        if (uri == null || !inspector.outputExists(output.uri)) {
+            message = "文件已被删除"
+            return
+        }
+        openOutput(context, taskId, uri, output.displayName, output.mimeType)
+    }
+
     internal fun openManagedFile(context: Context, taskId: String, item: ManagedFileItem) {
         if (!item.available) {
             message = "文件已被删除"
             return
         }
+        openOutput(
+            context,
+            taskId,
+            item.uri,
+            item.output.displayName,
+            item.output.mimeType,
+        )
+    }
+
+    private fun openOutput(
+        context: Context,
+        taskId: String,
+        uri: Uri,
+        displayName: String,
+        providerType: String,
+    ) {
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(
-                item.uri,
-                mediaMimeType(item.output.displayName, item.output.mimeType),
+                uri,
+                mediaMimeType(displayName, providerType),
             )
-            clipData = ClipData.newRawUri("下载文件", item.uri)
+            clipData = ClipData.newRawUri("下载文件", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         runCatching { context.startActivity(intent) }
             .onFailure { error ->
                 runCatching {
                     logger.event(taskId, "FILE_MANAGER", "FILE_OPEN_FAILED", JSONObject().apply {
-                        put("authority", item.uri.authority.orEmpty())
+                        put("authority", uri.authority.orEmpty())
                         put("error", error.javaClass.name)
                         put("message", Redactor.sanitize(error.message.orEmpty()))
                     })

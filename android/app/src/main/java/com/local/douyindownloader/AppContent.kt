@@ -51,6 +51,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     val snackbar = remember { SnackbarHostState() }
     var destination by remember { mutableIntStateOf(0) }
     var managedTaskId by remember { mutableStateOf<String?>(null) }
+    var readerTaskId by remember { mutableStateOf<String?>(null) }
     val destinations = remember {
         listOf(
             Destination("首页", Icons.Default.Home),
@@ -107,6 +108,20 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     val managedTask = managedTaskId?.let { taskId ->
         uiState.tasks.firstOrNull { it.id == taskId }
     }
+    val readerTask = readerTaskId?.let { taskId ->
+        uiState.tasks.firstOrNull { it.id == taskId }
+    }
+    if (readerTaskId != null && readerTask == null) {
+        LaunchedEffect(readerTaskId) { readerTaskId = null }
+    }
+    if (readerTask != null) {
+        DocumentReaderScreen(
+            task = readerTask,
+            viewModel = viewModel,
+            onBack = { readerTaskId = null },
+        )
+        return
+    }
     if (managedTaskId != null && managedTask == null) {
         LaunchedEffect(managedTaskId) { managedTaskId = null }
     }
@@ -115,6 +130,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             task = managedTask,
             viewModel = viewModel,
             snackbarHostState = snackbar,
+            onOpenDocument = { readerTaskId = managedTask.id },
             onBack = { managedTaskId = null },
         )
         return
