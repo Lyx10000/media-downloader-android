@@ -46,6 +46,41 @@ enum class CookieReadySource(val wireValue: String) {
     TIMEOUT("timeout"),
 }
 
+internal enum class ParserCredentialMode(val wireValue: String) {
+    ANONYMOUS("anonymous"),
+    STORED_COOKIE("stored_cookie"),
+}
+
+internal fun initialParserCredentialMode(
+    platform: SourcePlatform,
+    hasStoredCookie: Boolean,
+): ParserCredentialMode? = when {
+    platform == SourcePlatform.XIAOHONGSHU -> ParserCredentialMode.ANONYMOUS
+    hasStoredCookie -> ParserCredentialMode.STORED_COOKIE
+    platform.anonymousFirst -> ParserCredentialMode.ANONYMOUS
+    else -> null
+}
+
+internal fun nextParserCredentialMode(
+    platform: SourcePlatform,
+    errorCode: String,
+    currentMode: ParserCredentialMode,
+    hasStoredCookie: Boolean,
+    attemptedModes: Set<ParserCredentialMode>,
+): ParserCredentialMode? {
+    if (platform != SourcePlatform.XIAOHONGSHU ||
+        errorCode !in setOf("AUTH_OR_RISK", "DETAIL_EMPTY", "LOGIN_REQUIRED")
+    ) {
+        return null
+    }
+    val candidate = when (currentMode) {
+        ParserCredentialMode.ANONYMOUS -> ParserCredentialMode.STORED_COOKIE
+            .takeIf { hasStoredCookie }
+        ParserCredentialMode.STORED_COOKIE -> ParserCredentialMode.ANONYMOUS
+    }
+    return candidate?.takeUnless(attemptedModes::contains)
+}
+
 internal fun shouldRefreshCookieEnvironment(
     errorCode: String,
     refreshAttempted: Boolean,
@@ -137,6 +172,8 @@ class MainViewModel @Inject internal constructor(
     private var sessionPlatform = SourcePlatform.DOUYIN
     private var sessionSourceUrl = ""
     private var sessionSupportsPageSnapshot = false
+    private var sessionStoredCookieHeader = ""
+    private val sessionCredentialAttempts = mutableSetOf<ParserCredentialMode>()
     private var parsingStarted = false
     private var environmentRefreshAttempted = false
     private val refreshMutex = Mutex()
@@ -194,6 +231,7 @@ class MainViewModel @Inject internal constructor(
             ZhihuSourceResolver.resolve(source.url).type != ZhihuContentType.VIDEO
         }.getOrDefault(false)
         sessionId = UUID.randomUUID().toString()
+        sessionCredentialAttempts.clear()
         parsingStarted = false
         environmentRefreshAttempted = false
         logger.event(sessionId, "INPUT", "LINK_ACCEPTED", JSONObject().apply {
@@ -203,16 +241,25 @@ class MainViewModel @Inject internal constructor(
         val cookieHeader = CookieManager.getInstance()
             .getCookie(source.platform.homeUrl)
             .orEmpty()
-        if (cookieHeader.isNotBlank() || source.platform.anonymousFirst) {
-            logger.event(
-                sessionId,
-                "COOKIE",
-                if (cookieHeader.isBlank()) "ANONYMOUS_PARSE_ALLOWED" else "COOKIE_REUSED",
-                JSONObject().put("present", cookieHeader.isNotBlank()),
-            )
-            startParse(cookieHeader)
-        } else {
-            requestEnvironmentRefresh("cookie_missing")
+        sessionStoredCookieHeader = cookieHeader
+        when (val mode = initialParserCredentialMode(source.platform, cookieHeader.isNotBlank())) {
+            ParserCredentialMode.ANONYMOUS -> {
+                logger.event(sessionId, "COOKIE", "ANONYMOUS_PARSE_STARTED", JSONObject().apply {
+                    put("present", false)
+                    put("stored_cookie_present", cookieHeader.isNotBlank())
+                })
+                startParse("")
+            }
+            ParserCredentialMode.STORED_COOKIE -> {
+                logger.event(
+                    sessionId,
+                    "COOKIE",
+                    "COOKIE_REUSED",
+                    JSONObject().put("present", true),
+                )
+                startParse(cookieHeader)
+            }
+            null -> requestEnvironmentRefresh("cookie_missing")
         }
     }
 
@@ -222,6 +269,7 @@ class MainViewModel @Inject internal constructor(
         pageSnapshot: WebPageSnapshot?,
     ) {
         if (parsingStarted) return
+        sessionStoredCookieHeader = cookieHeader
         logger.event(sessionId, "COOKIE", "COOKIE_READY", JSONObject().apply {
             put("present", cookieHeader.isNotBlank())
             put("source", source.wireValue)
@@ -235,10 +283,40 @@ class MainViewModel @Inject internal constructor(
 
     private fun startParse(cookieHeader: String, pageSnapshot: WebPageSnapshot? = null) {
         if (parsingStarted) return
+        val credentialMode = if (cookieHeader.isBlank()) {
+            ParserCredentialMode.ANONYMOUS
+        } else {
+            ParserCredentialMode.STORED_COOKIE
+        }
+        sessionCredentialAttempts += credentialMode
         parsingStarted = true
         parseState = ParseUiState.Parsing
         viewModelScope.launch {
             val result = parser.parse(inputText, cookieHeader, pageSnapshot)
+            val fallbackMode = nextParserCredentialMode(
+                platform = sessionPlatform,
+                errorCode = result.errorCode,
+                currentMode = credentialMode,
+                hasStoredCookie = sessionStoredCookieHeader.isNotBlank(),
+                attemptedModes = sessionCredentialAttempts,
+            )
+            if (fallbackMode != null) {
+                logger.event(sessionId, "COOKIE", "CREDENTIAL_FALLBACK_STARTED", JSONObject().apply {
+                    put("code", result.errorCode)
+                    put("from", credentialMode.wireValue)
+                    put("to", fallbackMode.wireValue)
+                })
+                parsingStarted = false
+                startParse(
+                    if (fallbackMode == ParserCredentialMode.STORED_COOKIE) {
+                        sessionStoredCookieHeader
+                    } else {
+                        ""
+                    },
+                )
+                refreshLogs()
+                return@launch
+            }
             if (shouldRefreshCookieEnvironment(
                     result.errorCode,
                     environmentRefreshAttempted,
