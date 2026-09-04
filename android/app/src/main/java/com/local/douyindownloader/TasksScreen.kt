@@ -434,6 +434,7 @@ internal fun reconcileTaskSelection(selected: Set<String>, available: Set<String
 
 private sealed interface TaskPreviewLoadState {
     data object Loading : TaskPreviewLoadState
+    data object TextOnly : TaskPreviewLoadState
     data object Unavailable : TaskPreviewLoadState
     data class Ready(val media: List<TaskPreviewMedia>) : TaskPreviewLoadState
 }
@@ -453,7 +454,11 @@ private fun TaskPreviewPanel(
         previewState = viewModel.resolveTaskPreview(task.id, task.outputs)
             .takeIf(List<TaskPreviewMedia>::isNotEmpty)
             ?.let(TaskPreviewLoadState::Ready)
-            ?: TaskPreviewLoadState.Unavailable
+            ?: if (isTextOnlyPreview(task.outputs)) {
+                TaskPreviewLoadState.TextOnly
+            } else {
+                TaskPreviewLoadState.Unavailable
+            }
     }
     DisposableEffect(task.id) {
         onDispose { viewModel.stopMediaPreviewIfTask(task.id) }
@@ -466,6 +471,11 @@ private fun TaskPreviewPanel(
     ) {
         when (val state = previewState) {
             TaskPreviewLoadState.Loading -> PreviewLoading()
+            TaskPreviewLoadState.TextOnly -> Text(
+                "这是纯文本内容，没有可预览的图片、视频或音频",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+            )
             TaskPreviewLoadState.Unavailable -> Text(
                 "无法读取预览，文件可能已被移动或删除",
                 color = MaterialTheme.colorScheme.error,

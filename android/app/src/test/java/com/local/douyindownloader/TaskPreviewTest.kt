@@ -125,6 +125,26 @@ class TaskPreviewTest {
     }
 
     @Test
+    fun `markdown without media is identified as text only`() {
+        val outputs = listOf(
+            TaskOutput("document", "answer.md", "text/markdown"),
+            TaskOutput("metadata", "details.json", "application/json"),
+        )
+
+        assertEquals(true, isTextOnlyPreview(outputs))
+    }
+
+    @Test
+    fun `declared media prevents text only classification`() {
+        val outputs = listOf(
+            TaskOutput("document", "answer.md", "text/markdown"),
+            TaskOutput("image", "image_001.jpg", "image/jpeg", relativePath = "media/image_001.jpg"),
+        )
+
+        assertEquals(false, isTextOnlyPreview(outputs))
+    }
+
+    @Test
     fun `playback time formats minutes and seconds`() {
         assertEquals("0:00", formatPlaybackTime(0))
         assertEquals("1:05", formatPlaybackTime(65_999))

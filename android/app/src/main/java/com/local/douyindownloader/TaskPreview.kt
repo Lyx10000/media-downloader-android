@@ -117,6 +117,13 @@ internal fun documentPreviewGroups(outputs: List<TaskOutput>): DocumentPreviewGr
     )
 }
 
+internal fun isTextOnlyPreview(outputs: List<TaskOutput>): Boolean {
+    val mimeTypes = outputs.map { mediaMimeType(it.displayName, it.mimeType) }
+    return mimeTypes.any { it.startsWith("text/") } && mimeTypes.none { mimeType ->
+        mediaCategory(mimeType) in setOf("image", "video", "audio")
+    }
+}
+
 internal fun selectPreviewOutput(
     outputs: List<TaskOutput>,
     mimeTypeFor: (TaskOutput) -> String = { output ->
