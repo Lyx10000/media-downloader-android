@@ -34,6 +34,10 @@ internal object DouyinMediaNormalizer {
             referer = SourcePlatform.DOUYIN.referer,
             kind = kind,
             author = author.firstString("nickname", "name"),
+            authorAccountId = author.firstString("unique_id", "uniqueId")
+                .ifBlank { author.firstString("short_id", "shortId") }
+                .takeUnless { it == "0" }
+                .orEmpty(),
             description = detail.firstString("desc", "description"),
             coverUrl = coverUrl,
             variants = variants,

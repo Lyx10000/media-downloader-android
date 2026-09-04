@@ -445,7 +445,39 @@ class MainViewModel @Inject internal constructor(
         val cookieHeader = CookieManager.getInstance()
             .getCookie(task.platform.homeUrl).orEmpty()
         viewModelScope.launch {
-            message = redownloadCoordinator.retry(task, cookieHeader, customTreeUri)
+            message = redownloadCoordinator.retry(task, cookieHeader, customTreeUri).message
+            refreshTasks()
+        }
+    }
+
+    fun retryTasks(tasks: List<TaskRecord>) {
+        val uniqueTasks = tasks.distinctBy(TaskRecord::id)
+        if (uniqueTasks.isEmpty()) return
+        viewModelScope.launch {
+            var started = 0
+            var failed = 0
+            var skipped = 0
+            uniqueTasks.forEach { task ->
+                if (!isTaskRedownloadEligible(task)) {
+                    skipped += 1
+                    return@forEach
+                }
+                val cookieHeader = CookieManager.getInstance()
+                    .getCookie(task.platform.homeUrl).orEmpty()
+                val result = runCatching {
+                    redownloadCoordinator.retry(task, cookieHeader, customTreeUri)
+                }.getOrElse { error ->
+                    runCatching {
+                        logger.event(task.id, "REDOWNLOAD", "BATCH_REDOWNLOAD_FAILED", JSONObject().apply {
+                            put("type", error.javaClass.name)
+                            put("message", Redactor.sanitize(error.message ?: error.javaClass.simpleName))
+                        })
+                    }
+                    TaskRedownloadResult(false, "重新下载失败")
+                }
+                if (result.success) started += 1 else failed += 1
+            }
+            message = batchRedownloadSummary(started, failed, skipped)
             refreshTasks()
         }
     }

@@ -1,5 +1,7 @@
 package com.local.douyindownloader
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -27,6 +29,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Pause
@@ -121,6 +124,7 @@ internal fun TasksScreen(
     }
     var pendingShare by remember { mutableStateOf<PendingShare?>(null) }
     var pendingDelete by remember { mutableStateOf<TaskRecord?>(null) }
+    var pendingRedownload by remember { mutableStateOf<TaskRecord?>(null) }
     var deleteFiles by remember { mutableStateOf(false) }
     var recoveryTask by remember { mutableStateOf<TaskRecord?>(null) }
     DisposableEffect(Unit) {
@@ -158,6 +162,7 @@ internal fun TasksScreen(
                 FileState.UNKNOWN,
             )
             val isPreviewExpanded = expandedTaskId == task.id
+            val canRedownload = isTaskRedownloadEligible(task)
             OutlinedCard(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -186,11 +191,67 @@ internal fun TasksScreen(
                                 enabled = task.status != TaskStatus.DELETING,
                             )
                         }
-                        Text(
-                            task.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.weight(1f),
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    task.title,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (
+                                    task.platform == SourcePlatform.ZHIHU &&
+                                    task.author.isNotBlank() &&
+                                    task.author == task.title
+                                ) {
+                                    CreatorCopyButton(
+                                        contentDescription = "复制知乎昵称",
+                                        onClick = {
+                                            copyCreatorText(context, "知乎昵称", task.author)
+                                            viewModel.showMessage("知乎昵称已复制")
+                                        },
+                                    )
+                                }
+                            }
+                            when (task.platform) {
+                                SourcePlatform.DOUYIN -> task.authorAccountId
+                                    .takeIf(String::isNotBlank)
+                                    ?.let { accountId ->
+                                        CreatorIdentityLine(
+                                            label = "抖音号",
+                                            value = accountId,
+                                            onCopy = {
+                                                copyCreatorText(context, "抖音号", accountId)
+                                                viewModel.showMessage("抖音号已复制")
+                                            },
+                                        )
+                                    }
+                                SourcePlatform.XIAOHONGSHU -> task.authorAccountId
+                                    .takeIf(String::isNotBlank)
+                                    ?.let { accountId ->
+                                        CreatorIdentityLine(
+                                            label = "小红书号",
+                                            value = accountId,
+                                            onCopy = {
+                                                copyCreatorText(context, "小红书号", accountId)
+                                                viewModel.showMessage("小红书号已复制")
+                                            },
+                                        )
+                                    }
+                                SourcePlatform.ZHIHU -> task.author
+                                    .takeIf { it.isNotBlank() && it != task.title }
+                                    ?.let { author ->
+                                        CreatorIdentityLine(
+                                            label = "作者",
+                                            value = author,
+                                            copyDescription = "复制知乎昵称",
+                                            onCopy = {
+                                                copyCreatorText(context, "知乎昵称", author)
+                                                viewModel.showMessage("知乎昵称已复制")
+                                            },
+                                        )
+                                    }
+                            }
+                        }
                         if (!selectionMode) {
                             IconButton(
                                 onClick = { pendingDelete = task; deleteFiles = false },
@@ -245,47 +306,55 @@ internal fun TasksScreen(
                     if (task.error.isNotBlank()) {
                         Text(task.error, color = MaterialTheme.colorScheme.error)
                     }
-                    if (!selectionMode && task.status == TaskStatus.FAILED && task.fileState != FileState.DELETE_FAILED) {
-                        Button(onClick = { viewModel.retryTask(task) }) {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
-                            Spacer(Modifier.size(8.dp))
-                            Text("重试")
-                        }
-                    }
-                    if (!selectionMode && filesAvailable) {
+                    if (!selectionMode && (filesAvailable || canRedownload)) {
                         FlowRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            OutlinedButton(onClick = { viewModel.toggleTaskPreview(task.id) }) {
-                                Icon(
-                                    if (isPreviewExpanded) Icons.Default.VisibilityOff
-                                    else Icons.Default.Visibility,
-                                    contentDescription = null,
-                                )
-                                Spacer(Modifier.size(8.dp))
-                                Text(if (isPreviewExpanded) "收起" else "预览")
-                            }
-                            OutlinedButton(onClick = { onManageTask(task.id) }) {
-                                Icon(Icons.Default.FolderOpen, contentDescription = null)
-                                Spacer(Modifier.size(8.dp))
-                                Text("管理文件")
-                            }
-                            Button(onClick = {
-                                val files = resolveShareableFiles(
-                                    context.contentResolver,
-                                    task.outputUris,
-                                )
-                                if (files.isEmpty()) {
-                                    viewModel.shareTaskFiles(context, task.id, emptyList())
-                                } else {
-                                    pendingShare = PendingShare(task.id, files)
+                            if (canRedownload) {
+                                OutlinedButton(onClick = {
+                                    if (task.fileState == FileState.STORAGE_UNAVAILABLE) {
+                                        recoveryTask = task
+                                    } else {
+                                        pendingRedownload = task
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null)
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("重新下载")
                                 }
-                            }) {
-                                Icon(Icons.Default.Share, contentDescription = null)
-                                Spacer(Modifier.size(8.dp))
-                                Text("分享")
+                            }
+                            if (filesAvailable) {
+                                OutlinedButton(onClick = { viewModel.toggleTaskPreview(task.id) }) {
+                                    Icon(
+                                        if (isPreviewExpanded) Icons.Default.VisibilityOff
+                                        else Icons.Default.Visibility,
+                                        contentDescription = null,
+                                    )
+                                    Spacer(Modifier.size(8.dp))
+                                    Text(if (isPreviewExpanded) "收起" else "预览")
+                                }
+                                OutlinedButton(onClick = { onManageTask(task.id) }) {
+                                    Icon(Icons.Default.FolderOpen, contentDescription = null)
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("管理文件")
+                                }
+                                Button(onClick = {
+                                    val files = resolveShareableFiles(
+                                        context.contentResolver,
+                                        task.outputUris,
+                                    )
+                                    if (files.isEmpty()) {
+                                        viewModel.shareTaskFiles(context, task.id, emptyList())
+                                    } else {
+                                        pendingShare = PendingShare(task.id, files)
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Share, contentDescription = null)
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("分享")
+                                }
                             }
                         }
                     }
@@ -360,6 +429,32 @@ internal fun TasksScreen(
             },
         )
     }
+    pendingRedownload?.let { task ->
+        AlertDialog(
+            onDismissRequest = { pendingRedownload = null },
+            title = { Text("重新下载") },
+            text = {
+                Text(
+                    "将重新解析作品，删除该任务已登记的现有下载文件，并创建新的任务文件夹。" +
+                        "任务文件夹中的其他文件会保留。",
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (viewModel.requiresAllFilesAccess(task)) {
+                        requestAllFilesAccess()
+                        viewModel.showMessage("授权后请再次点击重新下载")
+                    } else {
+                        viewModel.retryTask(task)
+                    }
+                    pendingRedownload = null
+                }) { Text("重新下载") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRedownload = null }) { Text("取消") }
+            },
+        )
+    }
     recoveryTask?.let { task ->
         val storageUnavailable = task.fileState == FileState.STORAGE_UNAVAILABLE
         val deleteFailed = task.fileState == FileState.DELETE_FAILED
@@ -431,6 +526,58 @@ internal fun toggleTaskSelection(selected: Set<String>, taskId: String): Set<Str
 
 internal fun reconcileTaskSelection(selected: Set<String>, available: Set<String>): Set<String> =
     selected.intersect(available)
+
+internal fun isTaskRedownloadEligible(task: TaskRecord): Boolean =
+    task.status !in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.DELETING) &&
+        task.fileState != FileState.DELETE_FAILED
+
+internal fun batchRedownloadSummary(started: Int, failed: Int, skipped: Int): String = buildList {
+    if (started > 0) add("已开始 $started 个任务")
+    if (failed > 0) add("$failed 个启动失败")
+    if (skipped > 0) add("$skipped 个状态不允许重新下载")
+}.joinToString("，").ifBlank { "没有可重新下载的任务" }
+
+@Composable
+private fun CreatorIdentityLine(
+    label: String,
+    value: String,
+    copyDescription: String = "复制$label",
+    onCopy: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "$label：$value",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        CreatorCopyButton(contentDescription = copyDescription, onClick = onCopy)
+    }
+}
+
+@Composable
+private fun CreatorCopyButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(40.dp),
+    ) {
+        Icon(
+            Icons.Default.ContentCopy,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(16.dp),
+        )
+    }
+}
+
+private fun copyCreatorText(context: android.content.Context, label: String, value: String) {
+    context.getSystemService(ClipboardManager::class.java)
+        ?.setPrimaryClip(ClipData.newPlainText(label, value))
+}
 
 private sealed interface TaskPreviewLoadState {
     data object Loading : TaskPreviewLoadState

@@ -391,9 +391,14 @@ internal class XiaohongshuPlatformParser @Inject constructor(
         val note = XiaohongshuMediaParser.findTargetNote(state, noteId)
             ?: throw PlatformParseException("DETAIL_EMPTY", "页面状态中没有匹配目标笔记")
         val normalized = XiaohongshuMediaParser.normalizeNote(note, noteId, canonicalUrl)
-        normalized.copy(
+        val enriched = if (normalized.authorAccountId.isNotBlank()) normalized else {
+            normalized.copy(
+                authorAccountId = fetchPublicAccountId(note, canonicalUrl, cookieHeader),
+            )
+        }
+        enriched.copy(
             variants = MediaSizeHydrator.hydrate(
-                variants = normalized.variants,
+                variants = enriched.variants,
                 probe = { urls -> probeVariantSize(urls) },
             ),
         )
@@ -425,6 +430,31 @@ internal class XiaohongshuPlatformParser @Inject constructor(
         )
         if (response.statusCode !in 200..299) throw ParserHttpStatusException(response.statusCode)
         return response
+    }
+
+    private fun fetchPublicAccountId(
+        note: JSONObject,
+        canonicalUrl: String,
+        cookieHeader: String,
+    ): String {
+        val profileUrl = XiaohongshuMediaParser.authorProfileUrl(note, canonicalUrl)
+        if (profileUrl.isBlank()) return ""
+        if ("xsec_token=" !in profileUrl && cookieHeader.isBlank()) return ""
+        return runCatching {
+            val response = httpClient.get(
+                profileUrl,
+                headers = mapOf(
+                    "User-Agent" to XiaohongshuMediaParser.USER_AGENT,
+                    "Referer" to canonicalUrl,
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language" to "zh-CN,zh;q=0.9",
+                ),
+                cookieHeader = cookieHeader,
+                timeoutSeconds = 8,
+            )
+            if (response.statusCode !in 200..299) return@runCatching ""
+            XiaohongshuMediaParser.profilePublicAccountId(response.body)
+        }.getOrDefault("")
     }
 
     private fun probeVariantSize(urls: List<String>): Long {

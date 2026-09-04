@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 internal object XiaohongshuMediaParser {
@@ -189,6 +190,7 @@ internal object XiaohongshuMediaParser {
             referer = HOME_URL,
             kind = if (isVideo) MediaKind.VIDEO else MediaKind.IMAGE,
             author = user.firstString("nickname", "nickName", "nick_name", "name"),
+            authorAccountId = user.firstString("redId", "red_id"),
             description = note.firstString("title", "displayTitle", "display_title")
                 .ifBlank { note.firstString("desc", "description") },
             coverUrl = cover,
@@ -197,6 +199,34 @@ internal object XiaohongshuMediaParser {
             imageCandidates = images,
             responseShape = (responseShape(note) as JSONObject).toString(),
         )
+    }
+
+    fun authorProfileUrl(note: JSONObject, canonicalUrl: String): String {
+        val user = note.firstObject("user", "author") ?: return ""
+        val userId = user.firstString("userId", "user_id", "id")
+        if (userId.isBlank()) return ""
+        val token = parseUri(canonicalUrl)?.rawQuery
+            ?.let(::parseQuery)
+            ?.get("xsec_token")
+            ?.firstOrNull()
+            .orEmpty()
+        val base = "${HOME_URL}user/profile/${encodeQuery(userId)}"
+        return if (token.isBlank()) base else {
+            "$base?xsec_token=${encodeQuery(token)}&xsec_source=pc_note"
+        }
+    }
+
+    fun profilePublicAccountId(pageHtml: String): String {
+        val state = extractInitialState(pageHtml) ?: return ""
+        val root = unwrap(state, unwrapNote = false)
+        val user = root.firstObject("user")?.let { unwrap(it, unwrapNote = false) } ?: return ""
+        val pageData = user.firstObject("userPageData", "user_page_data")
+            ?.let { unwrap(it, unwrapNote = false) }
+            ?: return ""
+        val basic = pageData.firstObject("basicInfo", "basic_info")
+            ?.let { unwrap(it, unwrapNote = false) }
+            ?: return ""
+        return basic.firstString("redId", "red_id")
     }
 
     fun secureCdnUrl(url: String): String {
@@ -378,6 +408,9 @@ internal object XiaohongshuMediaParser {
 
     private fun decodeQuery(value: String): String =
         runCatching { URLDecoder.decode(value, StandardCharsets.UTF_8.name()) }.getOrDefault(value)
+
+    private fun encodeQuery(value: String): String =
+        URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20")
 
     private fun decodePercent(value: String): String = decodeQuery(value.replace("+", "%2B"))
 

@@ -63,12 +63,16 @@ class ModelTypesTest {
             platform = SourcePlatform.ZHIHU,
             contentId = "2079127079271011205",
             kind = MediaKind.DOCUMENT,
+            author = "作者",
+            authorAccountId = "public-account",
             document = document,
         )
 
         val restored = ParseResult.fromJson(result.toJson().toString())
 
         assertEquals("2079127079271011205", restored.contentId)
+        assertEquals("作者", restored.author)
+        assertEquals("public-account", restored.authorAccountId)
         assertEquals(document, restored.document)
     }
 

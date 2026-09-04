@@ -123,6 +123,7 @@ data class ParseResult(
     val referer: String = platform.referer,
     val kind: MediaKind = MediaKind.VIDEO,
     val author: String = "",
+    val authorAccountId: String = "",
     val description: String = "",
     val coverUrl: String = "",
     val variants: List<MediaVariant> = emptyList(),
@@ -148,6 +149,7 @@ data class ParseResult(
                 put("referer", referer)
                 put("kind", kind.wireValue)
                 put("author", author)
+                put("author_account_id", authorAccountId)
                 put("description", description)
                 put("cover_url", coverUrl)
                 put("variants", JSONArray().apply { variants.forEach { put(it.toJson()) } })
@@ -213,6 +215,7 @@ data class ParseResult(
                 },
                 kind = MediaKind.fromWire(root.optString("kind", MediaKind.VIDEO.wireValue)),
                 author = root.optString("author"),
+                authorAccountId = root.optString("author_account_id"),
                 description = root.optString("description"),
                 coverUrl = root.optString("cover_url"),
                 variants = variants,
@@ -326,6 +329,8 @@ data class TaskRecord(
     val error: String,
     val fileState: FileState,
     val platform: SourcePlatform = SourcePlatform.DOUYIN,
+    val author: String = "",
+    val authorAccountId: String = "",
 ) {
     val outputUris: List<String> get() = outputs.map(TaskOutput::uri)
 }

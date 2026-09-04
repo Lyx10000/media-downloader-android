@@ -6,6 +6,11 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
+data class TaskRedownloadResult(
+    val success: Boolean,
+    val message: String,
+)
+
 @Singleton
 class TaskRedownloadCoordinator @Inject constructor(
     private val repository: DownloadTaskRepository,
@@ -19,14 +24,14 @@ class TaskRedownloadCoordinator @Inject constructor(
         task: TaskRecord,
         cookieHeader: String,
         customTreeUri: String?,
-    ): String {
+    ): TaskRedownloadResult {
         val originalSpec = repository.getSpec(task.id)
-            ?: return "旧任务缺少作品 ID，无法自动重新解析"
+            ?: return failure("旧任务缺少作品 ID，无法自动重新解析")
         if (originalSpec.result.contentId.isBlank() && originalSpec.stableSource().isBlank()) {
-            return "旧任务缺少作品 ID，无法自动重新解析"
+            return failure("旧任务缺少作品 ID，无法自动重新解析")
         }
         val resolvedStorage = resolveStorage(originalSpec, customTreeUri)
-            ?: return "保存目录已失效，请重新选择目录后再下载"
+            ?: return failure("保存目录已失效，请重新选择目录后再下载")
 
         repository.update(task.id, TaskStatus.RUNNING, "正在重新解析作品", 0)
         logger.event(task.id, "REDOWNLOAD", "REPARSE_STARTED", JSONObject().apply {
@@ -51,7 +56,7 @@ class TaskRedownloadCoordinator @Inject constructor(
                 put("code", refreshed.errorCode)
                 put("message", refreshed.message)
             })
-            return hint
+            return failure(hint)
         }
 
         val previous = originalSpec.result.variants.getOrNull(originalSpec.variantIndex)
@@ -68,11 +73,11 @@ class TaskRedownloadCoordinator @Inject constructor(
                 0,
                 "当前没有可下载的视频档位",
             )
-            return "当前没有可下载的视频档位"
+            return failure("当前没有可下载的视频档位")
         }
 
         val cleanup = deletionCoordinator.deleteOutputsForRedownload(task.id)
-        if (!cleanup.success) return cleanup.message
+        if (!cleanup.success) return failure(cleanup.message)
 
         val now = System.currentTimeMillis()
         val updatedSpec = originalSpec.copy(
@@ -97,15 +102,18 @@ class TaskRedownloadCoordinator @Inject constructor(
         } catch (error: Throwable) {
             val message = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
             repository.update(task.id, TaskStatus.FAILED, "启动重新下载失败", 0, message)
-            return "启动重新下载失败：$message"
+            return failure("启动重新下载失败：$message")
         }
-        return if (refreshed.kind == MediaKind.VIDEO && !match.exact) {
+        val message = if (refreshed.kind == MediaKind.VIDEO && !match.exact) {
             if (previous == null) "已选择当前可获得的最高档位"
             else "原清晰度已不可用，已选择当前最接近的档位"
         } else {
             "已重新解析并开始下载"
         }
+        return TaskRedownloadResult(true, message)
     }
+
+    private fun failure(message: String) = TaskRedownloadResult(false, message)
 
     private fun resolveStorage(
         spec: TaskSpec,

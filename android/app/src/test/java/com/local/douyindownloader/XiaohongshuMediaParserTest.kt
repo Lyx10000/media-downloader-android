@@ -88,7 +88,7 @@ class XiaohongshuMediaParserTest {
     fun `normalizes image and origin video notes`() {
         val image = XiaohongshuMediaParser.normalizeNote(
             JSONObject(
-                """{"noteId":"image-note","type":"normal","title":"图片标题","user":{"nickname":"作者"},"imageList":[{"urlDefault":"https://sns-img-qc.xhscdn.com/spectrum/image-one!webp"}]}""",
+                """{"noteId":"image-note","type":"normal","title":"图片标题","user":{"nickname":"作者","redId":"red-book-id"},"imageList":[{"urlDefault":"https://sns-img-qc.xhscdn.com/spectrum/image-one!webp"}]}""",
             ),
             "image-note",
             "https://www.xiaohongshu.com/explore/image-note",
@@ -103,7 +103,28 @@ class XiaohongshuMediaParserTest {
 
         assertEquals(MediaKind.IMAGE, image.kind)
         assertEquals("作者", image.author)
+        assertEquals("red-book-id", image.authorAccountId)
         assertEquals(MediaKind.VIDEO, video.kind)
         assertTrue(video.variants[0].urls[0].startsWith("https://sns-video-bd.xhscdn.com/"))
+    }
+
+    @Test
+    fun `builds contextual profile URL and reads public red id`() {
+        val note = JSONObject(
+            """{"user":{"userId":"user-1","nickname":"作者"}}""",
+        )
+        val profileUrl = XiaohongshuMediaParser.authorProfileUrl(
+            note,
+            "https://www.xiaohongshu.com/explore/note-1?xsec_token=a%2Bb%3D&xsec_source=app_share",
+        )
+        val profilePage = """
+            <script>window.__INITIAL_STATE__={"user":{"userPageData":{"basicInfo":{"nickname":"作者","redId":"public-123"}}}};</script>
+        """.trimIndent()
+
+        assertEquals(
+            "https://www.xiaohongshu.com/user/profile/user-1?xsec_token=a%2Bb%3D&xsec_source=pc_note",
+            profileUrl,
+        )
+        assertEquals("public-123", XiaohongshuMediaParser.profilePublicAccountId(profilePage))
     }
 }

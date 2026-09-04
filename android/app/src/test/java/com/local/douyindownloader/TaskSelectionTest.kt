@@ -14,4 +14,39 @@ class TaskSelectionTest {
     fun dropsIdsThatAreNoLongerVisible() {
         assertEquals(setOf("b"), reconcileTaskSelection(setOf("a", "b"), setOf("b", "c")))
     }
+
+    @Test
+    fun onlyInactiveTasksCanBeRedownloaded() {
+        assertEquals(true, isTaskRedownloadEligible(task(TaskStatus.COMPLETE)))
+        assertEquals(true, isTaskRedownloadEligible(task(TaskStatus.CANCELLED)))
+        assertEquals(false, isTaskRedownloadEligible(task(TaskStatus.RUNNING)))
+        assertEquals(false, isTaskRedownloadEligible(task(TaskStatus.QUEUED)))
+        assertEquals(
+            false,
+            isTaskRedownloadEligible(task(TaskStatus.FAILED, FileState.DELETE_FAILED)),
+        )
+    }
+
+    @Test
+    fun summarizesBatchRedownloadResults() {
+        assertEquals(
+            "已开始 2 个任务，1 个启动失败，1 个状态不允许重新下载",
+            batchRedownloadSummary(started = 2, failed = 1, skipped = 1),
+        )
+    }
+
+    private fun task(
+        status: TaskStatus,
+        fileState: FileState = FileState.AVAILABLE,
+    ) = TaskRecord(
+        id = "task",
+        createdAt = 0,
+        status = status,
+        stage = "",
+        progress = 0,
+        title = "",
+        outputs = emptyList(),
+        error = "",
+        fileState = fileState,
+    )
 }

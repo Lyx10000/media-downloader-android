@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -71,6 +72,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     var taskSelectionMode by remember { mutableStateOf(false) }
     var selectedTaskIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
+    var showBatchRedownloadDialog by remember { mutableStateOf(false) }
     var batchDeleteFiles by remember { mutableStateOf(false) }
     val destinations = remember {
         listOf(
@@ -133,9 +135,12 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             taskSelectionMode = false
             selectedTaskIds = emptySet()
             showBatchDeleteDialog = false
+            showBatchRedownloadDialog = false
             batchDeleteFiles = false
         }
     }
+    val selectedTasks = uiState.tasks.filter { it.id in selectedTaskIds }
+    val selectedRedownloadTasks = selectedTasks.filter(::isTaskRedownloadEligible)
 
     val openLoginEnvironment: (SourcePlatform) -> Unit = { platform ->
         viewModel.onLoginEnvironmentOpened(platform)
@@ -229,6 +234,12 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                                     Icon(Icons.Default.SelectAll, contentDescription = "全选任务")
                                 }
                                 IconButton(
+                                    onClick = { showBatchRedownloadDialog = true },
+                                    enabled = selectedRedownloadTasks.isNotEmpty(),
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "重新下载所选任务")
+                                }
+                                IconButton(
                                     onClick = { showBatchDeleteDialog = true },
                                     enabled = selectedTaskIds.isNotEmpty(),
                                 ) {
@@ -303,8 +314,46 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             }
         }
     }
+    if (showBatchRedownloadDialog) {
+        val skippedCount = selectedTasks.size - selectedRedownloadTasks.size
+        AlertDialog(
+            onDismissRequest = { showBatchRedownloadDialog = false },
+            title = { Text("重新下载所选任务") },
+            text = {
+                Column {
+                    Text(
+                        "将重新解析并下载 ${selectedRedownloadTasks.size} 个任务，删除这些任务已登记的" +
+                            "现有下载文件，并创建新的任务文件夹。",
+                    )
+                    if (skippedCount > 0) {
+                        Text("另有 $skippedCount 个任务正在运行或状态不允许，将自动跳过。")
+                    }
+                    Text("任务文件夹中的其他文件会保留。")
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (selectedRedownloadTasks.any(viewModel::requiresAllFilesAccess)) {
+                            requestAllFilesAccess()
+                            viewModel.showMessage("授权后请再次点击批量重新下载")
+                            showBatchRedownloadDialog = false
+                        } else {
+                            viewModel.retryTasks(selectedTasks)
+                            showBatchRedownloadDialog = false
+                            taskSelectionMode = false
+                            selectedTaskIds = emptySet()
+                        }
+                    },
+                    enabled = selectedRedownloadTasks.isNotEmpty(),
+                ) { Text("重新下载") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchRedownloadDialog = false }) { Text("取消") }
+            },
+        )
+    }
     if (showBatchDeleteDialog) {
-        val selectedTasks = uiState.tasks.filter { it.id in selectedTaskIds }
         AlertDialog(
             onDismissRequest = {
                 showBatchDeleteDialog = false

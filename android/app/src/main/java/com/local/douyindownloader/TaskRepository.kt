@@ -114,8 +114,9 @@ class RoomDownloadTaskRepository @Inject constructor(
 }
 
 internal fun TaskEntity.toRecord(): TaskRecord {
-    val sourcePlatform = runCatching { TaskSpec.fromJson(spec).result.platform }
-        .getOrDefault(SourcePlatform.DOUYIN)
+    val storedSpec = runCatching { TaskSpec.fromJson(spec) }.getOrNull()
+    val parsedResult = storedSpec?.result
+    val sourcePlatform = parsedResult?.platform ?: SourcePlatform.DOUYIN
     val outputJson = runCatching { JSONArray(outputs) }.getOrNull()
     val outputRecords = if (outputJson == null) {
         emptyList()
@@ -135,6 +136,8 @@ internal fun TaskEntity.toRecord(): TaskRecord {
         outputs = outputRecords,
         error = if (outputJson == null) error.ifBlank { "任务输出记录损坏" } else error,
         fileState = if (outputJson == null) FileState.UNKNOWN else FileState.fromWire(fileStatus),
+        author = parsedResult?.author.orEmpty(),
+        authorAccountId = parsedResult?.authorAccountId.orEmpty(),
     )
 }
 
