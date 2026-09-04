@@ -204,7 +204,15 @@ internal object ZhihuMediaParser {
         if (variants.isEmpty()) {
             throw PlatformParseException("MEDIA_EMPTY", "知乎视频没有返回可下载档位")
         }
-        val author = payload.optJSONObject("author") ?: JSONObject()
+        val author = sequenceOf(
+            payload.optJSONObject("author"),
+            video.optJSONObject("author"),
+            payload.optJSONObject("creator"),
+            video.optJSONObject("creator"),
+        ).filterNotNull().firstOrNull() ?: JSONObject()
+        val authorName = author.firstString("name", "nickname").ifBlank {
+            payload.firstString("author_name", "authorName", "creator_name", "creatorName")
+        }
         return ParseResult(
             ok = true,
             platform = SourcePlatform.ZHIHU,
@@ -212,7 +220,7 @@ internal object ZhihuMediaParser {
             canonicalUrl = canonicalUrl,
             referer = canonicalUrl,
             kind = MediaKind.VIDEO,
-            author = author.firstString("name", "nickname"),
+            author = authorName,
             description = payload.firstString("title", "description", "excerpt"),
             coverUrl = payload.firstString("image_url", "image_cover").ifBlank {
                 video.firstString("thumbnail", "image_url")

@@ -38,6 +38,39 @@ class ZhihuMediaParserTest {
     }
 
     @Test
+    fun standaloneVideoReadsAuthorFromNestedVideoOrCreatorShapes() {
+        val nestedAuthor = JSONObject(
+            """
+            {
+              "title":"嵌套作者视频",
+              "video":{
+                "author":{"nickname":"嵌套作者"},
+                "playlist":{"hd":{"play_url":"https://vdn.vzuu.com/a.mp4"}}
+              }
+            }
+            """.trimIndent(),
+        )
+        val creator = JSONObject(
+            """
+            {
+              "title":"创作者字段视频",
+              "creator":{"name":"创作者"},
+              "video":{"playlist":{"hd":{"play_url":"https://vdn.vzuu.com/b.mp4"}}}
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals(
+            "嵌套作者",
+            ZhihuMediaParser.normalizeStandaloneVideo(nestedAuthor, "1", "https://www.zhihu.com/zvideo/1").author,
+        )
+        assertEquals(
+            "创作者",
+            ZhihuMediaParser.normalizeStandaloneVideo(creator, "2", "https://www.zhihu.com/zvideo/2").author,
+        )
+    }
+
+    @Test
     fun richContentPreservesTextImageVideoOrderAndFiltersUnsafeContent() {
         val parsed = ZhihuRichContentParser.parse(
             """

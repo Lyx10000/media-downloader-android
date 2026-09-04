@@ -4,11 +4,55 @@ import androidx.work.ExistingWorkPolicy
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 data class TaskRedownloadResult(
     val success: Boolean,
     val message: String,
+)
+
+internal enum class RedownloadCredential(val wireValue: String) {
+    ANONYMOUS("anonymous"),
+    STORED_COOKIE("stored_cookie"),
+}
+
+internal fun redownloadCredentialPlan(
+    platform: SourcePlatform,
+    hasStoredCookie: Boolean,
+): List<RedownloadCredential> = when (platform) {
+    SourcePlatform.XIAOHONGSHU -> buildList {
+        add(RedownloadCredential.ANONYMOUS)
+        add(RedownloadCredential.ANONYMOUS)
+        if (hasStoredCookie) add(RedownloadCredential.STORED_COOKIE)
+    }
+    SourcePlatform.DOUYIN -> List(3) {
+        if (hasStoredCookie) RedownloadCredential.STORED_COOKIE else RedownloadCredential.ANONYMOUS
+    }
+    SourcePlatform.ZHIHU -> listOf(
+        if (hasStoredCookie) RedownloadCredential.STORED_COOKIE else RedownloadCredential.ANONYMOUS,
+    )
+}
+
+internal fun isRetriableRedownloadParseFailure(errorCode: String): Boolean = errorCode in setOf(
+    "AUTH_OR_RISK",
+    "DETAIL_EMPTY",
+    "LOGIN_REQUIRED",
+    "NETWORK",
+    "HTTP_ERROR",
+)
+
+internal fun hasReusableDownloadSources(result: ParseResult): Boolean = when (result.kind) {
+    MediaKind.VIDEO -> result.variants.any { it.urls.isNotEmpty() }
+    MediaKind.IMAGE -> result.imageCandidates.any { it.isNotEmpty() } || result.imageUrls.isNotEmpty()
+    MediaKind.DOCUMENT -> result.document != null
+}
+
+private data class RedownloadParseResolution(
+    val result: ParseResult,
+    val usedStoredSources: Boolean,
+    val attempts: Int,
+    val lastFailure: ParseResult? = null,
 )
 
 @Singleton
@@ -39,7 +83,8 @@ class TaskRedownloadCoordinator @Inject constructor(
             put("platform", originalSpec.result.platform.wireValue)
             put("kind", originalSpec.result.kind.wireValue)
         })
-        val refreshed = parser.parse(originalSpec.stableSource(), cookieHeader)
+        val resolution = resolveDownloadSources(originalSpec, cookieHeader, task.id)
+        val refreshed = resolution.result
         if (!refreshed.ok) {
             val hint = if (refreshed.errorCode in setOf(
                     "AUTH_OR_RISK",
@@ -55,6 +100,8 @@ class TaskRedownloadCoordinator @Inject constructor(
             logger.event(task.id, "REDOWNLOAD", "REPARSE_FAILED", JSONObject().apply {
                 put("code", refreshed.errorCode)
                 put("message", refreshed.message)
+                put("attempts", resolution.attempts)
+                put("stored_sources_available", hasReusableDownloadSources(originalSpec.result))
             })
             return failure(hint)
         }
@@ -94,6 +141,9 @@ class TaskRedownloadCoordinator @Inject constructor(
             put("variant", match.index)
             put("exact_match", match.exact)
             put("images", refreshed.imageCandidates.size)
+            put("attempts", resolution.attempts)
+            put("used_stored_sources", resolution.usedStoredSources)
+            put("last_failure_code", resolution.lastFailure?.errorCode.orEmpty())
         })
         try {
             scheduler.enqueue(task.id, ExistingWorkPolicy.REPLACE)
@@ -104,7 +154,9 @@ class TaskRedownloadCoordinator @Inject constructor(
             repository.update(task.id, TaskStatus.FAILED, "启动重新下载失败", 0, message)
             return failure("启动重新下载失败：$message")
         }
-        val message = if (refreshed.kind == MediaKind.VIDEO && !match.exact) {
+        val message = if (resolution.usedStoredSources) {
+            "平台重新解析受限，已使用任务保存的原资源地址重试下载"
+        } else if (refreshed.kind == MediaKind.VIDEO && !match.exact) {
             if (previous == null) "已选择当前可获得的最高档位"
             else "原清晰度已不可用，已选择当前最接近的档位"
         } else {
@@ -114,6 +166,80 @@ class TaskRedownloadCoordinator @Inject constructor(
     }
 
     private fun failure(message: String) = TaskRedownloadResult(false, message)
+
+    private suspend fun resolveDownloadSources(
+        originalSpec: TaskSpec,
+        cookieHeader: String,
+        taskId: String,
+    ): RedownloadParseResolution {
+        val source = originalSpec.stableSource()
+        val attempts = redownloadCredentialPlan(
+            originalSpec.result.platform,
+            hasStoredCookie = cookieHeader.isNotBlank(),
+        )
+        var lastFailure: ParseResult? = null
+        var attempted = 0
+        for ((index, credential) in attempts.withIndex()) {
+            attempted += 1
+            logger.event(taskId, "REDOWNLOAD", "REPARSE_ATTEMPT_STARTED", JSONObject().apply {
+                put("attempt", attempted)
+                put("max_attempts", attempts.size)
+                put("credential", credential.wireValue)
+            })
+            val result = parser.parse(
+                source,
+                if (credential == RedownloadCredential.STORED_COOKIE) cookieHeader else "",
+            )
+            if (result.ok) {
+                return RedownloadParseResolution(
+                    result = mergeStableMetadata(result, originalSpec.result),
+                    usedStoredSources = false,
+                    attempts = attempted,
+                    lastFailure = lastFailure,
+                )
+            }
+            lastFailure = result
+            logger.event(taskId, "REDOWNLOAD", "REPARSE_ATTEMPT_FAILED", JSONObject().apply {
+                put("attempt", attempted)
+                put("credential", credential.wireValue)
+                put("code", result.errorCode)
+                put("message", result.message)
+            })
+            if (!isRetriableRedownloadParseFailure(result.errorCode)) break
+            if (index < attempts.lastIndex) delay(REPARSE_RETRY_DELAYS_MS[index.coerceAtMost(REPARSE_RETRY_DELAYS_MS.lastIndex)])
+        }
+        if (hasReusableDownloadSources(originalSpec.result)) {
+            logger.event(taskId, "REDOWNLOAD", "STORED_SOURCES_FALLBACK", JSONObject().apply {
+                put("attempts", attempted)
+                put("last_code", lastFailure?.errorCode.orEmpty())
+                put("kind", originalSpec.result.kind.wireValue)
+            })
+            return RedownloadParseResolution(
+                result = originalSpec.result,
+                usedStoredSources = true,
+                attempts = attempted,
+                lastFailure = lastFailure,
+            )
+        }
+        return RedownloadParseResolution(
+            result = lastFailure ?: ParseResult(
+                ok = false,
+                platform = originalSpec.result.platform,
+                errorCode = "REPARSE_FAILED",
+                message = "重新解析没有返回可用资源",
+            ),
+            usedStoredSources = false,
+            attempts = attempted,
+            lastFailure = lastFailure,
+        )
+    }
+
+    private fun mergeStableMetadata(fresh: ParseResult, stored: ParseResult): ParseResult = fresh.copy(
+        author = fresh.author.ifBlank { stored.author },
+        authorAccountId = fresh.authorAccountId.ifBlank { stored.authorAccountId },
+        description = fresh.description.ifBlank { stored.description },
+        coverUrl = fresh.coverUrl.ifBlank { stored.coverUrl },
+    )
 
     private fun resolveStorage(
         spec: TaskSpec,
@@ -136,5 +262,9 @@ class TaskRedownloadCoordinator @Inject constructor(
                 StorageMode.DEFAULT to ""
             }
         }
+    }
+
+    companion object {
+        private val REPARSE_RETRY_DELAYS_MS = longArrayOf(350L, 800L)
     }
 }
