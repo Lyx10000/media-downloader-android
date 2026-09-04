@@ -2,6 +2,7 @@ package com.local.douyindownloader
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -95,6 +96,10 @@ class TaskFolderNavigator @Inject constructor(
             put("action", attempt.intent.action.orEmpty())
             put("authority", attempt.intent.data?.authority.orEmpty())
             put("handler", handler?.packageName.orEmpty())
+            put(
+                "write_grant",
+                attempt.intent.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0,
+            )
         })
         if (handler == null) return@withContext false
 
@@ -165,7 +170,8 @@ class TaskFolderNavigator @Inject constructor(
         fun directoryViewIntent(uri: Uri, mimeType: String): Intent =
             Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = ClipData.newRawUri("下载任务文件夹", uri)
+                addFlags(DIRECTORY_VIEW_GRANT_FLAGS)
             }
 
         fun documentTreeIntent(initialUri: Uri?): Intent =
@@ -181,6 +187,11 @@ class TaskFolderNavigator @Inject constructor(
             }
     }
 }
+
+internal const val DIRECTORY_VIEW_GRANT_FLAGS: Int =
+    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
 
 internal fun defaultDirectoryDocumentId(taskFolder: String?): String = buildString {
     append("primary:Download/DouyinDownloader")
