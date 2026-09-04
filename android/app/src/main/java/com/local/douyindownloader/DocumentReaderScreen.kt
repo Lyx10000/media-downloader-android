@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -65,7 +66,7 @@ internal fun DocumentReaderScreen(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             TopAppBar(
-                title = { Text(task.title.ifBlank { "知乎文档" }) },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回文件管理")
@@ -116,7 +117,12 @@ private fun DocumentWebView(
     val assetLoader = remember(outputs) {
         WebViewAssetLoader.Builder()
             .setDomain(ASSET_DOMAIN)
-            .addPathHandler(ASSET_PATH, DocumentMediaPathHandler(context, outputs))
+            .addPathHandler(
+                ASSET_PATH,
+                DocumentMediaPathHandler(context, outputs) { assetId, reason ->
+                    viewModel.onDocumentMediaLoadFailed(taskId, assetId, reason)
+                },
+            )
             .build()
     }
     val client = remember(assetLoader, outputs, taskId) {
@@ -179,24 +185,40 @@ private fun DocumentWebView(
 private class DocumentMediaPathHandler(
     context: Context,
     private val outputs: Map<String, TaskOutput>,
+    private val onFailure: (assetId: String, reason: String) -> Unit,
 ) : WebViewAssetLoader.PathHandler {
     private val resolver = context.applicationContext.contentResolver
+    private val reportedFailures = mutableSetOf<String>()
 
     override fun handle(path: String): WebResourceResponse? {
         val assetId = Uri.decode(path.substringBefore('/'))
-        val output = outputs[assetId] ?: return null
-        val uri = runCatching { Uri.parse(output.uri) }.getOrNull() ?: return null
-        val input = runCatching {
+        val output = outputs[assetId] ?: return failed(assetId, "没有匹配到本地文件")
+        val uri = runCatching { Uri.parse(output.uri) }.getOrNull()
+            ?: return failed(assetId, "本地文件地址无效")
+        val input = runCatching<java.io.InputStream?> {
             when (uri.scheme) {
                 "file" -> uri.path?.let(::File)?.inputStream()
-                else -> resolver.openInputStream(uri)
+                else -> resolver.openFileDescriptor(uri, "r")
+                    ?.let { descriptor -> ParcelFileDescriptor.AutoCloseInputStream(descriptor) }
             }
-        }.getOrNull() ?: return null
+        }.onFailure { error ->
+            report(assetId, error.message ?: error.javaClass.simpleName)
+        }.getOrNull() ?: return failed(assetId, "无法打开本地文件流")
         return WebResourceResponse(
             mediaMimeType(output.displayName, output.mimeType),
             null,
             input,
         )
+    }
+
+    private fun failed(assetId: String, reason: String): WebResourceResponse? {
+        report(assetId, reason)
+        return null
+    }
+
+    @Synchronized
+    private fun report(assetId: String, reason: String) {
+        if (reportedFailures.add(assetId)) onFailure(assetId, reason)
     }
 }
 

@@ -113,12 +113,6 @@ internal fun HomeScreen(
                 )
             }
             item {
-                PlatformCredentialCard(
-                    states = uiState.platformCredentialStates,
-                    onOpenLoginEnvironment = onOpenLoginEnvironment,
-                )
-            }
-            item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     FilledTonalButton(onClick = {
                         val clipboard = context.getSystemService(ClipboardManager::class.java)
@@ -133,6 +127,12 @@ internal fun HomeScreen(
                         Text("解析作品")
                     }
                 }
+            }
+            item {
+                PlatformCredentialCard(
+                    states = uiState.platformCredentialStates,
+                    onOpenLoginEnvironment = onOpenLoginEnvironment,
+                )
             }
             if (uiState.tasks.isNotEmpty()) {
                 item {

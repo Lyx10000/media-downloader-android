@@ -107,7 +107,7 @@ internal object DocumentHtmlRenderer {
         if (localUrl != null && asset != null) {
             append("<a href=\"app-media://open/").append(attribute(asset.id)).append("\">")
         }
-        append("<img loading=\"lazy\" src=\"").append(attribute(source)).append("\" alt=\"")
+        append("<img src=\"").append(attribute(source)).append("\" alt=\"")
             .append(attribute(asset?.alt.orEmpty().ifBlank { "图片" })).append("\">")
         if (localUrl != null && asset != null) append("</a>")
         if (asset?.alt?.isNotBlank() == true) append("<figcaption>").append(escape(asset.alt)).append("</figcaption>")

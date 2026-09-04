@@ -105,6 +105,9 @@ internal fun TasksScreen(
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
     onManageTask: (String) -> Unit,
+    selectionMode: Boolean,
+    selectedTaskIds: Set<String>,
+    onToggleTaskSelection: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
@@ -160,7 +163,13 @@ internal fun TasksScreen(
                     .fillMaxWidth()
                     .alpha(if (task.fileState == FileState.MISSING) 0.62f else 1f)
                     .then(
-                        if (recoverable) Modifier.clickable { recoveryTask = task }
+                        if (selectionMode) {
+                            if (task.status != TaskStatus.DELETING) {
+                                Modifier.clickable { onToggleTaskSelection(task.id) }
+                            } else {
+                                Modifier
+                            }
+                        } else if (recoverable) Modifier.clickable { recoveryTask = task }
                         else Modifier,
                     ),
                 colors = CardDefaults.outlinedCardColors(containerColor = containerColor),
@@ -170,16 +179,25 @@ internal fun TasksScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (selectionMode) {
+                            Checkbox(
+                                checked = task.id in selectedTaskIds,
+                                onCheckedChange = { onToggleTaskSelection(task.id) },
+                                enabled = task.status != TaskStatus.DELETING,
+                            )
+                        }
                         Text(
                             task.title,
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
-                        IconButton(
-                            onClick = { pendingDelete = task; deleteFiles = false },
-                            enabled = task.status != TaskStatus.DELETING,
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = "删除任务")
+                        if (!selectionMode) {
+                            IconButton(
+                                onClick = { pendingDelete = task; deleteFiles = false },
+                                enabled = task.status != TaskStatus.DELETING,
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "删除任务")
+                            }
                         }
                     }
                     Row(
@@ -221,20 +239,20 @@ internal fun TasksScreen(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    if (task.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)) {
+                    if (!selectionMode && task.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)) {
                         OutlinedButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
                     }
                     if (task.error.isNotBlank()) {
                         Text(task.error, color = MaterialTheme.colorScheme.error)
                     }
-                    if (task.status == TaskStatus.FAILED && task.fileState != FileState.DELETE_FAILED) {
+                    if (!selectionMode && task.status == TaskStatus.FAILED && task.fileState != FileState.DELETE_FAILED) {
                         Button(onClick = { viewModel.retryTask(task) }) {
                             Icon(Icons.Default.Refresh, contentDescription = null)
                             Spacer(Modifier.size(8.dp))
                             Text("重试")
                         }
                     }
-                    if (filesAvailable) {
+                    if (!selectionMode && filesAvailable) {
                         FlowRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
@@ -271,7 +289,7 @@ internal fun TasksScreen(
                             }
                         }
                     }
-                    if (isPreviewExpanded && filesAvailable) {
+                    if (!selectionMode && isPreviewExpanded && filesAvailable) {
                         TaskPreviewPanel(
                             task = task,
                             mediaState = mediaPreviewState,
@@ -407,6 +425,12 @@ internal fun TasksScreen(
         )
     }
 }
+
+internal fun toggleTaskSelection(selected: Set<String>, taskId: String): Set<String> =
+    if (taskId in selected) selected - taskId else selected + taskId
+
+internal fun reconcileTaskSelection(selected: Set<String>, available: Set<String>): Set<String> =
+    selected.intersect(available)
 
 @Composable
 private fun PlatformBadge(platform: SourcePlatform) {

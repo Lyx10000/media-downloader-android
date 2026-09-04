@@ -591,6 +591,47 @@ class MainViewModel @Inject internal constructor(
         }
     }
 
+    fun deleteTasks(tasks: List<TaskRecord>, deleteFiles: Boolean) {
+        val uniqueTasks = tasks.distinctBy(TaskRecord::id)
+        if (uniqueTasks.isEmpty()) return
+        uniqueTasks.forEach { task ->
+            if (_expandedTaskId.value == task.id) {
+                if (_fullscreenTaskId.value == task.id) _fullscreenTaskId.value = null
+                mediaPreviewCoordinator.stopIfTask(task.id, "BATCH_DELETE_REQUESTED")
+                _expandedTaskId.value = null
+            }
+        }
+        viewModelScope.launch {
+            val results = uniqueTasks.map { task ->
+                runCatching { deletionCoordinator.deleteTask(task.id, deleteFiles) }
+                    .getOrElse { error ->
+                        logger.event(task.id, "DELETE", "BATCH_DELETE_FAILED", JSONObject().apply {
+                            put("type", error.javaClass.name)
+                            put("message", Redactor.sanitize(error.message ?: error.javaClass.simpleName))
+                        })
+                        TaskDeleteResult(false, "删除失败")
+                    }
+            }
+            val deleted = results.count(TaskDeleteResult::success)
+            val failed = results.size - deleted
+            message = when {
+                failed == 0 -> "已删除 $deleted 个任务"
+                deleted == 0 -> "所选任务均删除失败，请查看任务状态或诊断日志"
+                else -> "已删除 $deleted 个任务，$failed 个任务删除失败"
+            }
+            refreshTasks()
+        }
+    }
+
+    internal fun onDocumentMediaLoadFailed(taskId: String, assetId: String, reason: String) {
+        runCatching {
+            logger.event(taskId, "DOCUMENT_READER", "LOCAL_MEDIA_LOAD_FAILED", JSONObject().apply {
+                put("asset_id", assetId)
+                put("message", Redactor.sanitize(reason))
+            })
+        }
+    }
+
     fun requiresAllFilesAccess(task: TaskRecord): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) {
             return false

@@ -57,6 +57,7 @@ class DocumentReaderTest {
         assertTrue(html.contains("document-media/image-1"))
         assertTrue(html.contains("document-media/video-1"))
         assertTrue(html.contains("app-media://open/video-1"))
+        assertFalse(html.contains("loading=\"lazy\""))
         assertFalse(html.contains("<script>alert(1)</script>"))
         assertFalse(html.contains("<img src=x onerror=alert(1)>"))
     }

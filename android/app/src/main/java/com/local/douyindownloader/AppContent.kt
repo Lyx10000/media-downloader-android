@@ -10,24 +10,37 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -54,6 +68,10 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     var managedTaskId by remember { mutableStateOf<String?>(null) }
     var readerTaskId by remember { mutableStateOf<String?>(null) }
     var loginPlatform by rememberSaveable { mutableStateOf<SourcePlatform?>(null) }
+    var taskSelectionMode by remember { mutableStateOf(false) }
+    var selectedTaskIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showBatchDeleteDialog by remember { mutableStateOf(false) }
+    var batchDeleteFiles by remember { mutableStateOf(false) }
     val destinations = remember {
         listOf(
             Destination("首页", Icons.Default.Home),
@@ -105,6 +123,18 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     }
     LaunchedEffect(uiState.message) {
         if (uiState.message.isNotBlank()) snackbar.showSnackbar(viewModel.consumeMessage())
+    }
+    val selectableTaskIds = uiState.tasks
+        .filter { it.status != TaskStatus.DELETING }
+        .mapTo(linkedSetOf(), TaskRecord::id)
+    LaunchedEffect(destination, selectableTaskIds) {
+        selectedTaskIds = reconcileTaskSelection(selectedTaskIds, selectableTaskIds)
+        if (destination != 1 || selectableTaskIds.isEmpty()) {
+            taskSelectionMode = false
+            selectedTaskIds = emptySet()
+            showBatchDeleteDialog = false
+            batchDeleteFiles = false
+        }
     }
 
     val openLoginEnvironment: (SourcePlatform) -> Unit = { platform ->
@@ -164,14 +194,70 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        topBar = { TopAppBar(title = { Text(destinations[destination].label) }) },
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = {
+                        Text(
+                            if (destination == 1 && taskSelectionMode) {
+                                "已选择 ${selectedTaskIds.size} 项"
+                            } else {
+                                destinations[destination].label
+                            },
+                        )
+                    },
+                    navigationIcon = {
+                        if (destination == 1 && taskSelectionMode) {
+                            IconButton(onClick = {
+                                taskSelectionMode = false
+                                selectedTaskIds = emptySet()
+                            }) {
+                                Icon(Icons.Default.Close, contentDescription = "退出多选")
+                            }
+                        }
+                    },
+                    actions = {
+                        if (destination == 1) {
+                            if (taskSelectionMode) {
+                                IconButton(onClick = {
+                                    selectedTaskIds = if (selectedTaskIds == selectableTaskIds) {
+                                        emptySet()
+                                    } else {
+                                        selectableTaskIds
+                                    }
+                                }) {
+                                    Icon(Icons.Default.SelectAll, contentDescription = "全选任务")
+                                }
+                                IconButton(
+                                    onClick = { showBatchDeleteDialog = true },
+                                    enabled = selectedTaskIds.isNotEmpty(),
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "删除所选任务")
+                                }
+                            } else if (selectableTaskIds.isNotEmpty()) {
+                                IconButton(onClick = { taskSelectionMode = true }) {
+                                    Icon(Icons.Default.DeleteSweep, contentDescription = "批量删除任务")
+                                }
+                            }
+                        }
+                    },
+                )
+                HorizontalDivider()
+            }
+        },
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             NavigationBar {
                 destinations.forEachIndexed { index, item ->
                     NavigationBarItem(
                         selected = destination == index,
-                        onClick = { destination = index },
+                        onClick = {
+                            destination = index
+                            if (index != 1) {
+                                taskSelectionMode = false
+                                selectedTaskIds = emptySet()
+                            }
+                        },
                         icon = { Icon(item.icon, contentDescription = item.label) },
                         label = { Text(item.label) },
                     )
@@ -198,6 +284,11 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,
                     onManageTask = { taskId -> managedTaskId = taskId },
+                    selectionMode = taskSelectionMode,
+                    selectedTaskIds = selectedTaskIds,
+                    onToggleTaskSelection = { taskId ->
+                        selectedTaskIds = toggleTaskSelection(selectedTaskIds, taskId)
+                    },
                 )
                 2 -> DiagnosticsScreen(
                     logText = uiState.logText,
@@ -211,5 +302,53 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                 )
             }
         }
+    }
+    if (showBatchDeleteDialog) {
+        val selectedTasks = uiState.tasks.filter { it.id in selectedTaskIds }
+        AlertDialog(
+            onDismissRequest = {
+                showBatchDeleteDialog = false
+                batchDeleteFiles = false
+            },
+            title = { Text("删除所选任务") },
+            text = {
+                Column {
+                    Text("确定删除所选的 ${selectedTasks.size} 个任务吗？")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = batchDeleteFiles,
+                            onCheckedChange = { batchDeleteFiles = it },
+                        )
+                        Text("同时删除下载内容和空任务文件夹")
+                    }
+                    Text("任务文件夹中的其他文件不会被删除。")
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (batchDeleteFiles && selectedTasks.any(viewModel::requiresAllFilesAccess)) {
+                            requestAllFilesAccess()
+                        } else {
+                            viewModel.deleteTasks(selectedTasks, batchDeleteFiles)
+                            showBatchDeleteDialog = false
+                            batchDeleteFiles = false
+                            taskSelectionMode = false
+                            selectedTaskIds = emptySet()
+                        }
+                    },
+                    enabled = selectedTasks.isNotEmpty(),
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showBatchDeleteDialog = false
+                    batchDeleteFiles = false
+                }) { Text("取消") }
+            },
+        )
     }
 }

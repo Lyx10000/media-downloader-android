@@ -82,7 +82,11 @@ class DiagnosticLogger @Inject constructor(
         .filter { it.extension == "jsonl" }
         .take(8)
         .joinToString("\n") { file ->
-            "===== ${file.name} =====\n" + file.readText().takeLast(maxChars / 8)
+            val content = file.readText()
+            val limit = maxChars / 8
+            val tail = content.takeLast(limit)
+            val completeLines = if (content.length > limit) tail.substringAfter('\n') else tail
+            "===== ${file.name} =====\n" + prettyPrintJsonLines(completeLines)
         }
 
     fun clear() {
@@ -142,3 +146,10 @@ class DiagnosticLogger @Inject constructor(
         }
     }
 }
+
+internal fun prettyPrintJsonLines(value: String): String = value
+    .lineSequence()
+    .filter(String::isNotBlank)
+    .joinToString("\n\n") { line ->
+        runCatching { JSONObject(line).toString(2) }.getOrDefault(line)
+    }
