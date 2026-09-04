@@ -52,4 +52,10 @@ abstract class RepositoryModule {
     abstract fun bindDownloadTaskRepository(
         repository: RoomDownloadTaskRepository,
     ): DownloadTaskRepository
+
+    @Binds
+    @Singleton
+    internal abstract fun bindManagedFileGateway(
+        gateway: AndroidManagedFileGateway,
+    ): ManagedFileGateway
 }

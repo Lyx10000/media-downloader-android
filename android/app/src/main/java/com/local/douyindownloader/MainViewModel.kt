@@ -1,7 +1,9 @@
 package com.local.douyindownloader
 
 import android.app.Application
+import android.content.ClipData
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -67,7 +69,7 @@ data class MainUiState(
 )
 
 @HiltViewModel
-class MainViewModel @Inject constructor(
+class MainViewModel @Inject internal constructor(
     application: Application,
     private val parser: ParserGateway,
     private val store: DownloadTaskRepository,
@@ -82,6 +84,7 @@ class MainViewModel @Inject constructor(
     private val mediaPreviewCoordinator: MediaPreviewCoordinator,
     private val taskPreviewResolver: TaskPreviewResolver,
     private val taskFolderNavigator: TaskFolderNavigator,
+    private val taskFileOperationCoordinator: TaskFileOperationCoordinator,
 ) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -90,6 +93,8 @@ class MainViewModel @Inject constructor(
     internal val mediaPreviewState: StateFlow<MediaPreviewState> = mediaPreviewCoordinator.state
     private val _fullscreenTaskId = MutableStateFlow<String?>(null)
     internal val fullscreenTaskId: StateFlow<String?> = _fullscreenTaskId.asStateFlow()
+    private val _fileOperationTaskId = MutableStateFlow<String?>(null)
+    internal val fileOperationTaskId: StateFlow<String?> = _fileOperationTaskId.asStateFlow()
 
     var inputText: String
         get() = _uiState.value.inputText
@@ -405,6 +410,100 @@ class MainViewModel @Inject constructor(
             }
             val result = taskFolderNavigator.open(context, task.id, spec)
             if (result.message.isNotBlank()) message = result.message
+        }
+    }
+
+    internal fun onFileManagerOpened(taskId: String) {
+        mediaPreviewCoordinator.stopIfTask(taskId, "FILE_MANAGER_OPENED")
+        runCatching {
+            logger.event(taskId, "FILE_MANAGER", "FILE_MANAGER_OPENED")
+        }
+    }
+
+    internal suspend fun describeManagedFiles(outputs: List<TaskOutput>): List<ManagedFileItem> =
+        taskFileOperationCoordinator.describe(outputs)
+
+    internal fun openManagedFile(context: Context, taskId: String, item: ManagedFileItem) {
+        if (!item.available) {
+            message = "文件已被删除"
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(
+                item.uri,
+                mediaMimeType(item.output.displayName, item.output.mimeType),
+            )
+            clipData = ClipData.newRawUri("下载文件", item.uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { context.startActivity(intent) }
+            .onFailure { error ->
+                runCatching {
+                    logger.event(taskId, "FILE_MANAGER", "FILE_OPEN_FAILED", JSONObject().apply {
+                        put("authority", item.uri.authority.orEmpty())
+                        put("error", error.javaClass.name)
+                        put("message", Redactor.sanitize(error.message.orEmpty()))
+                    })
+                }
+                message = "没有可打开该文件的应用"
+            }
+    }
+
+    internal fun renameManagedFile(taskId: String, outputUri: String, requestedBase: String) {
+        launchFileOperation(taskId) {
+            taskFileOperationCoordinator.rename(taskId, outputUri, requestedBase)
+        }
+    }
+
+    internal fun deleteManagedFiles(taskId: String, outputUris: Set<String>) {
+        launchFileOperation(taskId) {
+            taskFileOperationCoordinator.delete(taskId, outputUris)
+        }
+    }
+
+    internal fun transferManagedFiles(
+        taskId: String,
+        outputUris: Set<String>,
+        destinationTree: Uri,
+        mode: ManagedTransferMode,
+    ) {
+        launchFileOperation(taskId) {
+            taskFileOperationCoordinator.transfer(taskId, outputUris, destinationTree, mode)
+        }
+    }
+
+    internal fun showMessage(value: String) {
+        message = value
+    }
+
+    private fun launchFileOperation(
+        taskId: String,
+        operation: suspend () -> ManagedFileOperationResult,
+    ) {
+        if (_fileOperationTaskId.value != null) {
+            message = "另一个文件操作正在进行"
+            return
+        }
+        _fileOperationTaskId.value = taskId
+        mediaPreviewCoordinator.stopIfTask(taskId, "FILE_OPERATION_REQUESTED")
+        viewModelScope.launch {
+            try {
+                message = operation().message
+                refreshTasks()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val detail = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+                runCatching {
+                    logger.event(taskId, "FILE_MANAGER", "FILE_OPERATION_FAILED", JSONObject().apply {
+                        put("error", error.javaClass.name)
+                        put("message", detail)
+                    })
+                }
+                message = "文件操作失败：$detail"
+            } finally {
+                _fileOperationTaskId.value = null
+            }
         }
     }
 

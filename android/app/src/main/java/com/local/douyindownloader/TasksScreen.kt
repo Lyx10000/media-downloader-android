@@ -104,6 +104,7 @@ internal fun TasksScreen(
     viewModel: MainViewModel,
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
+    onManageTask: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
@@ -248,10 +249,10 @@ internal fun TasksScreen(
                                 Spacer(Modifier.size(8.dp))
                                 Text(if (isPreviewExpanded) "收起" else "预览")
                             }
-                            OutlinedButton(onClick = { viewModel.openTaskFolder(context, task) }) {
+                            OutlinedButton(onClick = { onManageTask(task.id) }) {
                                 Icon(Icons.Default.FolderOpen, contentDescription = null)
                                 Spacer(Modifier.size(8.dp))
-                                Text("文件夹")
+                                Text("管理文件")
                             }
                             Button(onClick = {
                                 val files = resolveShareableFiles(

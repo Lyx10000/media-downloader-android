@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -49,6 +50,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     var destination by remember { mutableIntStateOf(0) }
+    var managedTaskId by remember { mutableStateOf<String?>(null) }
     val destinations = remember {
         listOf(
             Destination("首页", Icons.Default.Home),
@@ -102,6 +104,22 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
         if (uiState.message.isNotBlank()) snackbar.showSnackbar(viewModel.consumeMessage())
     }
 
+    val managedTask = managedTaskId?.let { taskId ->
+        uiState.tasks.firstOrNull { it.id == taskId }
+    }
+    if (managedTaskId != null && managedTask == null) {
+        LaunchedEffect(managedTaskId) { managedTaskId = null }
+    }
+    if (managedTask != null) {
+        TaskFileManagerScreen(
+            task = managedTask,
+            viewModel = viewModel,
+            snackbarHostState = snackbar,
+            onBack = { managedTaskId = null },
+        )
+        return
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = { TopAppBar(title = { Text(destinations[destination].label) }) },
@@ -136,6 +154,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                     viewModel = viewModel,
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,
+                    onManageTask = { taskId -> managedTaskId = taskId },
                 )
                 2 -> DiagnosticsScreen(
                     logText = uiState.logText,
