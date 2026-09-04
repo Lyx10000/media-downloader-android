@@ -89,4 +89,68 @@ class ModelTypesTest {
         assertEquals(output, TaskOutput.fromJson(output.toJson()))
     }
 
+    @Test
+    fun redownloadFolderNeverReusesTheOriginalSecondLevelName() {
+        val timestamp = 1_788_564_794_293L
+        val taskId = "b30c3272-b769-4593-82a5-cb24d5cbd324"
+
+        assertEquals(
+            "${taskFolderName(timestamp, taskId)}_r293",
+            redownloadTaskFolderName(timestamp, taskId),
+        )
+    }
+
+    @Test
+    fun pendingRedownloadRoundTripsAndKeepsOriginalSpecUntilCommit() {
+        val originalOutput = TaskOutput(
+            uri = "content://downloads/old",
+            displayName = "old.mp4",
+            mimeType = "video/mp4",
+        )
+        val freshResult = ParseResult(
+            ok = true,
+            platform = SourcePlatform.ZHIHU,
+            contentId = "2",
+            canonicalUrl = "https://www.zhihu.com/zvideo/2",
+            kind = MediaKind.VIDEO,
+            author = "新作者",
+            description = "新标题",
+            variants = listOf(
+                MediaVariant(1920, 1080, 1, 30, "H.264", 10, "api", listOf("https://cdn/new.mp4")),
+            ),
+        )
+        val original = TaskSpec(
+            taskId = "task",
+            createdAt = 1,
+            result = freshResult.copy(author = "旧作者", description = "旧标题"),
+            variantIndex = 0,
+            mode = DownloadMode.MERGE_KEEP,
+            storageMode = StorageMode.DEFAULT,
+            taskFolder = "old-folder",
+            pendingRedownload = PendingRedownload(
+                result = freshResult,
+                variantIndex = 0,
+                storageMode = StorageMode.DEFAULT,
+                storageRoot = "",
+                taskFolder = "new-folder",
+                previousOutputs = listOf(originalOutput),
+                previousFileState = FileState.AVAILABLE,
+                stagedOutputs = listOf(originalOutput.copy(uri = "content://downloads/staged")),
+            ),
+        )
+
+        val restored = TaskSpec.fromJson(original.toJson())
+        val execution = restored.executionSpec()
+        val committed = restored.committedRedownloadSpec()
+
+        assertEquals("old-folder", restored.taskFolder)
+        assertEquals("旧作者", restored.result.author)
+        assertEquals(listOf(originalOutput), restored.pendingRedownload?.previousOutputs)
+        assertEquals("content://downloads/staged", restored.pendingRedownload?.stagedOutputs?.single()?.uri)
+        assertEquals("new-folder", execution.taskFolder)
+        assertEquals("新作者", execution.result.author)
+        assertEquals("new-folder", committed.taskFolder)
+        assertEquals(null, committed.pendingRedownload)
+    }
+
 }

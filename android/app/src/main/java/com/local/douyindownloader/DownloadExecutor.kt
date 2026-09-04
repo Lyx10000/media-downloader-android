@@ -31,17 +31,46 @@ class DownloadExecutor @Inject constructor(
         taskId: String,
         spec: TaskSpec,
         folder: File,
+        persistIntermediateOutputs: Boolean = true,
+        onPublishedOutputs: suspend (List<TaskOutput>) -> Unit = {},
         progress: DownloadProgress,
     ): DownloadExecutionResult = when (spec.result.kind) {
-        MediaKind.IMAGE -> DownloadExecutionResult(downloadImages(taskId, spec, folder, progress))
-        MediaKind.VIDEO -> DownloadExecutionResult(downloadVideo(taskId, spec, folder, progress))
-        MediaKind.DOCUMENT -> downloadDocument(taskId, spec, folder, progress)
+        MediaKind.IMAGE -> DownloadExecutionResult(
+            downloadImages(
+                taskId,
+                spec,
+                folder,
+                persistIntermediateOutputs,
+                onPublishedOutputs,
+                progress,
+            ),
+        )
+        MediaKind.VIDEO -> DownloadExecutionResult(
+            downloadVideo(
+                taskId,
+                spec,
+                folder,
+                persistIntermediateOutputs,
+                onPublishedOutputs,
+                progress,
+            ),
+        )
+        MediaKind.DOCUMENT -> downloadDocument(
+            taskId,
+            spec,
+            folder,
+            persistIntermediateOutputs,
+            onPublishedOutputs,
+            progress,
+        )
     }
 
     private suspend fun downloadDocument(
         taskId: String,
         spec: TaskSpec,
         folder: File,
+        persistIntermediateOutputs: Boolean,
+        onPublishedOutputs: suspend (List<TaskOutput>) -> Unit,
         progress: DownloadProgress,
     ): DownloadExecutionResult {
         val document = spec.result.document ?: error("知乎文档内容不存在")
@@ -114,7 +143,12 @@ class DownloadExecutor @Inject constructor(
                 )
                 outputs += output
                 localPaths[asset.id] = "media/$name"
-                repository.replaceOutputs(taskId, outputs)
+                recordPublishedOutputs(
+                    taskId,
+                    outputs,
+                    persistIntermediateOutputs,
+                    onPublishedOutputs,
+                )
                 if (asset.kind == DocumentAssetKind.VIDEO && asset.coverUrls.isNotEmpty()) {
                     runCatching {
                         val stem = "video_${videoIndex.toString().padStart(3, '0')}_cover"
@@ -137,7 +171,12 @@ class DownloadExecutor @Inject constructor(
                         val cover = File(mediaFolder, coverName)
                         check(provisional.renameTo(cover)) { "无法按真实图片格式命名：$coverName" }
                         outputs += PublicStorage.publish(context, cover, spec, coverName, "media")
-                        repository.replaceOutputs(taskId, outputs)
+                        recordPublishedOutputs(
+                            taskId,
+                            outputs,
+                            persistIntermediateOutputs,
+                            onPublishedOutputs,
+                        )
                     }.onFailure { error ->
                         if (error is CancellationException) throw error
                         logger.event(taskId, "DOWNLOAD", "DOCUMENT_VIDEO_COVER_SKIPPED", JSONObject().apply {
@@ -165,7 +204,7 @@ class DownloadExecutor @Inject constructor(
         markdown.writeText(MarkdownRenderer.render(document, localPaths, failures), Charsets.UTF_8)
         val markdownOutput = PublicStorage.publish(context, markdown, spec, markdownName)
         outputs.add(0, markdownOutput)
-        repository.replaceOutputs(taskId, outputs)
+        recordPublishedOutputs(taskId, outputs, persistIntermediateOutputs, onPublishedOutputs)
         logger.event(taskId, "DOWNLOAD", "DOCUMENT_GENERATED", JSONObject().apply {
             put("assets", document.assets.size)
             put("downloaded", localPaths.size)
@@ -178,6 +217,8 @@ class DownloadExecutor @Inject constructor(
         taskId: String,
         spec: TaskSpec,
         folder: File,
+        persistIntermediateOutputs: Boolean,
+        onPublishedOutputs: suspend (List<TaskOutput>) -> Unit,
         progress: DownloadProgress,
     ): List<TaskOutput> {
         val files = mutableListOf<Pair<File, String>>()
@@ -221,13 +262,22 @@ class DownloadExecutor @Inject constructor(
             )
             files += file to name
         }
-        return publishAll(taskId, spec, files, progress)
+        return publishAll(
+            taskId,
+            spec,
+            files,
+            persistIntermediateOutputs,
+            onPublishedOutputs,
+            progress,
+        )
     }
 
     private suspend fun downloadVideo(
         taskId: String,
         spec: TaskSpec,
         folder: File,
+        persistIntermediateOutputs: Boolean,
+        onPublishedOutputs: suspend (List<TaskOutput>) -> Unit,
         progress: DownloadProgress,
     ): List<TaskOutput> {
         val variant = spec.result.variants.getOrNull(spec.variantIndex)
@@ -303,7 +353,14 @@ class DownloadExecutor @Inject constructor(
                 listOf(source to videoTrack.name)
             }
         }
-        return publishAll(taskId, spec, files, progress)
+        return publishAll(
+            taskId,
+            spec,
+            files,
+            persistIntermediateOutputs,
+            onPublishedOutputs,
+            progress,
+        )
     }
 
     private suspend fun processEmbeddedAudio(
@@ -390,15 +447,33 @@ class DownloadExecutor @Inject constructor(
         taskId: String,
         spec: TaskSpec,
         files: List<Pair<File, String>>,
+        persistIntermediateOutputs: Boolean,
+        onPublishedOutputs: suspend (List<TaskOutput>) -> Unit,
         progress: DownloadProgress,
     ): List<TaskOutput> {
         progress("保存到公共下载目录", 0, true)
         val published = mutableListOf<TaskOutput>()
         files.forEach { (file, name) ->
             published += PublicStorage.publish(context, file, spec, name)
-            repository.replaceOutputs(taskId, published)
+            recordPublishedOutputs(
+                taskId,
+                published,
+                persistIntermediateOutputs,
+                onPublishedOutputs,
+            )
         }
         return published
+    }
+
+    private suspend fun recordPublishedOutputs(
+        taskId: String,
+        outputs: List<TaskOutput>,
+        persistIntermediateOutputs: Boolean,
+        onPublishedOutputs: suspend (List<TaskOutput>) -> Unit,
+    ) {
+        val snapshot = outputs.toList()
+        if (persistIntermediateOutputs) repository.replaceOutputs(taskId, snapshot)
+        onPublishedOutputs(snapshot)
     }
 
     private suspend fun download(

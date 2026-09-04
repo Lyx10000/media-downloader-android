@@ -241,6 +241,7 @@ data class TaskSpec(
     val storageMode: StorageMode = StorageMode.LEGACY,
     val storageRoot: String = "",
     val taskFolder: String = taskFolderName(createdAt, taskId),
+    val pendingRedownload: PendingRedownload? = null,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("task_id", taskId)
@@ -252,6 +253,7 @@ data class TaskSpec(
         put("storage_mode", storageMode.wireValue)
         put("storage_root", storageRoot)
         put("task_folder", taskFolder)
+        pendingRedownload?.let { put("pending_redownload", it.toJson()) }
     }.toString()
 
     companion object {
@@ -274,9 +276,23 @@ data class TaskSpec(
                 taskFolder = root.optString("task_folder").ifBlank {
                     legacyTaskFolderName(createdAt)
                 },
+                pendingRedownload = root.optJSONObject("pending_redownload")
+                    ?.let(PendingRedownload::fromJson),
             )
         }
     }
+
+    fun executionSpec(): TaskSpec = pendingRedownload?.let { pending ->
+        copy(
+            result = pending.result,
+            variantIndex = pending.variantIndex,
+            storageMode = pending.storageMode,
+            storageRoot = pending.storageRoot,
+            taskFolder = pending.taskFolder,
+        )
+    } ?: this
+
+    fun committedRedownloadSpec(): TaskSpec = executionSpec().copy(pendingRedownload = null)
 
     fun stableSource(): String = if (result.canonicalUrl.isNotBlank()) {
         result.canonicalUrl
@@ -318,6 +334,53 @@ data class TaskOutput(
     }
 }
 
+data class PendingRedownload(
+    val result: ParseResult,
+    val variantIndex: Int,
+    val storageMode: StorageMode,
+    val storageRoot: String,
+    val taskFolder: String,
+    val previousOutputs: List<TaskOutput>,
+    val previousFileState: FileState,
+    val stagedOutputs: List<TaskOutput> = emptyList(),
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("result", result.toJson())
+        put("variant_index", variantIndex)
+        put("storage_mode", storageMode.wireValue)
+        put("storage_root", storageRoot)
+        put("task_folder", taskFolder)
+        put("previous_outputs", JSONArray().apply { previousOutputs.forEach { put(it.toJson()) } })
+        put("previous_file_state", previousFileState.wireValue)
+        put("staged_outputs", JSONArray().apply { stagedOutputs.forEach { put(it.toJson()) } })
+    }
+
+    companion object {
+        fun fromJson(root: JSONObject): PendingRedownload = PendingRedownload(
+            result = ParseResult.fromJson(root.getJSONObject("result").toString()),
+            variantIndex = root.optInt("variant_index", 0),
+            storageMode = StorageMode.fromWire(
+                root.optString("storage_mode", StorageMode.LEGACY.wireValue),
+            ),
+            storageRoot = root.optString("storage_root"),
+            taskFolder = root.optString("task_folder"),
+            previousOutputs = root.optJSONArray("previous_outputs").let { array ->
+                if (array == null) emptyList() else (0 until array.length()).mapNotNull { index ->
+                    TaskOutput.fromJson(array.opt(index))
+                }
+            },
+            previousFileState = FileState.fromWire(
+                root.optString("previous_file_state", FileState.UNKNOWN.wireValue),
+            ),
+            stagedOutputs = root.optJSONArray("staged_outputs").let { array ->
+                if (array == null) emptyList() else (0 until array.length()).mapNotNull { index ->
+                    TaskOutput.fromJson(array.opt(index))
+                }
+            },
+        )
+    }
+}
+
 data class TaskRecord(
     val id: String,
     val createdAt: Long,
@@ -337,6 +400,9 @@ data class TaskRecord(
 
 fun taskFolderName(createdAt: Long, taskId: String): String =
     "${legacyTaskFolderName(createdAt)}_${taskId.take(8)}"
+
+fun redownloadTaskFolderName(createdAt: Long, taskId: String): String =
+    "${taskFolderName(createdAt, taskId)}_r${(createdAt % 1000).toString().padStart(3, '0')}"
 
 fun legacyTaskFolderName(createdAt: Long): String =
     SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).apply {

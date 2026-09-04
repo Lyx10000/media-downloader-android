@@ -33,11 +33,12 @@ class RoomDownloadTaskRepository @Inject constructor(
     private val dao: TaskDao,
 ) : DownloadTaskRepository {
     override suspend fun insert(spec: TaskSpec) {
-        val title = spec.result.document?.title?.take(40).orEmpty().ifBlank {
+        val storedTitle = spec.result.document?.title?.take(40).orEmpty().ifBlank {
             spec.result.author.ifBlank {
                 spec.result.description.take(30).ifBlank { spec.result.contentId }
             }
         }
+        val title = taskDisplayTitle(storedTitle, spec.result)
         dao.insert(
             TaskEntity(
                 id = spec.taskId,
@@ -131,7 +132,7 @@ internal fun TaskEntity.toRecord(): TaskRecord {
         status = if (outputJson == null) TaskStatus.FAILED else TaskStatus.fromWire(status),
         stage = stage,
         progress = progress,
-        title = title,
+        title = taskDisplayTitle(title, parsedResult),
         platform = sourcePlatform,
         outputs = outputRecords,
         error = if (outputJson == null) error.ifBlank { "任务输出记录损坏" } else error,
@@ -139,6 +140,12 @@ internal fun TaskEntity.toRecord(): TaskRecord {
         author = parsedResult?.author.orEmpty(),
         authorAccountId = parsedResult?.authorAccountId.orEmpty(),
     )
+}
+
+internal fun taskDisplayTitle(storedTitle: String, result: ParseResult?): String = when {
+    result?.platform == SourcePlatform.ZHIHU && result.kind == MediaKind.VIDEO ->
+        result.description.take(60).ifBlank { storedTitle }
+    else -> storedTitle
 }
 
 private fun List<TaskOutput>.toJson(): String = JSONArray().apply {

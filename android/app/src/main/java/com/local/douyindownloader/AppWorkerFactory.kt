@@ -9,11 +9,13 @@ import javax.inject.Singleton
 import org.json.JSONObject
 
 @Singleton
-class AppWorkerFactory @Inject constructor(
+class AppWorkerFactory @Inject internal constructor(
     private val repository: DownloadTaskRepository,
     private val logger: DiagnosticLogger,
     private val executor: DownloadExecutor,
     private val settingsRepository: SettingsRepository,
+    private val managedFileGateway: ManagedFileGateway,
+    private val taskFolderPruner: TaskFolderPruner,
 ) : WorkerFactory() {
     override fun createWorker(
         appContext: Context,
@@ -37,6 +39,8 @@ class AppWorkerFactory @Inject constructor(
             logger,
             executor,
             settingsRepository,
+            managedFileGateway,
+            taskFolderPruner,
         )
     }
 }

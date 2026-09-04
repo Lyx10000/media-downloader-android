@@ -35,6 +35,21 @@ class TaskSelectionTest {
         )
     }
 
+    @Test
+    fun zhihuVideoUsesContentTitleAndKeepsAuthorAsSeparateIdentity() {
+        val result = ParseResult(
+            ok = true,
+            platform = SourcePlatform.ZHIHU,
+            kind = MediaKind.VIDEO,
+            author = "十六盘点",
+            description = "盘点视频",
+        )
+
+        assertEquals("盘点视频", taskDisplayTitle("十六盘点", result))
+        assertEquals("旧标题", taskDisplayTitle("旧标题", result.copy(description = "")))
+        assertEquals("博主", taskDisplayTitle("博主", result.copy(platform = SourcePlatform.DOUYIN)))
+    }
+
     private fun task(
         status: TaskStatus,
         fileState: FileState = FileState.AVAILABLE,

@@ -56,11 +56,11 @@ private data class RedownloadParseResolution(
 )
 
 @Singleton
-class TaskRedownloadCoordinator @Inject constructor(
+internal class TaskRedownloadCoordinator @Inject constructor(
     private val repository: DownloadTaskRepository,
     private val parser: ParserGateway,
     private val inspector: StorageInspector,
-    private val deletionCoordinator: TaskDeletionCoordinator,
+    private val sourceValidator: RedownloadSourceValidator,
     private val scheduler: DownloadScheduler,
     private val logger: DiagnosticLogger,
 ) {
@@ -123,17 +123,26 @@ class TaskRedownloadCoordinator @Inject constructor(
             return failure("当前没有可下载的视频档位")
         }
 
-        val cleanup = deletionCoordinator.deleteOutputsForRedownload(task.id)
-        if (!cleanup.success) return failure(cleanup.message)
-
         val now = System.currentTimeMillis()
+        val selectedVariant = match.index.coerceAtLeast(0)
+        val preflight = sourceValidator.validate(refreshed, selectedVariant, originalSpec.mode)
+        logger.event(task.id, "REDOWNLOAD", "SOURCE_PREFLIGHT_COMPLETE", JSONObject().apply {
+            put("required_groups", preflight.requiredGroups)
+            put("verified_groups", preflight.verifiedGroups)
+            put("all_verified", preflight.allVerified)
+        })
+        val currentTask = repository.get(task.id)
+            ?: return failure("任务已被删除，无法开始重新下载")
         val updatedSpec = originalSpec.copy(
-            result = refreshed,
-            variantIndex = match.index.coerceAtLeast(0),
-            sourceText = originalSpec.stableSource(),
-            storageMode = resolvedStorage.first,
-            storageRoot = resolvedStorage.second,
-            taskFolder = taskFolderName(now, task.id),
+            pendingRedownload = PendingRedownload(
+                result = refreshed,
+                variantIndex = selectedVariant,
+                storageMode = resolvedStorage.first,
+                storageRoot = resolvedStorage.second,
+                taskFolder = redownloadTaskFolderName(now, task.id),
+                previousOutputs = currentTask.outputs,
+                previousFileState = currentTask.fileState,
+            ),
         )
         repository.replaceSpec(task.id, updatedSpec)
         repository.update(task.id, TaskStatus.QUEUED, "等待重新下载", 0)
@@ -144,6 +153,9 @@ class TaskRedownloadCoordinator @Inject constructor(
             put("attempts", resolution.attempts)
             put("used_stored_sources", resolution.usedStoredSources)
             put("last_failure_code", resolution.lastFailure?.errorCode.orEmpty())
+            put("preflight_all_verified", preflight.allVerified)
+            put("author_present", refreshed.author.isNotBlank())
+            put("author_account_id_present", refreshed.authorAccountId.isNotBlank())
         })
         try {
             scheduler.enqueue(task.id, ExistingWorkPolicy.REPLACE)
@@ -151,6 +163,7 @@ class TaskRedownloadCoordinator @Inject constructor(
             throw cancelled
         } catch (error: Throwable) {
             val message = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+            repository.replaceSpec(task.id, originalSpec.copy(pendingRedownload = null))
             repository.update(task.id, TaskStatus.FAILED, "启动重新下载失败", 0, message)
             return failure("启动重新下载失败：$message")
         }

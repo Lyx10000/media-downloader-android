@@ -340,6 +340,8 @@ class MainViewModel @Inject internal constructor(
                     put("images", result.imageUrls.size)
                     put("document_assets", result.document?.assets?.size ?: 0)
                     put("separate_audio", result.audioUrls.isNotEmpty())
+                    put("author_present", result.author.isNotBlank())
+                    put("author_account_id_present", result.authorAccountId.isNotBlank())
                 })
                 logger.saveResponseShape(sessionId, result.responseShape)
                 selectedVariant = preferredVariant(result)

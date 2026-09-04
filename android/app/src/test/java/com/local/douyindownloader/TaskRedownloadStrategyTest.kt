@@ -82,4 +82,29 @@ class TaskRedownloadStrategyTest {
         )
         assertTrue(hasReusableDownloadSources(document))
     }
+
+    @Test
+    fun preflightChecksEveryRequiredImageAndVideoTrackGroup() {
+        val images = ParseResult(
+            ok = true,
+            kind = MediaKind.IMAGE,
+            imageCandidates = listOf(
+                listOf("https://cdn/image-1a", "https://cdn/image-1b"),
+                listOf("https://cdn/image-2"),
+            ),
+            musicUrls = listOf("https://cdn/music"),
+        )
+        val video = ParseResult(
+            ok = true,
+            kind = MediaKind.VIDEO,
+            variants = listOf(
+                MediaVariant(1, 1, 0, 0, "", 0, "unknown", listOf("https://cdn/video")),
+            ),
+            audioUrls = listOf("https://cdn/audio"),
+        )
+
+        assertEquals(3, requiredRedownloadSourceGroups(images, 0, DownloadMode.MERGE_KEEP).size)
+        assertEquals(2, requiredRedownloadSourceGroups(video, 0, DownloadMode.MERGE_KEEP).size)
+        assertEquals(1, requiredRedownloadSourceGroups(video, 0, DownloadMode.VIDEO_ONLY).size)
+    }
 }

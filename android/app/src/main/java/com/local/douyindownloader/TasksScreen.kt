@@ -198,19 +198,6 @@ internal fun TasksScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     modifier = Modifier.weight(1f),
                                 )
-                                if (
-                                    task.platform == SourcePlatform.ZHIHU &&
-                                    task.author.isNotBlank() &&
-                                    task.author == task.title
-                                ) {
-                                    CreatorCopyButton(
-                                        contentDescription = "复制知乎昵称",
-                                        onClick = {
-                                            copyCreatorText(context, "知乎昵称", task.author)
-                                            viewModel.showMessage("知乎昵称已复制")
-                                        },
-                                    )
-                                }
                             }
                             when (task.platform) {
                                 SourcePlatform.DOUYIN -> task.authorAccountId
@@ -238,7 +225,7 @@ internal fun TasksScreen(
                                         )
                                     }
                                 SourcePlatform.ZHIHU -> task.author
-                                    .takeIf { it.isNotBlank() && it != task.title }
+                                    .takeIf(String::isNotBlank)
                                     ?.let { author ->
                                         CreatorIdentityLine(
                                             label = "作者",
