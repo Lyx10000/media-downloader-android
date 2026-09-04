@@ -11,8 +11,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
@@ -36,6 +36,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
@@ -52,6 +53,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     var destination by remember { mutableIntStateOf(0) }
     var managedTaskId by remember { mutableStateOf<String?>(null) }
     var readerTaskId by remember { mutableStateOf<String?>(null) }
+    var loginPlatform by rememberSaveable { mutableStateOf<SourcePlatform?>(null) }
     val destinations = remember {
         listOf(
             Destination("首页", Icons.Default.Home),
@@ -103,6 +105,28 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     }
     LaunchedEffect(uiState.message) {
         if (uiState.message.isNotBlank()) snackbar.showSnackbar(viewModel.consumeMessage())
+    }
+
+    val openLoginEnvironment: (SourcePlatform) -> Unit = { platform ->
+        viewModel.onLoginEnvironmentOpened(platform)
+        loginPlatform = platform
+    }
+    val activeLoginPlatform = loginPlatform
+    if (activeLoginPlatform != null) {
+        FullScreenWebEnvironment(
+            platform = activeLoginPlatform,
+            onDismiss = {
+                viewModel.onLoginEnvironmentClosed(activeLoginPlatform)
+                loginPlatform = null
+            },
+            onPageFinished = { url ->
+                viewModel.onLoginPageFinished(activeLoginPlatform, url)
+            },
+            onPageError = { url, code, description ->
+                viewModel.onLoginPageError(activeLoginPlatform, url, code, description)
+            },
+        )
+        return
     }
 
     val managedTask = managedTaskId?.let { taskId ->
@@ -157,13 +181,14 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .imePadding(),
+                .consumeWindowInsets(innerPadding),
         ) {
             when (destination) {
                 0 -> HomeScreen(
                     uiState = uiState,
                     viewModel = viewModel,
                     onShowTasks = { destination = 1 },
+                    onOpenLoginEnvironment = openLoginEnvironment,
                 )
                 1 -> TasksScreen(
                     tasks = uiState.tasks,
@@ -181,6 +206,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                     viewModel = viewModel,
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,
+                    onOpenLoginEnvironment = openLoginEnvironment,
                 )
             }
         }

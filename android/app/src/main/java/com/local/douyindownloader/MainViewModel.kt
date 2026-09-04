@@ -73,6 +73,8 @@ data class MainUiState(
     val message: String = "",
     val preferH264: Boolean = false,
     val customTreeUri: String? = null,
+    val platformCredentialStates: Map<SourcePlatform, PlatformCredentialState> =
+        SourcePlatform.entries.associateWith { PlatformCredentialState.NOT_DETECTED },
 )
 
 @HiltViewModel
@@ -142,6 +144,7 @@ class MainViewModel @Inject internal constructor(
     private var tasksVisible = false
 
     init {
+        refreshPlatformCredentialStates()
         refreshLogs()
         viewModelScope.launch {
             settingsRepository.settings.collectLatest { settings ->
@@ -599,7 +602,62 @@ class MainViewModel @Inject internal constructor(
         return taskCapabilities[task.id]?.hasReplacementStorage == true
     }
 
-    fun onAppForeground() = refreshTasks()
+    fun onAppForeground() {
+        refreshPlatformCredentialStates()
+        refreshTasks()
+    }
+
+    fun onLoginEnvironmentOpened(platform: SourcePlatform) {
+        refreshPlatformCredentialStates()
+        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_ENVIRONMENT_OPENED", JSONObject().apply {
+            put("platform", platform.wireValue)
+            put(
+                "credential_detected",
+                _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
+            )
+        })
+        refreshLogs()
+    }
+
+    fun onLoginEnvironmentClosed(platform: SourcePlatform) {
+        CookieManager.getInstance().flush()
+        refreshPlatformCredentialStates()
+        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_ENVIRONMENT_CLOSED", JSONObject().apply {
+            put("platform", platform.wireValue)
+            put(
+                "credential_detected",
+                _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
+            )
+        })
+        refreshLogs()
+    }
+
+    fun onLoginPageFinished(platform: SourcePlatform, url: String) {
+        refreshPlatformCredentialStates()
+        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_PAGE_FINISHED", JSONObject().apply {
+            put("platform", platform.wireValue)
+            put("host", runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault(""))
+            put(
+                "credential_detected",
+                _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
+            )
+        })
+    }
+
+    fun onLoginPageError(
+        platform: SourcePlatform,
+        url: String,
+        errorCode: Int,
+        description: String,
+    ) {
+        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_PAGE_ERROR", JSONObject().apply {
+            put("platform", platform.wireValue)
+            put("host", runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault(""))
+            put("error_code", errorCode)
+            put("description", Redactor.sanitize(description))
+        })
+        refreshLogs()
+    }
 
     fun onAppBackground() {
         _fullscreenTaskId.value = null
@@ -626,6 +684,14 @@ class MainViewModel @Inject internal constructor(
                 refreshMutex.unlock()
             }
         }
+    }
+
+    private fun refreshPlatformCredentialStates() {
+        val cookieManager = CookieManager.getInstance()
+        val states = SourcePlatform.entries.associateWith { platform ->
+            detectPlatformCredential(platform, cookieManager.getCookie(platform.homeUrl).orEmpty())
+        }
+        _uiState.update { it.copy(platformCredentialStates = states) }
     }
 
     fun refreshLogs() {

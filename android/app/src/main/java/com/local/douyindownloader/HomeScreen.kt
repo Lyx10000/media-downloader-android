@@ -3,12 +3,16 @@ package com.local.douyindownloader
 import android.annotation.SuppressLint
 import android.content.ClipboardManager
 import android.content.Context
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,10 +20,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -33,6 +37,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -59,8 +64,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 
@@ -69,6 +72,7 @@ internal fun HomeScreen(
     uiState: MainUiState,
     viewModel: MainViewModel,
     onShowTasks: () -> Unit,
+    onOpenLoginEnvironment: (SourcePlatform) -> Unit,
 ) {
     val context = LocalContext.current
     when (val state = uiState.parseState) {
@@ -86,6 +90,12 @@ internal fun HomeScreen(
                 Text(
                     "粘贴抖音、小红书或知乎分享文本，也可以从对应应用直接分享到这里。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            item {
+                PlatformCredentialCard(
+                    states = uiState.platformCredentialStates,
+                    onOpenLoginEnvironment = onOpenLoginEnvironment,
                 )
             }
             item {
@@ -156,6 +166,46 @@ internal fun HomeScreen(
             onBack = viewModel::resetParse,
         )
         is ParseUiState.Error -> ErrorScreen(state, viewModel::retryParse, viewModel::resetParse)
+    }
+}
+
+@Composable
+private fun PlatformCredentialCard(
+    states: Map<SourcePlatform, PlatformCredentialState>,
+    onOpenLoginEnvironment: (SourcePlatform) -> Unit,
+) {
+    OutlinedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text("平台登录状态", style = MaterialTheme.typography.titleMedium)
+            SourcePlatform.entries.forEachIndexed { index, platform ->
+                if (index > 0) HorizontalDivider()
+                val detected = states[platform] == PlatformCredentialState.DETECTED
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenLoginEnvironment(platform) }
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(platform.displayName)
+                    Text(
+                        if (detected) "检测到登录凭据" else "未检测到登录",
+                        color = if (detected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            }
+            Text(
+                "未登录时部分作品可能解析失败；登录凭据也可能过期或触发平台风控。点击平台可登录或刷新环境。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
@@ -243,6 +293,9 @@ private fun PlatformWebView(
     modifier: Modifier = Modifier,
     autoContinue: Boolean = true,
     capturePage: Boolean = false,
+    desktopMode: Boolean = true,
+    onPageFinishedEvent: (String) -> Unit = {},
+    onMainFrameError: (String, Int, String) -> Unit = { _, _, _ -> },
 ) {
     AndroidView(
         modifier = modifier,
@@ -251,11 +304,13 @@ private fun PlatformWebView(
                 val currentWebView = this
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
-                settings.userAgentString = DESKTOP_USER_AGENT
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
+                if (desktopMode) settings.userAgentString = DESKTOP_USER_AGENT
+                settings.useWideViewPort = desktopMode
+                settings.loadWithOverviewMode = desktopMode
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
+                isFocusable = true
+                isFocusableInTouchMode = true
                 CookieManager.getInstance().apply {
                     setAcceptCookie(true)
                     setAcceptThirdPartyCookies(currentWebView, true)
@@ -280,6 +335,7 @@ private fun PlatformWebView(
 
                     override fun onPageFinished(view: WebView, finishedUrl: String) {
                         super.onPageFinished(view, finishedUrl)
+                        onPageFinishedEvent(finishedUrl)
                         if (autoContinue && isPlatformPage(finishedUrl, platform)) {
                             deliver(
                                 CookieReadySource.PAGE_READY,
@@ -294,8 +350,28 @@ private fun PlatformWebView(
                         error: WebResourceError,
                     ) {
                         super.onReceivedError(view, request, error)
-                        if (autoContinue && request.isForMainFrame) {
-                            deliver(CookieReadySource.PAGE_ERROR)
+                        if (request.isForMainFrame) {
+                            onMainFrameError(
+                                request.url.toString(),
+                                error.errorCode,
+                                error.description?.toString().orEmpty(),
+                            )
+                            if (autoContinue) deliver(CookieReadySource.PAGE_ERROR)
+                        }
+                    }
+
+                    override fun onReceivedHttpError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        errorResponse: WebResourceResponse,
+                    ) {
+                        super.onReceivedHttpError(view, request, errorResponse)
+                        if (request.isForMainFrame) {
+                            onMainFrameError(
+                                request.url.toString(),
+                                errorResponse.statusCode,
+                                errorResponse.reasonPhrase.orEmpty(),
+                            )
                         }
                     }
                 }
@@ -304,6 +380,10 @@ private fun PlatformWebView(
         },
         update = { webView -> if (webView.url.isNullOrBlank()) webView.loadUrl(url) },
         onRelease = { webView ->
+            webView.clearFocus()
+            webView.context.getSystemService(InputMethodManager::class.java)
+                ?.hideSoftInputFromWindow(webView.windowToken, 0)
+            webView.onPause()
             webView.stopLoading()
             webView.destroy()
         },
@@ -453,43 +533,36 @@ private fun ErrorScreen(state: ParseUiState.Error, retry: () -> Unit, back: () -
 internal fun FullScreenWebEnvironment(
     platform: SourcePlatform,
     onDismiss: () -> Unit,
+    onPageFinished: (String) -> Unit,
+    onPageError: (String, Int, String) -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-        ),
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.surface,
-        ) {
-            Scaffold(
-                contentWindowInsets = WindowInsets.safeDrawing,
-                topBar = {
-                    TopAppBar(
-                        title = { Text("${platform.displayName}登录环境") },
-                        navigationIcon = {
-                            IconButton(onClick = onDismiss) {
-                                Icon(Icons.Default.Clear, contentDescription = "关闭登录环境")
-                            }
-                        },
-                    )
+    BackHandler(onBack = onDismiss)
+    Scaffold(
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            TopAppBar(
+                title = { Text("${platform.displayName}登录环境") },
+                navigationIcon = {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Clear, contentDescription = "关闭登录环境")
+                    }
                 },
-            ) { innerPadding ->
-                PlatformWebView(
-                    platform = platform,
-                    url = platform.homeUrl,
-                    onReady = { _, _ -> },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .imePadding(),
-                    autoContinue = false,
-                )
-            }
-        }
+            )
+        },
+    ) { innerPadding ->
+        PlatformWebView(
+            platform = platform,
+            url = platform.homeUrl,
+            onReady = { _, _ -> },
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding),
+            autoContinue = false,
+            desktopMode = false,
+            onPageFinishedEvent = onPageFinished,
+            onMainFrameError = onPageError,
+        )
     }
 }
 

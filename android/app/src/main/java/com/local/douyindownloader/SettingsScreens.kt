@@ -35,10 +35,6 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -91,8 +87,8 @@ internal fun SettingsScreen(
     viewModel: MainViewModel,
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
+    onOpenLoginEnvironment: (SourcePlatform) -> Unit,
 ) {
-    var showWebViewPlatform by remember { mutableStateOf<SourcePlatform?>(null) }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -162,17 +158,17 @@ internal fun SettingsScreen(
         item { HorizontalDivider() }
         item { Text("解析环境", style = MaterialTheme.typography.titleMedium) }
         item {
-            Button(onClick = { showWebViewPlatform = SourcePlatform.DOUYIN }) {
+            Button(onClick = { onOpenLoginEnvironment(SourcePlatform.DOUYIN) }) {
                 Text("登录或刷新抖音环境")
             }
         }
         item {
-            OutlinedButton(onClick = { showWebViewPlatform = SourcePlatform.XIAOHONGSHU }) {
+            OutlinedButton(onClick = { onOpenLoginEnvironment(SourcePlatform.XIAOHONGSHU) }) {
                 Text("登录或刷新小红书环境")
             }
         }
         item {
-            OutlinedButton(onClick = { showWebViewPlatform = SourcePlatform.ZHIHU }) {
+            OutlinedButton(onClick = { onOpenLoginEnvironment(SourcePlatform.ZHIHU) }) {
                 Text("登录或刷新知乎环境")
             }
         }
@@ -181,11 +177,5 @@ internal fun SettingsScreen(
             Text("版本", style = MaterialTheme.typography.titleMedium)
             Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 $PARSER_VERSION")
         }
-    }
-    showWebViewPlatform?.let { platform ->
-        FullScreenWebEnvironment(
-            platform = platform,
-            onDismiss = { showWebViewPlatform = null },
-        )
     }
 }
