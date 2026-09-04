@@ -58,4 +58,10 @@ abstract class RepositoryModule {
     internal abstract fun bindManagedFileGateway(
         gateway: AndroidManagedFileGateway,
     ): ManagedFileGateway
+
+    @Binds
+    @Singleton
+    internal abstract fun bindParserHttpClient(
+        client: OkHttpParserClient,
+    ): ParserHttpClient
 }
