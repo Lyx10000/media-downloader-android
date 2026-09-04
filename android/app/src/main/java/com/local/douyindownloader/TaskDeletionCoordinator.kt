@@ -183,8 +183,9 @@ class TaskDeletionCoordinator @Inject constructor(
             val root = DocumentFile.fromTreeUri(context, Uri.parse(spec.storageRoot))
                 ?: return FolderDeleteResult(false, message = "保存目录已失效")
             val folder = root.findFile(spec.taskFolder) ?: return FolderDeleteResult(true)
+            pruneEmptySafDirectories(folder)
             if (folder.listFiles().isNotEmpty()) FolderDeleteResult(true, retained = true)
-            else if (folder.delete()) FolderDeleteResult(true)
+            else if (!folder.exists() || folder.delete()) FolderDeleteResult(true)
             else FolderDeleteResult(false, message = "任务文件夹删除失败")
         }.getOrElse { FolderDeleteResult(false, message = it.message ?: "任务文件夹删除失败") }
     }
@@ -195,10 +196,21 @@ class TaskDeletionCoordinator @Inject constructor(
         if (!StorageInspector.hasAllFilesAccess()) {
             return FolderDeleteResult(false, message = "需要所有文件访问权限才能删除任务文件夹")
         }
-        val children = runCatching { folder.listFiles() }.getOrNull()
-            ?: return FolderDeleteResult(false, message = "无法检查任务文件夹")
-        if (children.isNotEmpty()) return FolderDeleteResult(true, retained = true)
-        return if (folder.delete()) FolderDeleteResult(true)
-        else FolderDeleteResult(false, message = "任务文件夹删除失败")
+        return if (pruneEmptyDirectoryTree(folder)) FolderDeleteResult(true)
+        else FolderDeleteResult(true, retained = true)
     }
+
+    private fun pruneEmptySafDirectories(directory: DocumentFile) {
+        directory.listFiles().filter(DocumentFile::isDirectory).forEach { child ->
+            pruneEmptySafDirectories(child)
+            if (child.listFiles().isEmpty()) child.delete()
+        }
+    }
+}
+
+internal fun pruneEmptyDirectoryTree(directory: File): Boolean {
+    if (!directory.exists()) return true
+    val children = directory.listFiles() ?: return false
+    children.filter(File::isDirectory).forEach(::pruneEmptyDirectoryTree)
+    return directory.listFiles()?.takeIf(Array<File>::isEmpty)?.let { directory.delete() } == true
 }
