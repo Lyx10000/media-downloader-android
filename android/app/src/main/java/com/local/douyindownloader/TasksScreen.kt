@@ -2,8 +2,12 @@ package com.local.douyindownloader
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
@@ -63,6 +67,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +78,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -91,6 +97,7 @@ import coil.request.videoFrameMillis
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 
@@ -896,6 +903,7 @@ private fun MediaControlBar(
     modifier: Modifier = Modifier,
     onFullscreen: (() -> Unit)? = null,
     dark: Boolean = false,
+    onInteraction: () -> Unit = {},
 ) {
     val durationMs = state.durationMs
     var sliderPosition by remember(state.taskId, state.source?.uri) { mutableFloatStateOf(0f) }
@@ -910,7 +918,10 @@ private fun MediaControlBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
-                onClick = onToggle,
+                onClick = {
+                    onInteraction()
+                    onToggle()
+                },
                 enabled = state.status != MediaPreviewStatus.PREPARING,
             ) {
                 if (state.status == MediaPreviewStatus.PREPARING) {
@@ -932,10 +943,12 @@ private fun MediaControlBar(
             Slider(
                 value = sliderPosition.coerceIn(0f, durationMs.coerceAtLeast(1L).toFloat()),
                 onValueChange = {
+                    onInteraction()
                     dragging = true
                     sliderPosition = it
                 },
                 onValueChangeFinished = {
+                    onInteraction()
                     dragging = false
                     onSeek(sliderPosition.toLong())
                 },
@@ -946,7 +959,13 @@ private fun MediaControlBar(
                 ),
                 modifier = Modifier.weight(1f),
             )
-            IconButton(onClick = onToggleMute, enabled = state.taskId != null) {
+            IconButton(
+                onClick = {
+                    onInteraction()
+                    onToggleMute()
+                },
+                enabled = state.taskId != null,
+            ) {
                 Icon(
                     if (state.isMuted) Icons.AutoMirrored.Filled.VolumeOff
                     else Icons.AutoMirrored.Filled.VolumeUp,
@@ -955,7 +974,13 @@ private fun MediaControlBar(
                 )
             }
             onFullscreen?.let { openFullscreen ->
-                IconButton(onClick = openFullscreen, enabled = state.player != null) {
+                IconButton(
+                    onClick = {
+                        onInteraction()
+                        openFullscreen()
+                    },
+                    enabled = state.player != null,
+                ) {
                     Icon(Icons.Default.Fullscreen, contentDescription = "全屏", tint = foreground)
                 }
             }
@@ -998,6 +1023,21 @@ private fun FullscreenVideoPreview(
     onDismiss: () -> Unit,
 ) {
     val player = state.player ?: return
+    var controlsVisible by remember(player) { mutableStateOf(true) }
+    var visibilityTimerVersion by remember(player) { mutableIntStateOf(0) }
+    val revealControls: () -> Unit = {
+        controlsVisible = true
+        visibilityTimerVersion++
+    }
+    LaunchedEffect(state.status, controlsVisible, visibilityTimerVersion) {
+        when {
+            state.status != MediaPreviewStatus.PLAYING -> controlsVisible = true
+            controlsVisible -> {
+                delay(FULLSCREEN_CONTROLS_TIMEOUT_MS)
+                controlsVisible = false
+            }
+        }
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -1013,64 +1053,98 @@ private fun FullscreenVideoPreview(
                     contentScale = ContentScale.Fit,
                 )
                 Box(
-                    modifier = Modifier
+                    Modifier
                         .fillMaxSize()
-                        .windowInsetsPadding(WindowInsets.safeDrawing),
-                    contentAlignment = Alignment.Center,
+                        .pointerInput(state.status, controlsVisible) {
+                            detectTapGestures {
+                                if (state.status == MediaPreviewStatus.PLAYING) {
+                                    if (controlsVisible) {
+                                        controlsVisible = false
+                                    } else {
+                                        revealControls()
+                                    }
+                                } else {
+                                    revealControls()
+                                }
+                            }
+                        },
+                )
+                AnimatedVisibility(
+                    visible = controlsVisible,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.fillMaxSize(),
                 ) {
-                    IconButton(
-                        onClick = onToggle,
-                        enabled = state.status != MediaPreviewStatus.PREPARING,
+                    Box(
                         modifier = Modifier
-                            .size(72.dp)
-                            .background(
-                                Color.Black.copy(alpha = 0.46f),
-                                MaterialTheme.shapes.extraLarge,
-                            ),
+                            .fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.safeDrawing),
+                        contentAlignment = Alignment.Center,
                     ) {
-                        if (state.status == MediaPreviewStatus.PREPARING) {
-                            CircularProgressIndicator(color = Color.White)
-                        } else {
+                        IconButton(
+                            onClick = {
+                                revealControls()
+                                onToggle()
+                            },
+                            enabled = state.status != MediaPreviewStatus.PREPARING,
+                            modifier = Modifier
+                                .size(72.dp)
+                                .background(
+                                    Color.Black.copy(alpha = 0.46f),
+                                    MaterialTheme.shapes.extraLarge,
+                                ),
+                        ) {
+                            if (state.status == MediaPreviewStatus.PREPARING) {
+                                CircularProgressIndicator(color = Color.White)
+                            } else {
+                                Icon(
+                                    if (state.status == MediaPreviewStatus.PLAYING) Icons.Default.Pause
+                                    else if (state.status == MediaPreviewStatus.ENDED) Icons.Default.Replay
+                                    else Icons.Default.PlayArrow,
+                                    contentDescription = if (
+                                        state.status == MediaPreviewStatus.PLAYING
+                                    ) "暂停" else "播放",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(42.dp),
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(16.dp)
+                                .background(
+                                    Color.Black.copy(alpha = 0.46f),
+                                    MaterialTheme.shapes.extraLarge,
+                                ),
+                        ) {
                             Icon(
-                                if (state.status == MediaPreviewStatus.PLAYING) Icons.Default.Pause
-                                else if (state.status == MediaPreviewStatus.ENDED) Icons.Default.Replay
-                                else Icons.Default.PlayArrow,
-                                contentDescription = if (
-                                    state.status == MediaPreviewStatus.PLAYING
-                                ) "暂停" else "播放",
+                                Icons.Default.Close,
+                                contentDescription = "退出全屏",
                                 tint = Color.White,
-                                modifier = Modifier.size(42.dp),
                             )
                         }
+                        MediaControlBar(
+                            state = state,
+                            onToggle = onToggle,
+                            onSeek = onSeek,
+                            onToggleMute = onToggleMute,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .background(Color.Black.copy(alpha = 0.62f))
+                                .padding(bottom = 16.dp),
+                            dark = true,
+                            onInteraction = revealControls,
+                        )
                     }
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(16.dp)
-                            .background(
-                                Color.Black.copy(alpha = 0.46f),
-                                MaterialTheme.shapes.extraLarge,
-                            ),
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = "退出全屏", tint = Color.White)
-                    }
-                    MediaControlBar(
-                        state = state,
-                        onToggle = onToggle,
-                        onSeek = onSeek,
-                        onToggleMute = onToggleMute,
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .background(Color.Black.copy(alpha = 0.62f))
-                            .padding(bottom = 16.dp),
-                        dark = true,
-                    )
                 }
             }
         }
     }
 }
+
+private const val FULLSCREEN_CONTROLS_TIMEOUT_MS = 3_000L
 
 private fun TaskPreviewMedia?.samePlaybackSource(other: TaskPreviewMedia): Boolean =
     this?.uri == other.uri
