@@ -122,6 +122,30 @@ data class ParserAttempt(
     val errorCode: String = "",
 )
 
+data class LivePhotoPair(
+    val imageIndex: Int,
+    val imageCandidates: List<String>,
+    val videoVariants: List<MediaVariant>,
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("image_index", imageIndex)
+        put("image_candidates", JSONArray(imageCandidates))
+        put("video_variants", JSONArray().apply { videoVariants.forEach { put(it.toJson()) } })
+    }
+
+    companion object {
+        fun fromJson(value: JSONObject): LivePhotoPair? {
+            val images = value.optJSONArray("image_candidates").toStrings()
+            val variants = value.optJSONArray("video_variants").toObjects(::mediaVariantFromJson)
+            return LivePhotoPair(
+                imageIndex = value.optInt("image_index", -1),
+                imageCandidates = images,
+                videoVariants = variants,
+            ).takeIf { it.imageIndex >= 0 && images.isNotEmpty() && variants.isNotEmpty() }
+        }
+    }
+}
+
 data class ParseResult(
     val ok: Boolean,
     val platform: SourcePlatform = SourcePlatform.DOUYIN,
@@ -138,6 +162,7 @@ data class ParseResult(
     val imageUrls: List<String> = emptyList(),
     val imageCandidates: List<List<String>> = emptyList(),
     val musicUrls: List<String> = emptyList(),
+    val livePhotos: List<LivePhotoPair> = emptyList(),
     val document: DocumentContent? = null,
     val responseShape: String = "{}",
     val errorCode: String = "",
@@ -170,6 +195,7 @@ data class ParseResult(
                     },
                 )
                 put("music_urls", JSONArray(musicUrls))
+                put("live_photos", JSONArray().apply { livePhotos.forEach { put(it.toJson()) } })
                 document?.let { put("document", it.toJson()) }
                 put(
                     "response_shape",
@@ -192,22 +218,7 @@ data class ParseResult(
                     rawJson = text,
                 )
             }
-            val variants = root.optJSONArray("variants").toObjects { item ->
-                val size = item.optLong("size")
-                MediaVariant(
-                    width = item.optInt("width"),
-                    height = item.optInt("height"),
-                    bitrate = item.optInt("bitrate"),
-                    fps = item.optInt("fps"),
-                    codec = item.optString("codec"),
-                    size = size,
-                    sizeSource = item.optString(
-                        "size_source",
-                        if (size > 0) "api" else "unknown",
-                    ),
-                    urls = item.optJSONArray("urls").toStrings(),
-                )
-            }
+            val variants = root.optJSONArray("variants").toObjects(::mediaVariantFromJson)
             val imageUrls = root.optJSONArray("image_urls").toStrings()
             val imageCandidates = root.optJSONArray("image_candidates").toStringLists()
                 .ifEmpty { imageUrls.map(::listOf) }
@@ -231,6 +242,11 @@ data class ParseResult(
                 imageUrls = imageCandidates.mapNotNull(List<String>::firstOrNull),
                 imageCandidates = imageCandidates,
                 musicUrls = root.optJSONArray("music_urls").toStrings(),
+                livePhotos = root.optJSONArray("live_photos").let { array ->
+                    if (array == null) emptyList() else (0 until array.length()).mapNotNull { index ->
+                        array.optJSONObject(index)?.let(LivePhotoPair::fromJson)
+                    }
+                },
                 document = root.optJSONObject("document")?.let(DocumentContent::fromJson),
                 responseShape = root.optJSONObject("response_shape")?.toString(2) ?: "{}",
                 rawJson = text,
@@ -432,4 +448,18 @@ private fun JSONArray?.toStringLists(): List<List<String>> {
 private fun <T> JSONArray?.toObjects(block: (JSONObject) -> T): List<T> {
     if (this == null) return emptyList()
     return (0 until length()).mapNotNull { index -> optJSONObject(index)?.let(block) }
+}
+
+private fun mediaVariantFromJson(item: JSONObject): MediaVariant {
+    val size = item.optLong("size")
+    return MediaVariant(
+        width = item.optInt("width"),
+        height = item.optInt("height"),
+        bitrate = item.optInt("bitrate"),
+        fps = item.optInt("fps"),
+        codec = item.optString("codec"),
+        size = size,
+        sizeSource = item.optString("size_source", if (size > 0) "api" else "unknown"),
+        urls = item.optJSONArray("urls").toStrings(),
+    )
 }

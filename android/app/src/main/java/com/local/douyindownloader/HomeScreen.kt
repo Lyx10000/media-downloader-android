@@ -469,6 +469,9 @@ private fun ResultScreen(
                     OutlinedCard(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp)) {
                             Text("原图 × ${result.imageUrls.size}", style = MaterialTheme.typography.titleMedium)
+                            if (result.livePhotos.isNotEmpty()) {
+                                Text("实况照片 × ${result.livePhotos.size}（保留图片和动态视频）")
+                            }
                             if (result.musicUrls.isNotEmpty()) Text("包含 BGM")
                         }
                     }
@@ -533,7 +536,7 @@ private fun ResultScreen(
                 ) {
                     Text(
                         when (result.kind) {
-                            MediaKind.IMAGE -> "下载原图"
+                            MediaKind.IMAGE -> if (result.livePhotos.isEmpty()) "下载原图" else "下载原图和实况"
                             MediaKind.DOCUMENT -> "下载完整内容"
                             MediaKind.VIDEO -> "开始下载"
                         },

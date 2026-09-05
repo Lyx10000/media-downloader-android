@@ -197,6 +197,20 @@ internal object XiaohongshuMediaParser {
     fun normalizeNote(note: JSONObject, noteId: String, canonicalUrl: String): ParseResult {
         val user = note.firstObject("user", "author") ?: JSONObject()
         val images = extractImageCandidates(note)
+        val imageObjects = note.firstArray("imageList", "image_list", "imagesList", "images_list")
+            ?.values()
+            .orEmpty()
+            .mapNotNull { it as? JSONObject }
+        val livePhotos = imageObjects.mapNotNull { image ->
+            val candidates = imageCandidates(image)
+            val imageIndex = images.indexOfFirst { it == candidates }
+                .takeIf { it >= 0 }
+                ?: return@mapNotNull null
+            val variants = extractImageMotionVariants(image)
+            variants.takeIf(List<MediaVariant>::isNotEmpty)?.let {
+                LivePhotoPair(imageIndex, candidates, it)
+            }
+        }.distinctBy(LivePhotoPair::imageIndex)
         val variants = extractVideoVariants(note)
         val noteType = note.firstString("type", "noteType", "note_type").lowercase()
         val isVideo = noteType == "video" || variants.isNotEmpty()
@@ -224,7 +238,22 @@ internal object XiaohongshuMediaParser {
             variants = variants,
             imageUrls = images.mapNotNull(List<String>::firstOrNull),
             imageCandidates = images,
+            livePhotos = livePhotos,
             responseShape = (responseShape(note) as JSONObject).toString(),
+        )
+    }
+
+    private fun extractImageMotionVariants(image: JSONObject): List<MediaVariant> {
+        image.firstObject("video", "dynamicVideo", "dynamic_video")?.let { video ->
+            extractVideoVariants(JSONObject().put("video", video)).takeIf(List<MediaVariant>::isNotEmpty)
+                ?.let { return it }
+        }
+        val stream = image.firstObject("stream") ?: return emptyList()
+        return extractVideoVariants(
+            JSONObject().put(
+                "video",
+                JSONObject().put("media", JSONObject().put("stream", stream)),
+            ),
         )
     }
 

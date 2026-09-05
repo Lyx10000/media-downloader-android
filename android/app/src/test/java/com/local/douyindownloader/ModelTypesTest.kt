@@ -1,9 +1,44 @@
 package com.local.douyindownloader
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelTypesTest {
+    @Test
+    fun `legacy parse result defaults to no live photos`() {
+        val result = ParseResult.fromJson(
+            """{"ok":true,"platform":"xiaohongshu","content_id":"note","kind":"image","image_urls":["https://img.example/a.jpg"]}""",
+        )
+
+        assertTrue(result.livePhotos.isEmpty())
+    }
+
+    @Test
+    fun `live photo pairs survive task serialization`() {
+        val result = ParseResult(
+            ok = true,
+            platform = SourcePlatform.XIAOHONGSHU,
+            contentId = "note",
+            kind = MediaKind.IMAGE,
+            livePhotos = listOf(
+                LivePhotoPair(
+                    imageIndex = 0,
+                    imageCandidates = listOf("https://img.example/a.jpg"),
+                    videoVariants = listOf(
+                        MediaVariant(1080, 1920, 2_000_000, 30, "H.264", 1234, "api", listOf("https://video.example/a.mp4")),
+                    ),
+                ),
+            ),
+        )
+
+        val restored = ParseResult.fromJson(result.toJson().toString())
+
+        assertEquals(1, restored.livePhotos.size)
+        assertEquals(0, restored.livePhotos.single().imageIndex)
+        assertEquals("https://video.example/a.mp4", restored.livePhotos.single().videoVariants.single().urls.single())
+    }
+
     @Test
     fun persistedValuesRemainBackwardCompatible() {
         assertEquals("merge_keep", DownloadMode.MERGE_KEEP.wireValue)

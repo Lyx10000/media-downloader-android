@@ -11,8 +11,19 @@ internal object DouyinMediaNormalizer {
         val contentId = detail.firstString("aweme_id", "awemeId").ifBlank { itemId }
         val images = detail.firstArray("images") ?: JSONArray()
         val kind = if (images.length() > 0) MediaKind.IMAGE else itemKind
-        val imageCandidates = images.values().mapNotNull { image ->
-            (image as? JSONObject)?.let(::extractImageUrls)?.takeIf(List<String>::isNotEmpty)
+        val imageEntries = images.values().mapNotNull { value ->
+            val image = value as? JSONObject ?: return@mapNotNull null
+            val candidates = extractImageUrls(image).takeIf(List<String>::isNotEmpty) ?: return@mapNotNull null
+            image to candidates
+        }
+        val imageCandidates = imageEntries.map(Pair<JSONObject, List<String>>::second)
+        val livePhotos = imageEntries.mapIndexedNotNull { index, (image, candidates) ->
+            val motionVideo = image.firstObject("video", "dynamic_video", "dynamicVideo")
+                ?: return@mapIndexedNotNull null
+            val motionVariants = extractVideoVariants(motionVideo)
+            motionVariants.takeIf(List<MediaVariant>::isNotEmpty)?.let {
+                LivePhotoPair(index, candidates, it)
+            }
         }
         val video = detail.firstObject("video") ?: JSONObject()
         val variants = if (kind == MediaKind.IMAGE) emptyList() else {
@@ -45,6 +56,7 @@ internal object DouyinMediaNormalizer {
             imageUrls = imageCandidates.mapNotNull(List<String>::firstOrNull),
             imageCandidates = imageCandidates,
             musicUrls = musicUrls,
+            livePhotos = livePhotos,
             responseShape = (responseShape(detail) as JSONObject).toString(),
         )
     }
@@ -57,6 +69,8 @@ internal object DouyinMediaNormalizer {
                 is JSONArray -> current.values().forEach(::visit)
                 is JSONObject -> listOf(
                     "url_list", "urlList", "main_url", "backup_url", "fallback_url", "src", "url",
+                    "download_url", "downloadUrl", "display_image", "displayImage",
+                    "owner_watermark_image", "ownerWatermarkImage",
                 ).forEach { key -> if (current.has(key)) visit(current.opt(key)) }
             }
         }

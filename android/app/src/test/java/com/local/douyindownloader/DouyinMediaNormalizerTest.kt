@@ -93,4 +93,22 @@ class DouyinMediaNormalizerTest {
             DouyinMediaNormalizer.extractAudioUrls(video),
         )
     }
+
+    @Test
+    fun `image video pairs are exposed as live photos`() {
+        val detail = JSONObject(
+            """
+            {"aweme_id":"1234567890123456789","images":[{
+              "download_url_list":["https://img.example/live.jpg"],
+              "video":{"play_addr":{"width":1080,"height":1920,"url_list":["https://video.example/live.mp4"]}}
+            }]}
+            """.trimIndent(),
+        )
+
+        val result = DouyinMediaNormalizer.normalize(detail, "1234567890123456789", MediaKind.IMAGE)
+
+        assertEquals(1, result.livePhotos.size)
+        assertEquals(0, result.livePhotos.single().imageIndex)
+        assertEquals("https://video.example/live.mp4", result.livePhotos.single().videoVariants.single().urls.single())
+    }
 }

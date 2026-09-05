@@ -137,6 +137,25 @@ class XiaohongshuMediaParserTest {
     }
 
     @Test
+    fun `image stream is paired as a live photo`() {
+        val result = XiaohongshuMediaParser.normalizeNote(
+            JSONObject(
+                """
+                {"noteId":"live-note","type":"normal","imageList":[{
+                  "urlDefault":"https://sns-img-qc.xhscdn.com/spectrum/live-image",
+                  "stream":{"h264":[{"masterUrl":"https://sns-video-bd.xhscdn.com/live-motion.mp4","width":1080,"height":1920}]}
+                }]}
+                """.trimIndent(),
+            ),
+            "live-note",
+            "https://www.xiaohongshu.com/explore/live-note",
+        )
+
+        assertEquals(1, result.livePhotos.size)
+        assertEquals("https://sns-video-bd.xhscdn.com/live-motion.mp4", result.livePhotos.single().videoVariants.single().urls.single())
+    }
+
+    @Test
     fun `builds contextual profile URL and reads public red id`() {
         val note = JSONObject(
             """{"user":{"userId":"user-1","nickname":"作者"}}""",
