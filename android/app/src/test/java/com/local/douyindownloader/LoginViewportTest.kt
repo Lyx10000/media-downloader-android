@@ -13,9 +13,10 @@ class LoginViewportTest {
     }
 
     @Test
-    fun assistanceScriptKeepsZoomAndCentersLoginArea() {
-        assertTrue(DOUYIN_LOGIN_VIEWPORT_SCRIPT.contains("user-scalable=yes"))
+    fun assistanceScriptCentersLoginWithoutLockingThePageViewport() {
         assertTrue(DOUYIN_LOGIN_VIEWPORT_SCRIPT.contains("scrollIntoView"))
         assertTrue(DOUYIN_LOGIN_VIEWPORT_SCRIPT.contains("setInterval"))
+        assertFalse(DOUYIN_LOGIN_VIEWPORT_SCRIPT.contains("meta[name=\"viewport\"]"))
+        assertFalse(DOUYIN_LOGIN_VIEWPORT_SCRIPT.contains("width=device-width"))
     }
 }

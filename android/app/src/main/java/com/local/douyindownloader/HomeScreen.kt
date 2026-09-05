@@ -310,7 +310,7 @@ private fun PlatformWebView(
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 if (desktopMode) settings.userAgentString = DESKTOP_USER_AGENT
-                settings.useWideViewPort = desktopMode || assistLoginViewport
+                settings.useWideViewPort = desktopMode
                 settings.loadWithOverviewMode = desktopMode
                 settings.setSupportZoom(true)
                 settings.builtInZoomControls = true
@@ -637,17 +637,6 @@ internal fun shouldAssistLoginViewport(platform: SourcePlatform): Boolean =
 internal const val DOUYIN_LOGIN_VIEWPORT_SCRIPT = """
     (function() {
       try {
-        var viewport = document.querySelector('meta[name="viewport"]');
-        if (!viewport) {
-          viewport = document.createElement('meta');
-          viewport.setAttribute('name', 'viewport');
-          document.head.appendChild(viewport);
-        }
-        viewport.setAttribute(
-          'content',
-          'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes'
-        );
-
         function visible(element) {
           if (!element) return false;
           var style = window.getComputedStyle(element);
