@@ -14,6 +14,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import androidx.work.ExistingWorkPolicy
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -113,6 +114,7 @@ data class MainUiState(
     val customTreeUri: String? = null,
     val platformCredentialStates: Map<SourcePlatform, PlatformCredentialState> =
         SourcePlatform.entries.associateWith { PlatformCredentialState.NOT_DETECTED },
+    val updateState: UpdateUiState = UpdateUiState(),
 )
 
 @HiltViewModel
@@ -132,6 +134,7 @@ class MainViewModel @Inject internal constructor(
     private val taskPreviewResolver: TaskPreviewResolver,
     private val taskFolderNavigator: TaskFolderNavigator,
     private val taskFileOperationCoordinator: TaskFileOperationCoordinator,
+    private val updateRepository: UpdateRepository,
 ) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -144,6 +147,9 @@ class MainViewModel @Inject internal constructor(
     internal val fileOperationTaskId: StateFlow<String?> = _fileOperationTaskId.asStateFlow()
     private val diagnosticExportChannel = Channel<DiagnosticExportResult>(Channel.BUFFERED)
     internal val diagnosticExports = diagnosticExportChannel.receiveAsFlow()
+    private val updateLaunchChannel = Channel<UpdateLaunchRequest>(Channel.BUFFERED)
+    internal val updateLaunchRequests = updateLaunchChannel.receiveAsFlow()
+    private var updateDownloadJob: Job? = null
 
     var inputText: String
         get() = _uiState.value.inputText
@@ -188,6 +194,12 @@ class MainViewModel @Inject internal constructor(
     init {
         refreshPlatformCredentialStates()
         refreshLogs()
+        viewModelScope.launch {
+            updateRepository.state.collectLatest { state ->
+                _uiState.update { it.copy(updateState = state) }
+            }
+        }
+        viewModelScope.launch { updateRepository.check(manual = false) }
         viewModelScope.launch {
             settingsRepository.settings.collectLatest { settings ->
                 selectedMode = settings.defaultMode
@@ -936,6 +948,36 @@ class MainViewModel @Inject internal constructor(
         message = if (uri == null) "已恢复默认下载目录" else "已保存自定义目录"
     }
 
+    fun checkForUpdates() {
+        viewModelScope.launch { updateRepository.check(manual = true) }
+    }
+
+    fun downloadUpdate(source: UpdateSource) {
+        if (updateDownloadJob?.isActive == true) return
+        updateDownloadJob = viewModelScope.launch { updateRepository.download(source) }
+    }
+
+    fun cancelUpdateDownload() {
+        updateRepository.cancelDownload()
+        updateDownloadJob?.cancel()
+    }
+
+    fun requestUpdateInstall() {
+        val request = updateRepository.installRequest()
+        if (request == null) {
+            message = "更新安装包不存在，请重新下载"
+        } else {
+            updateLaunchChannel.trySend(request)
+            if (request is UpdateLaunchRequest.GrantInstallPermission) {
+                message = "授权安装未知应用后，请再次点击安装"
+            }
+        }
+    }
+
+    fun openUpdateReleasePage() {
+        updateLaunchChannel.trySend(updateRepository.releasePageRequest())
+    }
+
     fun consumeMessage(): String {
         val current = message
         message = ""
@@ -943,6 +985,7 @@ class MainViewModel @Inject internal constructor(
     }
 
     override fun onCleared() {
+        updateRepository.cancelDownload()
         mediaPreviewCoordinator.stopAndRelease("VIEW_MODEL_CLEARED")
         super.onCleared()
     }

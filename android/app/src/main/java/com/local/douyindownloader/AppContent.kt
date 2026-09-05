@@ -148,6 +148,16 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             }
         }
     }
+    LaunchedEffect(viewModel) {
+        viewModel.updateLaunchRequests.collectLatest { request ->
+            runCatching { context.startActivity(request.intent) }.onFailure { error ->
+                viewModel.showMessage(
+                    "无法打开${if (request is UpdateLaunchRequest.InstallApk) "系统安装器" else "目标页面"}：" +
+                        Redactor.sanitize(error.message ?: error.javaClass.simpleName),
+                )
+            }
+        }
+    }
     val selectableTaskIds = uiState.tasks
         .filter { it.status != TaskStatus.DELETING }
         .mapTo(linkedSetOf(), TaskRecord::id)

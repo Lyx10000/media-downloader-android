@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import java.io.IOException
 import javax.inject.Inject
@@ -17,6 +18,7 @@ data class AppSettings(
     val defaultMode: DownloadMode = DownloadMode.MERGE_KEEP,
     val preferH264: Boolean = false,
     val customTreeUri: String? = null,
+    val lastUpdateCheckEpochDay: Long = Long.MIN_VALUE,
 )
 
 @Singleton
@@ -35,6 +37,7 @@ class SettingsRepository @Inject constructor(
                 ),
                 preferH264 = preferences[PREFER_H264] ?: false,
                 customTreeUri = preferences[CUSTOM_TREE_URI]?.takeIf(String::isNotBlank),
+                lastUpdateCheckEpochDay = preferences[LAST_UPDATE_CHECK_EPOCH_DAY] ?: Long.MIN_VALUE,
             )
         }
 
@@ -55,9 +58,14 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    suspend fun setLastUpdateCheckEpochDay(value: Long) {
+        dataStore.edit { it[LAST_UPDATE_CHECK_EPOCH_DAY] = value }
+    }
+
     companion object {
         val DEFAULT_MODE = stringPreferencesKey("default_mode")
         val PREFER_H264 = booleanPreferencesKey("prefer_h264")
         val CUSTOM_TREE_URI = stringPreferencesKey("custom_tree_uri")
+        val LAST_UPDATE_CHECK_EPOCH_DAY = longPreferencesKey("last_update_check_epoch_day")
     }
 }
