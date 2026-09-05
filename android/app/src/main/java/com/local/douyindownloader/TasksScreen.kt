@@ -73,6 +73,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -762,7 +763,19 @@ private fun VideoPreview(
     onFullscreen: () -> Unit,
 ) {
     val isCurrent = state.taskId == taskId && state.source.samePlaybackSource(media)
-    val hasPlayer = isCurrent && state.player != null
+    val player = state.player.takeIf { isCurrent }
+    val hasPlayer = player != null
+    val videoAspectRatio = if (isCurrent) state.videoAspectRatio else DEFAULT_VIDEO_ASPECT_RATIO
+    var inlineSurfaceReady by remember(player) { mutableStateOf(!isFullscreen) }
+    LaunchedEffect(isFullscreen, player) {
+        if (isFullscreen) {
+            inlineSurfaceReady = false
+        } else if (player != null) {
+            // Let the fullscreen dialog dispose its video Surface before the card attaches a new one.
+            withFrameNanos { }
+            inlineSurfaceReady = true
+        }
+    }
     Text(
         when (media.videoAudioMode) {
             VideoAudioMode.SEPARATE -> "视频预览 · 独立音轨同步播放"
@@ -775,14 +788,14 @@ private fun VideoPreview(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(16f / 9f)
+            .aspectRatio(compactVideoAspectRatio(videoAspectRatio))
             .clip(MaterialTheme.shapes.medium)
             .background(Color.Black),
         contentAlignment = Alignment.Center,
     ) {
         when {
-            hasPlayer && !isFullscreen -> {
-                VideoPlayerSurface(state.player!!)
+            hasPlayer && !isFullscreen && inlineSurfaceReady -> {
+                VideoPlayerSurface(player!!)
                 if (state.status == MediaPreviewStatus.PREPARING) {
                     CircularProgressIndicator(color = Color.White)
                 }
@@ -1145,6 +1158,15 @@ private fun FullscreenVideoPreview(
 }
 
 private const val FULLSCREEN_CONTROLS_TIMEOUT_MS = 3_000L
+
+internal fun compactVideoAspectRatio(sourceRatio: Float): Float =
+    sourceRatio.takeIf { it.isFinite() && it > 0f }
+        ?.coerceIn(MIN_CARD_VIDEO_ASPECT_RATIO, MAX_CARD_VIDEO_ASPECT_RATIO)
+        ?: DEFAULT_VIDEO_ASPECT_RATIO
+
+private const val DEFAULT_VIDEO_ASPECT_RATIO = 16f / 9f
+private const val MIN_CARD_VIDEO_ASPECT_RATIO = 3f / 4f
+private const val MAX_CARD_VIDEO_ASPECT_RATIO = 2f
 
 private fun TaskPreviewMedia?.samePlaybackSource(other: TaskPreviewMedia): Boolean =
     this?.uri == other.uri

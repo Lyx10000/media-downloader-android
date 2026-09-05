@@ -5,6 +5,14 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TaskPreviewTest {
+
+    @Test
+    fun compactVideoAspectRatioUsesRealRatioWithinCardBounds() {
+        assertEquals(1.5f, compactVideoAspectRatio(1.5f))
+        assertEquals(0.75f, compactVideoAspectRatio(9f / 16f))
+        assertEquals(2f, compactVideoAspectRatio(21f / 9f))
+        assertEquals(16f / 9f, compactVideoAspectRatio(Float.NaN))
+    }
     @Test
     fun documentPreviewIncludesImageGalleryAndEveryEmbeddedVideo() {
         val image = TaskOutput("image", "image_001.jpg", "image/jpeg", relativePath = "media/image_001.jpg")
