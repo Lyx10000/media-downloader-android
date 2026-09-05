@@ -3,6 +3,8 @@
 面向 Android 手机侧载使用，最低 Android 10，
 APK 只包含 `arm64-v8a`。
 
+[从 GitHub Releases 下载最新版 APK](https://github.com/Lyx10000/media-downloader-android/releases/latest)
+
 ## 安装
 
 将 release APK 复制到手机后点击安装。如果 ColorOS 阻止安装，请在系统提示中仅对
@@ -47,7 +49,9 @@ APK 只包含 `arm64-v8a`。
 ```
 
 设置中可以通过系统目录选择器改用其他目录。诊断日志默认位于应用私有目录，只有
-点击“导出 ZIP”后才会写入公共下载目录。
+点击“导出 ZIP”后才会写入公共目录
+`内部存储/Download/DouyinDownloader/diagnostics/`。导出成功后会打开系统分享面板；如果
+设备没有可处理 ZIP 的应用，文件仍会保留在上述目录，并显示具体保存位置。
 
 任务页会检查已下载文件是否仍然存在。部分文件被外部删除时任务显示橙色，全部文件
 被删除时显示灰色；点击异常任务可以重新解析作品并下载。删除任务时可以选择是否同步
@@ -68,6 +72,10 @@ cd android
 ./gradlew assembleRelease
 ```
 
+`assembleDebug` 生成使用调试证书签名、可直接安装的调试 APK。仓库没有包含正式签名私钥，
+因此 `assembleRelease` 生成的是 `app-release-unsigned.apk`，分发前必须使用自己的密钥完成
+zipalign 和 APK 签名。GitHub Releases 中的官方 APK 使用项目维护者证书签名。
+
 本项目所在的 ARM64 Termux 环境需要 ARM64 原生 AAPT2。当前构建配置指向：
 
 ```text
@@ -81,6 +89,9 @@ cd android
 
 - 抖音、小红书和知乎都没有面向此用途的公开稳定下载 API，Cookie、签名或字段变化后可能需要
   更新 APK。
+- 应用会优先选择没有明确水印特征的图片地址，但平台只提供带水印资源时无法保证去水印。
+- 重新下载被风控拒绝时可以回退到任务保存的旧 CDN 地址；这能恢复文件，但不能补全旧任务
+  缺少的作者账号或刷新清晰度列表。
 - 首次解析或出现登录/风控提示时，可在首页点击对应平台的登录状态，打开全屏登录环境。页面支持缩放，
   方便完成登录或验证操作。
 - H.265 是最高档时，旧播放器可能不兼容，可手动选择相同分辨率的 H.264。
