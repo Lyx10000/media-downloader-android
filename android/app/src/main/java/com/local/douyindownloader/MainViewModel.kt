@@ -232,9 +232,13 @@ class MainViewModel @Inject internal constructor(
         }
         sessionPlatform = source.platform
         sessionSourceUrl = source.url
-        sessionSupportsPageSnapshot = source.platform == SourcePlatform.ZHIHU && runCatching {
-            ZhihuSourceResolver.resolve(source.url).type != ZhihuContentType.VIDEO
-        }.getOrDefault(false)
+        sessionSupportsPageSnapshot = when (source.platform) {
+            SourcePlatform.XIAOHONGSHU -> true
+            SourcePlatform.ZHIHU -> runCatching {
+                ZhihuSourceResolver.resolve(source.url).type != ZhihuContentType.VIDEO
+            }.getOrDefault(false)
+            SourcePlatform.DOUYIN -> false
+        }
         sessionId = UUID.randomUUID().toString()
         sessionCredentialAttempts.clear()
         parsingStarted = false
@@ -298,6 +302,18 @@ class MainViewModel @Inject internal constructor(
         parseState = ParseUiState.Parsing
         viewModelScope.launch {
             val result = parser.parse(inputText, cookieHeader, pageSnapshot)
+            result.parserAttempts.forEach { attempt ->
+                logger.event(
+                    sessionId,
+                    "PARSE",
+                    if (attempt.selected) "PARSE_STRATEGY_SELECTED" else "PARSE_STRATEGY_FAILED",
+                    JSONObject().apply {
+                        put("strategy", attempt.strategy)
+                        put("status_code", attempt.statusCode)
+                        put("error_code", attempt.errorCode)
+                    },
+                )
+            }
             val fallbackMode = nextParserCredentialMode(
                 platform = sessionPlatform,
                 errorCode = result.errorCode,

@@ -15,7 +15,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-internal const val PARSER_VERSION = "kotlin-core-3"
+internal const val PARSER_VERSION = "kotlin-core-4"
 
 internal data class DiagnosticExportResult(
     val uri: String,

@@ -50,6 +50,34 @@ class XiaohongshuMediaParserTest {
     }
 
     @Test
+    fun `bounded scan finds a deeply nested target note but rejects recommendations`() {
+        val state = JSONObject(
+            """
+            {"layout":{"payload":{"cards":[
+              {"note":{"noteId":"recommended","imageList":[{"urlDefault":"https://sns-img-qc.xhscdn.com/recommended"}]}},
+              {"wrapper":{"note":{"noteId":"wanted","title":"目标","imageList":[{"urlDefault":"https://sns-img-qc.xhscdn.com/wanted"}]}}}
+            ]}}}
+            """.trimIndent(),
+        )
+
+        assertEquals("目标", XiaohongshuMediaParser.findTargetNote(state, "wanted")?.optString("title"))
+        assertNull(XiaohongshuMediaParser.findTargetNote(state, "missing"))
+    }
+
+    @Test
+    fun `trace id produces original CDN candidates before preview URLs`() {
+        val candidates = XiaohongshuMediaParser.imageCandidates(
+            JSONObject(
+                """{"traceId":"trace-object-id","urlDefault":"https://sns-img-qc.xhscdn.com/preview!small"}""",
+            ),
+        )
+
+        assertEquals("https://sns-img-bd.xhscdn.com/trace-object-id", candidates.first())
+        assertTrue(candidates.contains("https://sns-img-qn.xhscdn.com/trace-object-id"))
+        assertTrue(candidates.last().contains("preview!small"))
+    }
+
+    @Test
     fun `restores all original image CDN candidates`() {
         val candidates = XiaohongshuMediaParser.imageCandidates(
             JSONObject().put(

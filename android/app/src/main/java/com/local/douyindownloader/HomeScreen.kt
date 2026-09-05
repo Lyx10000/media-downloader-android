@@ -735,11 +735,15 @@ private const val PAGE_SNAPSHOT_SCRIPT = """
         content = document.querySelector('.Post-RichTextContainer .RichText, .Post-RichTextContainer, article .RichText');
       }
       var state = document.querySelector('script#js-initialData, script#__NEXT_DATA__');
+      var initialData = state ? (state.textContent || '') : '';
+      if (!initialData && window.__INITIAL_STATE__) {
+        try { initialData = JSON.stringify(window.__INITIAL_STATE__); } catch (_) {}
+      }
       var titleNode = document.querySelector('h1.Post-Title, .QuestionHeader-title, article h1, main h1, h1');
       var authorNode = root && root.querySelector('.AuthorInfo-name, [itemprop="name"], .UserLink-link');
       return JSON.stringify({
         finalUrl: window.location.href || '',
-        initialData: state ? (state.textContent || '') : '',
+        initialData: initialData,
         title: titleNode ? (titleNode.textContent || '').trim() : (document.title || '').trim(),
         author: authorNode ? (authorNode.textContent || '').trim() : '',
         contentHtml: content ? (content.innerHTML || '') : '',

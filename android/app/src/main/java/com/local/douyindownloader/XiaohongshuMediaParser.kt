@@ -6,8 +6,11 @@ import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.ArrayDeque
 
 internal object XiaohongshuMediaParser {
+    data class TargetNoteMatch(val note: JSONObject, val strategy: String)
+
     const val HOME_URL = "https://www.xiaohongshu.com/"
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -64,7 +67,17 @@ internal object XiaohongshuMediaParser {
         return null
     }
 
-    fun findTargetNote(state: JSONObject, targetNoteId: String): JSONObject? {
+    fun parseStatePayload(payload: String): JSONObject? {
+        val trimmed = payload.trim().removeSuffix(";").trim()
+        if (trimmed.isBlank()) return null
+        return runCatching { JSONObject(replaceUndefined(trimmed)) }.getOrNull()
+            ?: extractInitialState(payload)
+    }
+
+    fun findTargetNote(state: JSONObject, targetNoteId: String): JSONObject? =
+        findTargetNoteWithStrategy(state, targetNoteId)?.note
+
+    fun findTargetNoteWithStrategy(state: JSONObject, targetNoteId: String): TargetNoteMatch? {
         if (targetNoteId.isBlank()) return null
         val stateRoot = unwrap(state, unwrapNote = false)
         val noteRoot = unwrap(stateRoot.firstObject("note") ?: JSONObject(), unwrapNote = false)
@@ -73,15 +86,24 @@ internal object XiaohongshuMediaParser {
         if (noteMap != null) {
             noteMap.optJSONObject(targetNoteId)?.let(::unwrap)?.let { direct ->
                 val embeddedId = noteId(direct)
-                if (embeddedId.isBlank() || embeddedId == targetNoteId) return direct
+                if (embeddedId.isBlank() || embeddedId == targetNoteId) {
+                    return TargetNoteMatch(direct, "known_state_path")
+                }
             }
             noteMap.keysInOrder().forEach { key ->
                 val candidate = noteMap.optJSONObject(key)?.let(::unwrap)
-                if (candidate != null && noteId(candidate) == targetNoteId) return candidate
+                if (candidate != null && noteId(candidate) == targetNoteId) {
+                    return TargetNoteMatch(candidate, "known_state_path")
+                }
             }
         }
         val candidate = noteRoot.firstObject("note", "noteDetail", "note_detail")?.let(::unwrap)
-        return candidate?.takeIf { noteId(it) == targetNoteId }
+        candidate?.takeIf { noteId(it) == targetNoteId }?.let {
+            return TargetNoteMatch(it, "known_state_path")
+        }
+        return findTargetNoteDeep(stateRoot, targetNoteId)?.let {
+            TargetNoteMatch(it, "bounded_deep_scan")
+        }
     }
 
     fun imageCandidates(value: Any?): List<String> {
@@ -99,12 +121,17 @@ internal object XiaohongshuMediaParser {
         val previews = listOf(
             "urlPre", "url_pre", "preview", "urlList", "url_list", "infoList",
         ).flatMap { asUrls(image.opt(it)) }
+        val traceCandidates = image.firstString("traceId", "trace_id")
+            .trimStart('/')
+            .takeIf(String::isNotBlank)
+            ?.let { traceId -> imageCdns.map { cdn -> "$cdn/$traceId" } }
+            .orEmpty()
         val restored = (explicitOriginals + defaults + previews).flatMap { source ->
             originalObjectPath(source).takeIf(String::isNotBlank)?.let { path ->
                 imageCdns.map { cdn -> "$cdn/$path" }
             }.orEmpty()
         }
-        return stableDistinct(explicitOriginals + restored + defaults + previews)
+        return stableDistinct(explicitOriginals + traceCandidates + restored + defaults + previews)
     }
 
     fun extractImageCandidates(note: JSONObject): List<List<String>> {
@@ -304,6 +331,41 @@ internal object XiaohongshuMediaParser {
     private fun noteId(note: JSONObject): String =
         note.firstValue("noteId", "note_id", "id", "note_id_str")?.toString().orEmpty()
 
+    private fun findTargetNoteDeep(root: JSONObject, targetNoteId: String): JSONObject? {
+        val queue = ArrayDeque<ScanNode>()
+        queue.add(ScanNode(root, 0))
+        var visited = 0
+        while (queue.isNotEmpty() && visited < MAX_SCAN_NODES) {
+            val (value, depth) = queue.removeFirst()
+            visited += 1
+            when (value) {
+                is JSONObject -> {
+                    val candidate = unwrap(value)
+                    if (noteId(candidate) == targetNoteId && isLikelyNote(candidate)) return candidate
+                    if (depth < MAX_SCAN_DEPTH) {
+                        value.keysInOrder().forEach { key ->
+                            when (val child = value.opt(key)) {
+                                is JSONObject, is JSONArray -> queue.add(ScanNode(child, depth + 1))
+                            }
+                        }
+                    }
+                }
+                is JSONArray -> if (depth < MAX_SCAN_DEPTH) {
+                    value.values().forEach { child ->
+                        if (child is JSONObject || child is JSONArray) {
+                            queue.add(ScanNode(child, depth + 1))
+                        }
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun isLikelyNote(value: JSONObject): Boolean =
+        value.firstArray("imageList", "image_list", "images") != null ||
+            value.firstObject("video", "videoInfo", "video_info") != null
+
     private fun unwrap(source: JSONObject, unwrapNote: Boolean = true): JSONObject {
         var current = source
         repeat(4) {
@@ -316,6 +378,8 @@ internal object XiaohongshuMediaParser {
         }
         return current
     }
+
+    private data class ScanNode(val value: Any, val depth: Int)
 
     private fun extractBalancedObject(text: String, start: Int): String {
         var depth = 0
@@ -382,6 +446,9 @@ internal object XiaohongshuMediaParser {
         }
         return result.toString()
     }
+
+    private const val MAX_SCAN_NODES = 50_000
+    private const val MAX_SCAN_DEPTH = 12
 
     private fun isJavaScriptNameCharacter(value: Char): Boolean = value.isLetterOrDigit() || value in "_$"
 

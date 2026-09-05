@@ -223,9 +223,14 @@ internal class DouyinPlatformParser @Inject constructor(
             ?.url
             ?: throw PlatformParseException("UNSUPPORTED_URL", "没有找到抖音链接")
         val resolved = resolveItem(sourceUrl)
-        val detail = fetchDetail(resolved.id, cookieHeader)
-            ?: return parseFailure(platform, "DETAIL_EMPTY", "抖音详情接口没有返回作品信息，请返回首页点击抖音登录状态")
+        val resolution = fetchDetail(resolved, cookieHeader)
+        val detail = resolution.detail ?: return parseFailure(
+            platform,
+            resolution.errorCode,
+            resolution.message,
+        ).copy(parserAttempts = resolution.attempts)
         hydrateVariantSizes(DouyinMediaNormalizer.normalize(detail, resolved.id, resolved.kind))
+            .copy(parserAttempts = resolution.attempts)
     } catch (error: PlatformParseException) {
         parseFailure(platform, error.code, error.message.orEmpty())
     } catch (error: ParserHttpStatusException) {
@@ -257,32 +262,139 @@ internal class DouyinPlatformParser @Inject constructor(
         throw PlatformParseException("URL_RESOLVE_FAILED", "短链已打开，但没有识别到作品 ID")
     }
 
-    private fun fetchDetail(itemId: String, cookieHeader: String): JSONObject? {
+    private fun fetchDetail(
+        item: ResolvedDouyinItem,
+        cookieHeader: String,
+    ): DouyinResolution {
+        val itemId = item.id
+        val attempts = ArrayList<ParserAttempt>()
+        var sawAuthOrRisk = false
+        var sawUnavailable = false
+        var sawNetwork = false
+
+        fun attempt(
+            name: String,
+            url: String,
+            headers: Map<String, String>,
+            cookie: String = cookieHeader,
+        ): JSONObject? {
+            val response = try {
+                httpClient.get(
+                    url,
+                    headers = headers,
+                    cookieHeader = cookie,
+                    timeoutSeconds = if (name == "signed_detail") 25 else 12,
+                )
+            } catch (_: IOException) {
+                sawNetwork = true
+                attempts += ParserAttempt(name, selected = false, errorCode = "NETWORK")
+                return null
+            } catch (_: Throwable) {
+                attempts += ParserAttempt(name, selected = false, errorCode = "PARSE_FAILED")
+                return null
+            }
+            val statusError = when (response.statusCode) {
+                401, 403, 429, 461 -> "AUTH_OR_RISK"
+                404, 410 -> "CONTENT_UNAVAILABLE"
+                in 200..299 -> ""
+                else -> "HTTP_ERROR"
+            }
+            if (statusError.isNotEmpty()) {
+                sawAuthOrRisk = sawAuthOrRisk || statusError == "AUTH_OR_RISK"
+                sawUnavailable = sawUnavailable || statusError == "CONTENT_UNAVAILABLE"
+                attempts += ParserAttempt(name, selected = false, response.statusCode, statusError)
+                return null
+            }
+            val detail = response.body.takeIf(String::isNotBlank)
+                ?.let { DouyinFallbackExtractor.findExactDetailFromBody(it, itemId) }
+            attempts += ParserAttempt(
+                strategy = name,
+                selected = detail != null,
+                statusCode = response.statusCode,
+                errorCode = if (detail == null) "DETAIL_EMPTY" else "",
+            )
+            return detail
+        }
+
+        val signedDetail = signedDetailUrl(itemId)
+        val desktopHeaders = desktopHeaders("https://www.douyin.com/${if (item.kind == MediaKind.IMAGE) "note" else "video"}/$itemId")
+        val strategies = listOf(
+            Triple("signed_detail", signedDetail, desktopHeaders),
+            Triple(
+                "item_info",
+                "https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids=$itemId",
+                desktopHeaders("https://www.iesdouyin.com/"),
+            ),
+            Triple(
+                "mobile_feed",
+                "https://aweme.snssdk.com/aweme/v1/feed/?type=7&aweme_id=$itemId&iid=0&device_id=0&version_code=270000&version_name=27.0.0",
+                mapOf(
+                    "User-Agent" to MOBILE_USER_AGENT,
+                    "Referer" to "https://www.iesdouyin.com/",
+                    "Accept" to "application/json, text/plain, */*",
+                ),
+            ),
+            Triple(
+                "share_video",
+                "https://www.iesdouyin.com/share/video/$itemId",
+                htmlHeaders("https://www.iesdouyin.com/"),
+            ),
+            Triple(
+                "share_note",
+                "https://www.iesdouyin.com/share/note/$itemId",
+                htmlHeaders("https://www.iesdouyin.com/"),
+            ),
+            Triple(
+                "work_page",
+                "https://www.douyin.com/${if (item.kind == MediaKind.IMAGE) "note" else "video"}/$itemId",
+                htmlHeaders("https://www.douyin.com/"),
+            ),
+        )
+        strategies.forEach { (name, url, headers) ->
+            attempt(name, url, headers)?.let { detail ->
+                return DouyinResolution(detail, attempts)
+            }
+        }
+        val code = when {
+            sawAuthOrRisk -> "AUTH_OR_RISK"
+            sawUnavailable -> "CONTENT_UNAVAILABLE"
+            sawNetwork && attempts.all { it.errorCode == "NETWORK" } -> "NETWORK"
+            else -> "DETAIL_EMPTY"
+        }
+        val message = when (code) {
+            "AUTH_OR_RISK" -> "抖音接口或页面受到登录/风控限制，请返回首页点击抖音登录状态"
+            "CONTENT_UNAVAILABLE" -> "抖音作品不存在、已删除或暂不可访问"
+            "NETWORK" -> "抖音解析入口均无法连接"
+            else -> "抖音多个解析入口均未返回目标作品信息"
+        }
+        return DouyinResolution(null, attempts, code, message)
+    }
+
+    private fun signedDetailUrl(itemId: String): String {
         val params = requestParameters(itemId)
         val paramsText = params.entries.joinToString("&") { (name, value) ->
             "${urlEncode(name)}=${urlEncode(value)}"
         }
         val signature = ABogusSigner().sign(paramsText, USER_AGENT)
-        val endpoint = "$DETAIL_ENDPOINT$paramsText&a_bogus=${urlEncode(signature)}"
-        val response = httpClient.get(
-            endpoint,
-            headers = mapOf(
-                "User-Agent" to USER_AGENT,
-                "Referer" to "https://www.douyin.com/video/$itemId",
-                "Accept" to "application/json, text/plain, */*",
-                "Accept-Language" to "zh-CN,zh;q=0.9",
-                "sec-ch-ua" to "\"Chromium\";v=\"130\", \"Microsoft Edge\";v=\"130\", \"Not?A_Brand\";v=\"99\"",
-                "sec-ch-ua-mobile" to "?0",
-                "sec-ch-ua-platform" to "\"Windows\"",
-            ),
-            cookieHeader = cookieHeader,
-            timeoutSeconds = 25,
-        )
-        if (response.statusCode !in 200..299) throw ParserHttpStatusException(response.statusCode)
-        if (response.body.isBlank()) return null
-        val root = JSONObject(response.body)
-        return root.optJSONObject("aweme_detail")?.takeIf { root.optInt("status_code") == 0 }
+        return "$DETAIL_ENDPOINT$paramsText&a_bogus=${urlEncode(signature)}"
     }
+
+    private fun desktopHeaders(referer: String): Map<String, String> = mapOf(
+        "User-Agent" to USER_AGENT,
+        "Referer" to referer,
+        "Accept" to "application/json, text/plain, */*",
+        "Accept-Language" to "zh-CN,zh;q=0.9",
+        "sec-ch-ua" to "\"Chromium\";v=\"130\", \"Microsoft Edge\";v=\"130\", \"Not?A_Brand\";v=\"99\"",
+        "sec-ch-ua-mobile" to "?0",
+        "sec-ch-ua-platform" to "\"Windows\"",
+    )
+
+    private fun htmlHeaders(referer: String): Map<String, String> = mapOf(
+        "User-Agent" to USER_AGENT,
+        "Referer" to referer,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" to "zh-CN,zh;q=0.9",
+    )
 
     private fun hydrateVariantSizes(result: ParseResult): ParseResult = result.copy(
         variants = MediaSizeHydrator.hydrate(
@@ -342,10 +454,20 @@ internal class DouyinPlatformParser @Inject constructor(
 
     private data class ResolvedDouyinItem(val id: String, val kind: MediaKind)
 
+    private data class DouyinResolution(
+        val detail: JSONObject?,
+        val attempts: List<ParserAttempt>,
+        val errorCode: String = "",
+        val message: String = "",
+    )
+
     companion object {
         const val USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"
+        private const val MOBILE_USER_AGENT =
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) " +
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
         private const val DETAIL_ENDPOINT = "https://www.douyin.com/aweme/v1/web/aweme/detail/?"
         private const val TOKEN_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
         private val SECURE_RANDOM = SecureRandom()
@@ -365,11 +487,20 @@ internal class XiaohongshuPlatformParser @Inject constructor(
         pageSnapshot: WebPageSnapshot?,
     ): ParseResult = try {
         val sourceUrl = XiaohongshuMediaParser.extractShareUrl(shareText)
-        var response = requestPage(sourceUrl, cookieHeader)
-        var canonicalUrl = response.finalUrl
-        XiaohongshuMediaParser.redirectTarget(canonicalUrl).takeIf(String::isNotBlank)?.let { target ->
-            response = requestPage(target, cookieHeader)
+        var response: ParserHttpResponse? = null
+        var canonicalUrl = pageSnapshot?.finalUrl.orEmpty()
+        var state = pageSnapshot?.takeIf { snapshot ->
+            SourcePlatform.XIAOHONGSHU.matchesHost(
+                runCatching { java.net.URI(snapshot.finalUrl).host.orEmpty() }.getOrDefault(""),
+            )
+        }?.initialData?.let(XiaohongshuMediaParser::parseStatePayload)
+        if (state == null) {
+            response = requestPage(sourceUrl, cookieHeader)
             canonicalUrl = response.finalUrl
+            XiaohongshuMediaParser.redirectTarget(canonicalUrl).takeIf(String::isNotBlank)?.let { target ->
+                response = requestPage(target, cookieHeader)
+                canonicalUrl = response.finalUrl
+            }
         }
         val noteId = XiaohongshuMediaParser.noteIdFromUrl(canonicalUrl)
             .ifBlank { XiaohongshuMediaParser.noteIdFromUrl(sourceUrl) }
@@ -379,17 +510,19 @@ internal class XiaohongshuPlatformParser @Inject constructor(
                 "短链接已打开，但没有识别到小红书笔记 ID，请重新复制最新分享链接",
             )
         }
-        val unavailable = UNAVAILABLE.find(response.body)?.value
+        val pageBody = response?.body.orEmpty()
+        val unavailable = UNAVAILABLE.find(pageBody)?.value
         if (unavailable != null) {
             throw PlatformParseException("CONTENT_UNAVAILABLE", "小红书笔记$unavailable")
         }
-        if ("/login" in canonicalUrl || "登录后查看" in response.body) {
+        if ("/login" in canonicalUrl || "登录后查看" in pageBody) {
             throw PlatformParseException("LOGIN_REQUIRED", "请返回首页点击小红书登录状态")
         }
-        val state = XiaohongshuMediaParser.extractInitialState(response.body)
+        state = state ?: XiaohongshuMediaParser.extractInitialState(pageBody)
             ?: throw PlatformParseException("DETAIL_EMPTY", "页面没有返回小红书笔记状态")
-        val note = XiaohongshuMediaParser.findTargetNote(state, noteId)
+        val match = XiaohongshuMediaParser.findTargetNoteWithStrategy(state, noteId)
             ?: throw PlatformParseException("DETAIL_EMPTY", "页面状态中没有匹配目标笔记")
+        val note = match.note
         val normalized = XiaohongshuMediaParser.normalizeNote(note, noteId, canonicalUrl)
         val enriched = if (normalized.authorAccountId.isNotBlank()) normalized else {
             normalized.copy(
@@ -400,6 +533,13 @@ internal class XiaohongshuPlatformParser @Inject constructor(
             variants = MediaSizeHydrator.hydrate(
                 variants = enriched.variants,
                 probe = { urls -> probeVariantSize(urls) },
+            ),
+            parserAttempts = listOf(
+                ParserAttempt(
+                    strategy = if (pageSnapshot != null) "webview_snapshot/${match.strategy}" else match.strategy,
+                    selected = true,
+                    statusCode = response?.statusCode ?: 200,
+                ),
             ),
         )
     } catch (error: PlatformParseException) {

@@ -7,6 +7,35 @@ import org.junit.Test
 
 class PlatformParsersTest {
     @Test
+    fun `douyin fallback selects only the requested aweme from feed`() {
+        val root = org.json.JSONObject(
+            """
+            {"aweme_list":[
+              {"aweme_id":"9999999999999999999","video":{"play_addr":{"url_list":["https://cdn.example/wrong.mp4"]}}},
+              {"aweme_id":"7670091606150329338","video":{"play_addr":{"url_list":["https://cdn.example/right.mp4"]}}}
+            ]}
+            """.trimIndent(),
+        )
+
+        val detail = DouyinFallbackExtractor.findExactDetail(root, "7670091606150329338")
+
+        assertEquals("7670091606150329338", detail?.optString("aweme_id"))
+    }
+
+    @Test
+    fun `douyin fallback extracts exact detail from router page`() {
+        val page = """
+            <script>window._ROUTER_DATA = {"loaderData":{"video_page":{"videoInfoRes":{"item_list":[
+              {"aweme_id":"7670091606150329338","images":[{"download_url_list":["https://cdn.example/image.webp"]}]}
+            ]}}}}};</script>
+        """.trimIndent()
+
+        val detail = DouyinFallbackExtractor.findExactDetailFromPage(page, "7670091606150329338")
+
+        assertEquals("7670091606150329338", detail?.optString("aweme_id"))
+    }
+
+    @Test
     fun `douyin parser resolves link and returns all media fields`() {
         val http = FakeParserHttpClient(
             responses = ArrayDeque(
@@ -91,6 +120,30 @@ class PlatformParsersTest {
 
         assertFalse(result.ok)
         assertEquals("AUTH_OR_RISK", result.errorCode)
+    }
+
+    @Test
+    fun `douyin parser falls back from blocked detail to exact item info`() {
+        val itemId = "7670091606150329338"
+        val http = FakeParserHttpClient(
+            responses = ArrayDeque(
+                listOf(
+                    response(finalUrl = "https://www.douyin.com/note/$itemId"),
+                    response(statusCode = 403),
+                    response(
+                        body = """{"item_list":[{"aweme_id":"$itemId","images":[{"download_url_list":["https://cdn.example/source.webp"]}]}]}""",
+                    ),
+                ),
+            ),
+        )
+
+        val result = DouyinPlatformParser(http).parse("https://www.douyin.com/note/$itemId", "ttwid=value")
+
+        assertTrue(result.ok)
+        assertEquals(MediaKind.IMAGE, result.kind)
+        assertEquals(listOf("signed_detail", "item_info"), result.parserAttempts.map { it.strategy })
+        assertTrue(result.parserAttempts.last().selected)
+        assertTrue(http.requests[2].url.contains("iteminfo"))
     }
 
     @Test

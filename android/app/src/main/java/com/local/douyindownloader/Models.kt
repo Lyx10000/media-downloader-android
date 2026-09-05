@@ -115,6 +115,13 @@ data class MediaVariant(
     }
 }
 
+data class ParserAttempt(
+    val strategy: String,
+    val selected: Boolean,
+    val statusCode: Int = 0,
+    val errorCode: String = "",
+)
+
 data class ParseResult(
     val ok: Boolean,
     val platform: SourcePlatform = SourcePlatform.DOUYIN,
@@ -136,6 +143,7 @@ data class ParseResult(
     val errorCode: String = "",
     val message: String = "",
     val rawJson: String = "{}",
+    val parserAttempts: List<ParserAttempt> = emptyList(),
 ) {
     fun toJson(): JSONObject {
         val preserved = runCatching { JSONObject(rawJson) }.getOrNull()
