@@ -10,6 +10,7 @@ class ShareIntentsTest {
         assertEquals("audio/mpeg", mediaMimeType("music.mp3"))
         assertEquals("audio/mp4", mediaMimeType("track.m4a"))
         assertEquals("audio/aac", mediaMimeType("track.aac"))
+        assertEquals("application/zip", mediaMimeType("diagnostic.zip"))
     }
 
     @Test

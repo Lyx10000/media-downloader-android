@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun DiagnosticsScreen(
     logText: String,
+    isExporting: Boolean,
     viewModel: MainViewModel,
 ) {
     Column(
@@ -52,10 +53,10 @@ internal fun DiagnosticsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = viewModel::exportLogs) {
+            Button(onClick = viewModel::exportLogs, enabled = !isExporting) {
                 Icon(Icons.Default.Share, contentDescription = null)
                 Spacer(Modifier.size(8.dp))
-                Text("导出 ZIP")
+                Text(if (isExporting) "正在导出" else "导出 ZIP")
             }
             OutlinedButton(onClick = viewModel::refreshLogs) {
                 Icon(Icons.Default.Refresh, contentDescription = null)

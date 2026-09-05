@@ -17,6 +17,12 @@ import javax.inject.Singleton
 
 internal const val PARSER_VERSION = "kotlin-core-3"
 
+internal data class DiagnosticExportResult(
+    val uri: String,
+    val displayName: String,
+    val relativePath: String,
+)
+
 object Redactor {
     private val secret = Regex(
         "(?i)(\"?(?:cookie|a_bogus|msToken|signature|token|odin_tt|ttwid)\"?\\s*[:=]\\s*\"?)([^\"\\s,;&}]+)",
@@ -78,62 +84,68 @@ class DiagnosticLogger @Inject constructor(
 
     fun listFiles(): List<File> = root.listFiles()?.sortedByDescending(File::lastModified).orEmpty()
 
-    fun readRecent(maxChars: Int = 24_000): String = listFiles()
-        .filter { it.extension == "jsonl" }
-        .take(8)
-        .joinToString("\n") { file ->
-            val content = file.readText()
-            val limit = maxChars / 8
-            val tail = content.takeLast(limit)
-            val completeLines = if (content.length > limit) tail.substringAfter('\n') else tail
-            "===== ${file.name} =====\n" + prettyPrintJsonLines(completeLines)
+    fun readRecent(maxChars: Int = 256_000): String {
+        val files = listFiles()
+            .filter { it.extension == "jsonl" }
+            .take(8)
+        if (files.isEmpty()) return ""
+        val perFileLimit = (maxChars / files.size).coerceAtLeast(8_000)
+        return files.joinToString("\n") { file ->
+            "===== ${file.name} =====\n" + previewJsonLog(file.readText(), perFileLimit)
         }
+    }
 
     fun clear() {
         root.listFiles()?.forEach(File::delete)
     }
 
-    fun export(): String {
+    @Synchronized
+    internal fun export(): DiagnosticExportResult {
         val displayName = "diagnostic-${System.currentTimeMillis()}.zip"
+        val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/DouyinDownloader/diagnostics"
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, displayName)
             put(MediaStore.Downloads.MIME_TYPE, "application/zip")
-            put(
-                MediaStore.Downloads.RELATIVE_PATH,
-                "${Environment.DIRECTORY_DOWNLOADS}/DouyinDownloader/diagnostics",
-            )
+            put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val resolver = context.contentResolver
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
             ?: error("无法创建诊断 ZIP")
-        resolver.openOutputStream(uri)?.use { output ->
-            ZipOutputStream(output).use { zip ->
-                val manifest = JSONObject().apply {
-                    put("app_version", BuildConfig.VERSION_NAME)
-                    put("parser_version", PARSER_VERSION)
-                    put("manufacturer", Build.MANUFACTURER)
-                    put("model", Build.MODEL)
-                    put("android", Build.VERSION.RELEASE)
-                    put("sdk", Build.VERSION.SDK_INT)
-                    put("webview", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
-                    put("exported_at_ms", System.currentTimeMillis())
-                }.toString(2)
-                zip.putNextEntry(ZipEntry("manifest.json"))
-                zip.write(manifest.toByteArray())
-                zip.closeEntry()
-
-                listFiles().forEach { file ->
-                    zip.putNextEntry(ZipEntry(file.name))
-                    FileInputStream(file).use { it.copyTo(zip) }
+        try {
+            resolver.openOutputStream(uri, "w")?.use { output ->
+                ZipOutputStream(output).use { zip ->
+                    val manifest = JSONObject().apply {
+                        put("app_version", BuildConfig.VERSION_NAME)
+                        put("parser_version", PARSER_VERSION)
+                        put("manufacturer", Build.MANUFACTURER)
+                        put("model", Build.MODEL)
+                        put("android", Build.VERSION.RELEASE)
+                        put("sdk", Build.VERSION.SDK_INT)
+                        put("webview", WebView.getCurrentWebViewPackage()?.versionName ?: "unknown")
+                        put("exported_at_ms", System.currentTimeMillis())
+                    }.toString(2)
+                    zip.putNextEntry(ZipEntry("manifest.json"))
+                    zip.write(manifest.toByteArray())
                     zip.closeEntry()
+
+                    listFiles().forEach { file ->
+                        zip.putNextEntry(ZipEntry(file.name))
+                        FileInputStream(file).use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
                 }
+            } ?: error("系统拒绝写入诊断 ZIP")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            if (resolver.update(uri, values, null, null) <= 0) {
+                error("诊断 ZIP 写入完成，但系统未能发布文件")
             }
-        } ?: error("无法写入诊断 ZIP")
-        values.clear()
-        values.put(MediaStore.Downloads.IS_PENDING, 0)
-        resolver.update(uri, values, null, null)
-        return uri.toString()
+            return DiagnosticExportResult(uri.toString(), displayName, relativePath)
+        } catch (error: Throwable) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw error
+        }
     }
 
     private fun trimOldLogs() {
@@ -153,3 +165,19 @@ internal fun prettyPrintJsonLines(value: String): String = value
     .joinToString("\n\n") { line ->
         runCatching { JSONObject(line).toString(2) }.getOrDefault(line)
     }
+
+internal fun previewJsonLog(value: String, maxChars: Int): String {
+    if (value.length <= maxChars) return prettyPrintJsonLines(value)
+    val safeLimit = maxChars.coerceAtLeast(256)
+    val headLimit = safeLimit / 2
+    val tailLimit = safeLimit - headLimit
+    val head = value.take(headLimit).substringBeforeLast('\n').ifBlank {
+        value.take(headLimit)
+    }
+    val tailChunk = value.takeLast(tailLimit)
+    val tail = tailChunk.substringAfter('\n', tailChunk)
+    val marker = "……日志过长，中间部分仅在导出的 ZIP 中保留……"
+    return listOf(prettyPrintJsonLines(head), marker, prettyPrintJsonLines(tail))
+        .filter(String::isNotBlank)
+        .joinToString("\n\n")
+}

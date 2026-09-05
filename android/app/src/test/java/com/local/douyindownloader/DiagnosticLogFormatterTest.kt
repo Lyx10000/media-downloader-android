@@ -21,4 +21,17 @@ class DiagnosticLogFormatterTest {
     fun preservesMalformedLinesForDiagnostics() {
         assertEquals("incomplete-json", prettyPrintJsonLines("incomplete-json"))
     }
+
+    @Test
+    fun truncatedPreviewKeepsBothBeginningAndEndOfTaskLog() {
+        val records = (1..30).joinToString("\n") { index ->
+            """{"event":"EVENT_$index","details":{"payload":"${"x".repeat(40)}"}}"""
+        }
+
+        val preview = previewJsonLog(records, maxChars = 500)
+
+        assertTrue(preview.contains("EVENT_1"))
+        assertTrue(preview.contains("EVENT_30"))
+        assertTrue(preview.contains("日志过长"))
+    }
 }

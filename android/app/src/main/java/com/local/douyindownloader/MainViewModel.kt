@@ -14,6 +14,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import androidx.work.ExistingWorkPolicy
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import org.json.JSONObject
 import java.util.UUID
@@ -105,6 +107,7 @@ data class MainUiState(
     val selectedMode: DownloadMode = DownloadMode.MERGE_KEEP,
     val tasks: List<TaskRecord> = emptyList(),
     val logText: String = "",
+    val isExportingDiagnostics: Boolean = false,
     val message: String = "",
     val preferH264: Boolean = false,
     val customTreeUri: String? = null,
@@ -139,6 +142,8 @@ class MainViewModel @Inject internal constructor(
     internal val fullscreenTaskId: StateFlow<String?> = _fullscreenTaskId.asStateFlow()
     private val _fileOperationTaskId = MutableStateFlow<String?>(null)
     internal val fileOperationTaskId: StateFlow<String?> = _fileOperationTaskId.asStateFlow()
+    private val diagnosticExportChannel = Channel<DiagnosticExportResult>(Channel.BUFFERED)
+    internal val diagnosticExports = diagnosticExportChannel.receiveAsFlow()
 
     var inputText: String
         get() = _uiState.value.inputText
@@ -866,10 +871,23 @@ class MainViewModel @Inject internal constructor(
     }
 
     fun exportLogs() {
+        if (_uiState.value.isExportingDiagnostics) return
+        _uiState.update { it.copy(isExportingDiagnostics = true) }
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { logger.export() }
-                .onSuccess { uri -> withContext(Dispatchers.Main) { message = "诊断包已保存：$uri" } }
-                .onFailure { error -> withContext(Dispatchers.Main) { message = "导出失败：${error.message}" } }
+            try {
+                val export = logger.export()
+                diagnosticExportChannel.send(export)
+                withContext(Dispatchers.Main) {
+                    message = "诊断包已保存：${export.relativePath}/${export.displayName}"
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val detail = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+                withContext(Dispatchers.Main) { message = "导出失败：$detail" }
+            } finally {
+                _uiState.update { it.copy(isExportingDiagnostics = false) }
+            }
         }
     }
 

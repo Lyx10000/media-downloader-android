@@ -56,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.collectLatest
 
 private data class Destination(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
 
@@ -125,6 +126,27 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     }
     LaunchedEffect(uiState.message) {
         if (uiState.message.isNotBlank()) snackbar.showSnackbar(viewModel.consumeMessage())
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.diagnosticExports.collectLatest { export ->
+            val target = buildFileShareIntent(
+                listOf(
+                    ShareableFile(
+                        uri = Uri.parse(export.uri),
+                        displayName = export.displayName,
+                        mimeType = "application/zip",
+                    ),
+                ),
+            )
+            val opened = target != null && runCatching {
+                context.startActivity(buildFileShareChooser(target))
+            }.isSuccess
+            if (!opened) {
+                viewModel.showMessage(
+                    "诊断包已保存到 ${export.relativePath}/${export.displayName}，但无法打开系统分享面板",
+                )
+            }
+        }
     }
     val selectableTaskIds = uiState.tasks
         .filter { it.status != TaskStatus.DELETING }
@@ -303,6 +325,7 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                 )
                 2 -> DiagnosticsScreen(
                     logText = uiState.logText,
+                    isExporting = uiState.isExportingDiagnostics,
                     viewModel = viewModel,
                 )
                 else -> SettingsScreen(

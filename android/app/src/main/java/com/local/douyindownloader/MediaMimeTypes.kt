@@ -26,6 +26,7 @@ internal fun mediaMimeType(
         "avif" -> "image/avif"
         "md", "markdown" -> "text/markdown"
         "txt" -> "text/plain"
+        "zip" -> "application/zip"
         else -> null
     }
     return extensionType

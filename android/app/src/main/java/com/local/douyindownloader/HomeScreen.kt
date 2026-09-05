@@ -297,6 +297,7 @@ private fun PlatformWebView(
     autoContinue: Boolean = true,
     capturePage: Boolean = false,
     desktopMode: Boolean = true,
+    assistLoginViewport: Boolean = false,
     onPageFinishedEvent: (String) -> Unit = {},
     onMainFrameError: (String, Int, String) -> Unit = { _, _, _ -> },
     onExternalNavigationFailed: (String) -> Unit = {},
@@ -309,8 +310,9 @@ private fun PlatformWebView(
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 if (desktopMode) settings.userAgentString = DESKTOP_USER_AGENT
-                settings.useWideViewPort = desktopMode
+                settings.useWideViewPort = desktopMode || assistLoginViewport
                 settings.loadWithOverviewMode = desktopMode
+                settings.setSupportZoom(true)
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
                 isFocusable = true
@@ -339,6 +341,9 @@ private fun PlatformWebView(
 
                     override fun onPageFinished(view: WebView, finishedUrl: String) {
                         super.onPageFinished(view, finishedUrl)
+                        if (assistLoginViewport) {
+                            view.evaluateJavascript(DOUYIN_LOGIN_VIEWPORT_SCRIPT, null)
+                        }
                         onPageFinishedEvent(finishedUrl)
                         if (autoContinue && isPlatformPage(finishedUrl, platform)) {
                             deliver(
@@ -594,6 +599,7 @@ internal fun FullScreenWebEnvironment(
                 .consumeWindowInsets(innerPadding),
             autoContinue = false,
             desktopMode = false,
+            assistLoginViewport = shouldAssistLoginViewport(platform),
             onPageFinishedEvent = onPageFinished,
             onMainFrameError = onPageError,
             onExternalNavigationFailed = onExternalNavigationFailed,
@@ -624,6 +630,96 @@ private const val DESKTOP_USER_AGENT =
 private const val WEB_ENVIRONMENT_TIMEOUT_MS = 15_000L
 private const val WEB_COOKIE_SETTLE_DELAY_MS = 1_500L
 private const val WEB_PAGE_SNAPSHOT_DELAY_MS = 2_500L
+
+internal fun shouldAssistLoginViewport(platform: SourcePlatform): Boolean =
+    platform == SourcePlatform.DOUYIN
+
+internal const val DOUYIN_LOGIN_VIEWPORT_SCRIPT = """
+    (function() {
+      try {
+        var viewport = document.querySelector('meta[name="viewport"]');
+        if (!viewport) {
+          viewport = document.createElement('meta');
+          viewport.setAttribute('name', 'viewport');
+          document.head.appendChild(viewport);
+        }
+        viewport.setAttribute(
+          'content',
+          'width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes'
+        );
+
+        function visible(element) {
+          if (!element) return false;
+          var style = window.getComputedStyle(element);
+          var rect = element.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' &&
+            rect.width > 120 && rect.height > 80;
+        }
+
+        function score(element) {
+          if (!visible(element)) return -1;
+          var value = 0;
+          var role = (element.getAttribute('role') || '').toLowerCase();
+          var className = String(element.className || '').toLowerCase();
+          var text = (element.innerText || '').slice(0, 500);
+          if (role === 'dialog') value += 80;
+          if (className.indexOf('login') >= 0 || className.indexOf('passport') >= 0) value += 30;
+          if (element.querySelector('input')) value += 100;
+          if (element.querySelector('iframe')) value += 55;
+          if (element.querySelector('canvas, img')) value += 15;
+          if (text.indexOf('登录') >= 0 || text.indexOf('验证码') >= 0 || text.indexOf('扫码') >= 0) {
+            value += 35;
+          }
+          return value;
+        }
+
+        function centerLogin() {
+          var selectors = [
+            '[role="dialog"]',
+            '[class*="login"]',
+            '[class*="Login"]',
+            '[class*="passport"]',
+            '[class*="Passport"]'
+          ];
+          var candidates = [];
+          selectors.forEach(function(selector) {
+            document.querySelectorAll(selector).forEach(function(element) {
+              if (candidates.indexOf(element) < 0) candidates.push(element);
+            });
+          });
+          var target = null;
+          var best = 69;
+          candidates.forEach(function(element) {
+            var candidateScore = score(element);
+            if (candidateScore > best) {
+              best = candidateScore;
+              target = element;
+            }
+          });
+          if (!target) return false;
+          target.scrollIntoView({block: 'center', inline: 'center', behavior: 'auto'});
+          window.requestAnimationFrame(function() {
+            var rect = target.getBoundingClientRect();
+            window.scrollBy(
+              rect.left + rect.width / 2 - window.innerWidth / 2,
+              rect.top + rect.height / 2 - window.innerHeight / 2
+            );
+          });
+          return true;
+        }
+
+        if (centerLogin()) return 'centered';
+        var attempts = 0;
+        var timer = window.setInterval(function() {
+          attempts += 1;
+          if (centerLogin() || attempts >= 16) window.clearInterval(timer);
+        }, 500);
+        return 'waiting';
+      } catch (error) {
+        return 'failed';
+      }
+    })();
+"""
 
 private const val PAGE_SNAPSHOT_SCRIPT = """
     (function() {
