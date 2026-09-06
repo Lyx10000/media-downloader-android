@@ -43,12 +43,7 @@ class RoomDownloadTaskRepository @Inject constructor(
 
     override suspend fun insert(spec: TaskSpec) {
         val specJson = spec.toJson()
-        val storedTitle = spec.result.document?.title?.take(40).orEmpty().ifBlank {
-            spec.result.author.ifBlank {
-                spec.result.description.take(30).ifBlank { spec.result.contentId }
-            }
-        }
-        val title = taskDisplayTitle(storedTitle, spec.result)
+        val title = taskPreferredTitle(spec.result)
         dao.insert(
             TaskEntity(
                 id = spec.taskId,
@@ -220,7 +215,7 @@ private fun TaskIndexRow.toRecord(payload: TaskRecordPayload): TaskRecord {
         status = if (!payload.outputsValid) TaskStatus.FAILED else TaskStatus.fromWire(status),
         stage = stage,
         progress = progress,
-        title = taskDisplayTitle(title, spec.platform, spec.kind, spec.description),
+        title = taskDisplayTitle(title, spec.description),
         platform = spec.platform,
         outputs = payload.outputs,
         error = if (!payload.outputsValid) error.ifBlank { "任务输出记录损坏" } else error,
@@ -289,19 +284,29 @@ private fun TaskPayloadRow.toRecordPayload(): TaskRecordPayload {
 
 internal fun taskDisplayTitle(storedTitle: String, result: ParseResult?): String = when {
     result == null -> storedTitle
-    else -> taskDisplayTitle(storedTitle, result.platform, result.kind, result.description)
+    else -> taskDisplayTitle(storedTitle, result.description)
+}
+
+private fun taskPreferredTitle(result: ParseResult): String {
+    val documentTitle = result.document?.title.orEmpty().normalizedTaskTitle()
+    val description = result.description.normalizedTaskTitle()
+    return when (result.kind) {
+        MediaKind.DOCUMENT -> documentTitle.ifBlank { description }
+        else -> description.ifBlank { documentTitle }
+    }.ifBlank {
+        result.author.normalizedTaskTitle()
+    }.ifBlank {
+        result.contentId
+    }
 }
 
 private fun taskDisplayTitle(
     storedTitle: String,
-    platform: SourcePlatform,
-    kind: MediaKind?,
     description: String,
-): String = if (platform == SourcePlatform.ZHIHU && kind == MediaKind.VIDEO) {
-    description.take(60).ifBlank { storedTitle }
-} else {
-    storedTitle
-}
+): String = description.normalizedTaskTitle().ifBlank { storedTitle }
+
+private fun String.normalizedTaskTitle(): String =
+    replace(Regex("\\s+"), " ").trim().take(60)
 
 private fun List<TaskOutput>.toJson(): String = JSONArray().apply {
     forEach { put(it.toJson()) }
