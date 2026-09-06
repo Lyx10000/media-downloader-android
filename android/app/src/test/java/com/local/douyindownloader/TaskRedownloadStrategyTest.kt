@@ -105,6 +105,7 @@ class TaskRedownloadStrategyTest {
 
         assertEquals(3, requiredRedownloadSourceGroups(images, 0, DownloadMode.MERGE_KEEP).size)
         assertEquals(2, requiredRedownloadSourceGroups(video, 0, DownloadMode.MERGE_KEEP).size)
+        assertEquals(2, requiredRedownloadSourceGroups(video, 0, DownloadMode.MP4_ONLY).size)
         assertEquals(1, requiredRedownloadSourceGroups(video, 0, DownloadMode.VIDEO_ONLY).size)
     }
 }

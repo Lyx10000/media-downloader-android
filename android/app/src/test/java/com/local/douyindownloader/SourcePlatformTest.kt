@@ -17,8 +17,11 @@ class SourcePlatformTest {
         assertEquals(SourcePlatform.XIAOHONGSHU, SourcePlatform.fromUrl("https://xhslink.cn/abc"))
         assertEquals(SourcePlatform.ZHIHU, SourcePlatform.fromUrl("https://zhuanlan.zhihu.com/p/123"))
         assertEquals(SourcePlatform.ZHIHU, SourcePlatform.fromUrl("https://www.zhihu.com/zvideo/123"))
+        assertEquals(SourcePlatform.X, SourcePlatform.fromUrl("https://x.com/i/status/123"))
+        assertEquals(SourcePlatform.X, SourcePlatform.fromUrl("https://mobile.twitter.com/user/status/123"))
         assertNull(SourcePlatform.fromUrl("https://xiaohongshu.com.example.org/explore/abc"))
         assertNull(SourcePlatform.fromUrl("https://zhihu.com.example.org/question/1"))
+        assertNull(SourcePlatform.fromUrl("https://x.com.example.org/user/status/1"))
     }
 
     @Test
@@ -56,6 +59,7 @@ class SourcePlatformTest {
         )
         assertEquals(SourcePlatform.DOUYIN.homeUrl, SourcePlatform.DOUYIN.loginUrl)
         assertEquals("https://www.xiaohongshu.com/login", SourcePlatform.XIAOHONGSHU.loginUrl)
+        assertEquals("https://x.com/i/flow/login", SourcePlatform.X.loginUrl)
     }
 
     @Test

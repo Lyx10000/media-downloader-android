@@ -25,7 +25,7 @@ internal data class DiagnosticExportResult(
 
 object Redactor {
     private val secret = Regex(
-        "(?i)(\"?(?:cookie|a_bogus|msToken|signature|token|odin_tt|ttwid)\"?\\s*[:=]\\s*\"?)([^\"\\s,;&}]+)",
+        "(?i)(\"?(?:cookie|a_bogus|msToken|signature|token|odin_tt|ttwid|SESSDATA|bili_jct|DedeUserID|buvid[0-9a-z_]*|w_rid)\"?\\s*[:=]\\s*\"?)([^\"\\s,;&}]+)",
     )
     private val urlQuery = Regex("(https?://[^\\s\"'?]+)\\?[^\\s\"']+")
 

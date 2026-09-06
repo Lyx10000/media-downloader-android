@@ -6,6 +6,14 @@ import org.junit.Test
 
 class TaskPreviewTest {
     @Test
+    fun `mixed X media tracks share a stable attachment group`() {
+        assertEquals("media_02", mixedMediaGroupKey("media_02_video.mp4"))
+        assertEquals("media_02", mixedMediaGroupKey("media_02_video_audio.m4a"))
+        assertEquals("media_03", mixedMediaGroupKey("media_03_gif.mp4"))
+        assertNull(mixedMediaGroupKey("video_1.mp4"))
+    }
+
+    @Test
     fun documentPreviewIncludesImageGalleryAndEveryEmbeddedVideo() {
         val image = TaskOutput("image", "image_001.jpg", "image/jpeg", relativePath = "media/image_001.jpg")
         val cover = TaskOutput("cover", "video_001_cover.jpg", "image/jpeg", relativePath = "media/video_001_cover.jpg")

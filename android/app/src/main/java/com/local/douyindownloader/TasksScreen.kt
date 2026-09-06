@@ -130,6 +130,7 @@ internal fun TasksScreen(
     focusedTaskId: String?,
     onTaskFocused: () -> Unit,
     onOpenQuestionArchive: (String) -> Unit,
+    groupBilibili: Boolean = true,
 ) {
     val context = LocalContext.current
     val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
@@ -153,17 +154,21 @@ internal fun TasksScreen(
         EmptyTasksStatus()
         return
     }
-    val visibleTasks = if (platformFilter == null) tasks else {
-        tasks.filter { it.platform == platformFilter }
+    var openBilibiliGroup by remember { mutableStateOf<String?>(null) }
+    val bilibiliGroups = if (groupBilibili) tasks.filter { bilibiliGroupKey(it) != null }.groupBy { bilibiliGroupKey(it)!! } else emptyMap()
+    val ungroupedTasks = tasks.filter { task -> bilibiliGroupKey(task)?.let { bilibiliGroups[it]?.firstOrNull()?.id?.let { id -> id == task.id } } ?: true }
+    val visibleTasks = if (platformFilter == null) ungroupedTasks else {
+        ungroupedTasks.filter { it.platform == platformFilter }
     }
     val listState = rememberLazyListState()
     val focusedTaskIndex = focusedTaskId?.let { taskId ->
-        visibleTasks.indexOfFirst { it.id == taskId }.takeIf { it >= 0 }
+        val group = tasks.firstOrNull { it.id == taskId }?.let(::bilibiliGroupKey)
+        visibleTasks.indexOfFirst { it.id == taskId || group != null && bilibiliGroupKey(it) == group }.takeIf { it >= 0 }
     }
     LaunchedEffect(focusedTaskId, focusedTaskIndex) {
         if (focusedTaskIndex != null) {
             // The platform filter occupies the first list item.
-            listState.scrollToItem(focusedTaskIndex + 1)
+            listState.scrollToItem(focusedTaskIndex + if (groupBilibili) 1 else 0)
             onTaskFocused()
         }
     }
@@ -172,7 +177,7 @@ internal fun TasksScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item(key = "platform-filter") {
+        if (groupBilibili) item(key = "platform-filter") {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = platformFilter == null,
@@ -198,6 +203,17 @@ internal fun TasksScreen(
             }
         }
         items(visibleTasks, key = TaskRecord::id) { task ->
+            val group = bilibiliGroupKey(task)?.let { bilibiliGroups[it] }
+            if (group != null) {
+                BilibiliTaskGroupCard(group, group.all { it.id in selectedTaskIds }, selectionMode,
+                    onOpen = { openBilibiliGroup = bilibiliGroupKey(task) },
+                    onToggle = {
+                        val remove = group.all { it.id in selectedTaskIds }
+                        group.filter { it.status != TaskStatus.DELETING && ((it.id in selectedTaskIds) == remove) }
+                            .forEach { onToggleTaskSelection(it.id) }
+                    })
+                return@items
+            }
             val recoverable = task.fileState in setOf(
                 FileState.PARTIAL,
                 FileState.MISSING,
@@ -270,6 +286,17 @@ internal fun TasksScreen(
                                 )
                             }
                             when (task.platform) {
+                                SourcePlatform.BILIBILI -> task.authorAccountId
+                                    .takeIf(String::isNotBlank)
+                                    ?.let { uid ->
+                                        CreatorIdentityLine(
+                                            label = "B站 UID", value = uid,
+                                            onCopy = {
+                                                copyCreatorText(context, "B站 UID", uid)
+                                                viewModel.showMessage("B站 UID 已复制")
+                                            },
+                                        )
+                                    }
                                 SourcePlatform.DOUYIN -> task.authorAccountId
                                     .takeIf(String::isNotBlank)
                                     ?.let { accountId ->
@@ -304,6 +331,19 @@ internal fun TasksScreen(
                                             onCopy = {
                                                 copyCreatorText(context, "知乎昵称", author)
                                                 viewModel.showMessage("知乎昵称已复制")
+                                            },
+                                        )
+                                    }
+                                SourcePlatform.X, SourcePlatform.INSTAGRAM -> task.authorAccountId
+                                    .takeIf(String::isNotBlank)
+                                    ?.let { accountId ->
+                                        CreatorIdentityLine(
+                                            label = "${task.platform.displayName} 用户名",
+                                            value = "@$accountId",
+                                            copyDescription = "复制 ${task.platform.displayName} 用户名",
+                                            onCopy = {
+                                                copyCreatorText(context, "${task.platform.displayName} 用户名", "@$accountId")
+                                                viewModel.showMessage("${task.platform.displayName} 用户名已复制")
                                             },
                                         )
                                     }
@@ -452,7 +492,7 @@ internal fun TasksScreen(
             }
         }
     }
-    if (fullscreenTaskId != null && mediaPreviewState.taskId == fullscreenTaskId) {
+    if (openBilibiliGroup == null && fullscreenTaskId != null && mediaPreviewState.taskId == fullscreenTaskId) {
         val source = mediaPreviewState.source
         if (source?.kind == TaskPreviewKind.VIDEO && mediaPreviewState.player != null) {
             FullscreenVideoPreview(
@@ -509,6 +549,9 @@ internal fun TasksScreen(
                 }
             },
         )
+    }
+    openBilibiliGroup?.let { bv ->
+        BilibiliTaskGroupDialog(bv, null, viewModel, requestAllFilesAccess, onManageTask, { openBilibiliGroup = null })
     }
     pendingRedownload?.let { task ->
         AlertDialog(

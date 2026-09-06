@@ -37,8 +37,11 @@ internal class CreatorSourceRouter @Inject constructor(
     douyin: DouyinCreatorSource,
     xiaohongshu: XiaohongshuCreatorSource,
     zhihu: ZhihuCreatorSource,
+    x: XCreatorSource,
+    instagram: InstagramCreatorSource,
+    bilibili: BilibiliCreatorSource,
 ) {
-    private val sources = listOf(douyin, xiaohongshu, zhihu)
+    private val sources = listOf(douyin, xiaohongshu, zhihu, x, instagram, bilibili)
         .associateBy(CreatorPlatformSource::platform)
 
     fun resolve(

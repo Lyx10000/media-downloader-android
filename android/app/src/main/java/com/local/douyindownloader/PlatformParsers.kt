@@ -23,8 +23,11 @@ class KotlinParserRouter @Inject internal constructor(
     douyinParser: DouyinPlatformParser,
     xiaohongshuParser: XiaohongshuPlatformParser,
     zhihuParser: ZhihuPlatformParser,
+    xParser: XPlatformParser,
+    instagramParser: InstagramPlatformParser,
+    bilibiliParser: BilibiliPlatformParser,
 ) {
-    private val parsers = listOf(douyinParser, xiaohongshuParser, zhihuParser)
+    private val parsers = listOf(douyinParser, xiaohongshuParser, zhihuParser, xParser, instagramParser, bilibiliParser)
         .associateBy(PlatformParser::platform)
 
     internal fun parse(
@@ -710,7 +713,7 @@ internal object MediaSizeHydrator {
     }
 }
 
-private fun parseFailure(platform: SourcePlatform, code: String, message: String): ParseResult =
+internal fun parseFailure(platform: SourcePlatform, code: String, message: String): ParseResult =
     ParseResult(ok = false, platform = platform, errorCode = code, message = message)
 
 private fun urlEncode(value: String): String =

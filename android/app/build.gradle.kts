@@ -19,8 +19,8 @@ android {
         applicationId = "com.local.douyindownloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 42
-        versionName = "1.6.2"
+        versionCode = 43
+        versionName = "1.7.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -53,6 +53,14 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    testOptions {
+        unitTests.all {
+            // Desktop OpenJDK silently strips Origin by default; permit it in the JVM test
+            // process so wire-level header assertions exercise the Android request contract.
+            it.systemProperty("sun.net.http.allowRestrictedHeaders", "true")
+        }
     }
 
     packaging {

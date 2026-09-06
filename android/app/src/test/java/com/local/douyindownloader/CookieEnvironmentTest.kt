@@ -78,6 +78,10 @@ class CookieEnvironmentTest {
             ParserCredentialMode.STORED_COOKIE,
             initialParserCredentialMode(SourcePlatform.ZHIHU, hasStoredCookie = true),
         )
+        assertEquals(
+            ParserCredentialMode.ANONYMOUS,
+            initialParserCredentialMode(SourcePlatform.X, hasStoredCookie = true),
+        )
         assertNull(initialParserCredentialMode(SourcePlatform.DOUYIN, hasStoredCookie = false))
     }
 

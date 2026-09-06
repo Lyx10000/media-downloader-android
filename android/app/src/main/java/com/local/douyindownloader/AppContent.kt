@@ -211,6 +211,8 @@ internal fun DownloaderApp(
     if (activeLoginPlatform != null) {
         FullScreenWebEnvironment(
             platform = activeLoginPlatform,
+            credentialState = uiState.platformCredentialStates[activeLoginPlatform]
+                ?: PlatformCredentialState.NOT_DETECTED,
             snackbarHostState = snackbar,
             onDismiss = {
                 viewModel.onLoginEnvironmentClosed(activeLoginPlatform)

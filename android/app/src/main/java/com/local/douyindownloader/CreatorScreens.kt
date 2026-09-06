@@ -37,6 +37,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.PrimaryTabRow
@@ -278,7 +279,6 @@ private fun CreatorLibraryScreen(
         items(active, key = CreatorProfile::key) { profile ->
             CreatorCard(
                 profile = profile,
-                summary = state.taskSummaries[profile.key],
                 batchSummary = state.batchSummaries[profile.key],
                 onClick = {
                     if (selectionMode) {
@@ -306,7 +306,6 @@ private fun CreatorLibraryScreen(
             items(archived, key = CreatorProfile::key) { profile ->
                 CreatorCard(
                     profile = profile,
-                    summary = state.taskSummaries[profile.key],
                     batchSummary = state.batchSummaries[profile.key],
                     onClick = {
                         if (selectionMode) {
@@ -372,7 +371,6 @@ private fun CreatorLibraryScreen(
 @Composable
 private fun CreatorCard(
     profile: CreatorProfile,
-    summary: CreatorTaskSummary?,
     batchSummary: CreatorBatchSummary?,
     onClick: () -> Unit,
     archived: Boolean = false,
@@ -426,26 +424,11 @@ private fun CreatorCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                summary?.let {
+                batchSummary?.takeIf { it.paused > 0 || it.foregroundRequired > 0 }?.let {
                     Text(
                         when {
-                            it.running > 0 -> "${it.running} 个下载中 · 共 ${it.total} 个"
-                            it.failed > 0 -> "${it.complete} 个完成 · ${it.failed} 个失败"
-                            else -> "已下载 ${it.complete} 个作品"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                batchSummary?.let {
-                    Text(
-                        when {
-                            it.paused > 0 -> "批次暂停 ${it.paused} 个，可进入继续"
-                            it.foregroundRequired > 0 ->
-                                "${it.foregroundRequired} 个作品需要前台准备，请进入继续"
-                            it.queued > 0 -> "批次处理中 ${it.complete} / ${it.selected}"
-                            it.failed > 0 -> "最近批次完成 ${it.complete} 个，失败 ${it.failed} 个"
-                            else -> "最近批次已完成 ${it.complete} 个"
+                            it.paused > 0 -> "批次已暂停，可进入继续"
+                            else -> "需要前台准备，请进入继续"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.tertiary,
@@ -471,24 +454,25 @@ private fun CreatorDetailScreen(
     val profile = state.selectedCreator ?: return
     var detailTab by remember(profile.key) { mutableIntStateOf(viewModel.detailTab(profile.key)) }
     var showBatchSettings by remember { mutableStateOf(false) }
+    var openBilibiliGroup by remember(profile.key) { mutableStateOf<String?>(null) }
     var showStopDialog by remember { mutableStateOf(false) }
     var deleteArchivedFiles by remember { mutableStateOf(false) }
     var recordSelectionMode by remember(profile.key) { mutableStateOf(false) }
-    var selectedRecordTaskIds by remember(profile.key) { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedLocalWorkKeys by remember(profile.key) { mutableStateOf<Set<String>>(emptySet()) }
     var showRecordDeleteDialog by remember(profile.key) { mutableStateOf(false) }
     var showRecordRedownloadDialog by remember(profile.key) { mutableStateOf(false) }
     var deleteRecordFiles by remember(profile.key) { mutableStateOf(false) }
     val displayedWorks = if (detailTab == 0) state.pageWorks else {
-        state.allWorks.filter { it.task != null }.sortedByDescending { it.task?.createdAt ?: 0L }
+        state.allWorks.filter { it.hasLocalRecord }.sortedByDescending { maxOf(it.task?.createdAt ?: 0L, it.preparationCreatedAt) }
     }
-    val recordTasks = state.allWorks.mapNotNull(CreatorWork::task)
-        .distinctBy(TaskRecord::id)
-        .sortedByDescending(TaskRecord::createdAt)
-    val selectableRecordTaskIds = recordTasks
-        .filter { it.status != TaskStatus.DELETING }
-        .mapTo(linkedSetOf(), TaskRecord::id)
-    val selectedRecordTasks = recordTasks.filter { it.id in selectedRecordTaskIds }
+    val selectableLocalWorkKeys = state.allWorks
+        .filter { it.task?.let { task -> task.status != TaskStatus.DELETING } == true || it.preparationFailed }
+        .mapTo(linkedSetOf(), CreatorWork::key)
+    val selectedLocalWorks = state.allWorks.filter { it.key in selectedLocalWorkKeys }
+    val selectedPreparations = selectedLocalWorks.filter { it.preparationFailed }.mapTo(linkedSetOf(), CreatorWork::key)
+    val selectedRecordTasks = selectedLocalWorks.flatMap { it.relatedTasks.ifEmpty { listOfNotNull(it.task) } }.distinctBy(TaskRecord::id)
     val selectedRecordRedownloadTasks = selectedRecordTasks.filter(::isTaskRedownloadEligible)
+    val retryCount = selectedRecordRedownloadTasks.size + selectedPreparations.size
     val publicPosition = remember(profile.key) { viewModel.detailListPosition(profile.key, 0) }
     val recordPosition = remember(profile.key) { viewModel.detailListPosition(profile.key, 1) }
     val publicListState = rememberLazyListState(publicPosition.index, publicPosition.offset)
@@ -499,19 +483,19 @@ private fun CreatorDetailScreen(
     BackHandler {
         if (recordSelectionMode) {
             recordSelectionMode = false
-            selectedRecordTaskIds = emptySet()
+            selectedLocalWorkKeys = emptySet()
         } else {
             viewModel.closeCreator()
         }
     }
-    LaunchedEffect(detailTab, selectableRecordTaskIds) {
-        selectedRecordTaskIds = reconcileTaskSelection(
-            selectedRecordTaskIds,
-            selectableRecordTaskIds,
+    LaunchedEffect(detailTab, selectableLocalWorkKeys) {
+        selectedLocalWorkKeys = reconcileTaskSelection(
+            selectedLocalWorkKeys,
+            selectableLocalWorkKeys,
         )
-        if (detailTab != 1 || selectableRecordTaskIds.isEmpty()) {
+        if (detailTab != 1 || selectableLocalWorkKeys.isEmpty()) {
             recordSelectionMode = false
-            selectedRecordTaskIds = emptySet()
+            selectedLocalWorkKeys = emptySet()
         }
     }
     DisposableEffect(profile.key, lifecycleOwner) {
@@ -532,9 +516,9 @@ private fun CreatorDetailScreen(
     state.pageWebRefreshRequest?.takeIf { it.creatorKey == profile.key }?.let { request ->
         key(request.requestId) {
             WebEnvironment(
-                platform = SourcePlatform.XIAOHONGSHU,
+                platform = profile.platform,
                 url = request.url,
-                title = "正在刷新小红书作者作品",
+                title = "正在刷新${profile.platform.displayName}作者作品",
                 capturePage = true,
                 snapshotDelayMs = CREATOR_BATCH_SNAPSHOT_DELAY_MS,
                 statusText = "正在读取作者主页；页面不会显示，原有作品缓存会保留。",
@@ -578,7 +562,7 @@ private fun CreatorDetailScreen(
             IconButton(onClick = {
                 if (recordSelectionMode) {
                     recordSelectionMode = false
-                    selectedRecordTaskIds = emptySet()
+                    selectedLocalWorkKeys = emptySet()
                 } else {
                     viewModel.closeCreator()
                 }
@@ -589,35 +573,35 @@ private fun CreatorDetailScreen(
                 )
             }
             Text(
-                if (recordSelectionMode) "已选择 ${selectedRecordTaskIds.size} 项" else profile.nickname,
+                if (recordSelectionMode) "已选择 ${selectedLocalWorkKeys.size} 项" else profile.nickname,
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.weight(1f),
             )
             if (detailTab == 1 && recordSelectionMode) {
                 IconButton(onClick = {
-                    selectedRecordTaskIds = if (selectedRecordTaskIds == selectableRecordTaskIds) {
+                    selectedLocalWorkKeys = if (selectedLocalWorkKeys == selectableLocalWorkKeys) {
                         emptySet()
                     } else {
-                        selectableRecordTaskIds
+                        selectableLocalWorkKeys
                     }
                 }) {
-                    Icon(Icons.Default.SelectAll, contentDescription = "全选作者下载记录")
+                    Icon(Icons.Default.SelectAll, contentDescription = "全选作者本地下载")
                 }
                 IconButton(
                     onClick = { showRecordRedownloadDialog = true },
-                    enabled = selectedRecordRedownloadTasks.isNotEmpty(),
+                    enabled = retryCount > 0 && !state.isStartingBatch,
                 ) {
                     Icon(Icons.Default.Refresh, contentDescription = "重新下载所选记录")
                 }
                 IconButton(
                     onClick = { showRecordDeleteDialog = true },
-                    enabled = selectedRecordTaskIds.isNotEmpty(),
+                    enabled = selectedLocalWorkKeys.isNotEmpty(),
                 ) {
                     Icon(Icons.Default.Delete, contentDescription = "删除所选记录")
                 }
-            } else if (detailTab == 1 && selectableRecordTaskIds.isNotEmpty()) {
+            } else if (detailTab == 1 && selectableLocalWorkKeys.isNotEmpty()) {
                 IconButton(onClick = { recordSelectionMode = true }) {
-                    Icon(Icons.Default.DeleteSweep, contentDescription = "批量操作作者下载记录")
+                    Icon(Icons.Default.DeleteSweep, contentDescription = "批量操作作者本地下载")
                 }
             } else if (detailTab == 0) {
                 IconButton(onClick = viewModel::refreshCreator, enabled = !state.isLoading) {
@@ -673,7 +657,7 @@ private fun CreatorDetailScreen(
                             detailTab = 0
                             viewModel.saveDetailTab(profile.key, 0)
                             recordSelectionMode = false
-                            selectedRecordTaskIds = emptySet()
+                            selectedLocalWorkKeys = emptySet()
                         },
                         text = { Text("公开作品") },
                     )
@@ -683,7 +667,7 @@ private fun CreatorDetailScreen(
                             detailTab = 1
                             viewModel.saveDetailTab(profile.key, 1)
                         },
-                        text = { Text("下载记录") },
+                        text = { Text("本地下载") },
                     )
                 }
             }
@@ -701,29 +685,30 @@ private fun CreatorDetailScreen(
             }
             if (displayedWorks.isEmpty() && !state.isLoading) {
                 item {
-                    Text(if (detailTab == 0) "当前页没有探测到公开作品" else "还没有下载记录")
+                    Text(if (detailTab == 0) "当前页没有探测到公开作品" else "还没有本地下载")
                 }
             }
             items(displayedWorks, key = CreatorWork::key) { work ->
+                if (detailTab == 1 && work.platform == SourcePlatform.BILIBILI && work.relatedTasks.isNotEmpty()) {
+                    BilibiliTaskGroupCard(work.relatedTasks, work.key in selectedLocalWorkKeys, recordSelectionMode,
+                        onOpen = { openBilibiliGroup = work.contentId.substringBefore(':') },
+                        onToggle = { selectedLocalWorkKeys = toggleTaskSelection(selectedLocalWorkKeys, work.key) })
+                    return@items
+                }
                 CreatorWorkCard(
                     work = work,
                     selected = if (detailTab == 0) {
                         work.key in state.selectedWorkKeys
                     } else {
-                        work.task?.id?.let(selectedRecordTaskIds::contains) == true
+                        work.key in selectedLocalWorkKeys
                     },
                     selectionEnabled = detailTab == 0 ||
-                        recordSelectionMode && work.task?.status != TaskStatus.DELETING,
+                        recordSelectionMode && work.key in selectableLocalWorkKeys,
                     onToggle = {
                         if (detailTab == 0) {
                             viewModel.toggleWork(work)
                         } else {
-                            work.task?.id?.let { taskId ->
-                                selectedRecordTaskIds = toggleTaskSelection(
-                                    selectedRecordTaskIds,
-                                    taskId,
-                                )
-                            }
+                            selectedLocalWorkKeys = toggleTaskSelection(selectedLocalWorkKeys, work.key)
                         }
                     },
                     onManage = work.task?.takeIf { !recordSelectionMode }?.let { task ->
@@ -740,7 +725,11 @@ private fun CreatorDetailScreen(
                     onRetry = work.task?.takeIf {
                         !recordSelectionMode &&
                             it.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED)
-                    }?.let { task -> { mainViewModel.retryTask(task) } },
+                    }?.let { task -> { mainViewModel.retryTask(task) } }
+                        ?: if (!recordSelectionMode && work.preparationFailed && !state.isStartingBatch) {
+                            { viewModel.retryLocalPreparations(setOf(work.key)) }
+                        } else null,
+                    showLocalProgress = detailTab == 1,
                 )
             }
             if (detailTab == 0) {
@@ -754,6 +743,9 @@ private fun CreatorDetailScreen(
         }
     }
 
+    openBilibiliGroup?.let { bv ->
+        BilibiliTaskGroupDialog(bv, profile.key, mainViewModel, requestAllFilesAccess, onManageTask, { openBilibiliGroup = null })
+    }
     if (showBatchSettings) {
         BatchSettingsDialog(
             state = state,
@@ -772,7 +764,7 @@ private fun CreatorDetailScreen(
             title = { Text("重新下载所选记录") },
             text = {
                 Column {
-                    Text("将重新解析并下载 ${selectedRecordRedownloadTasks.size} 个任务。")
+                    Text("将重新解析并下载 $retryCount 个任务。")
                     if (skipped > 0) Text("另有 $skipped 个任务状态不允许，将自动跳过。")
                     Text("任务文件夹中的其他文件会保留。")
                 }
@@ -784,13 +776,14 @@ private fun CreatorDetailScreen(
                             requestAllFilesAccess()
                             mainViewModel.showMessage("授权后请再次点击批量重新下载")
                         } else {
-                            mainViewModel.retryTasks(selectedRecordTasks)
+                            if (selectedRecordTasks.isNotEmpty()) mainViewModel.retryTasks(selectedRecordTasks)
+                            viewModel.retryLocalPreparations(selectedPreparations)
                             recordSelectionMode = false
-                            selectedRecordTaskIds = emptySet()
+                            selectedLocalWorkKeys = emptySet()
                         }
                         showRecordRedownloadDialog = false
                     },
-                    enabled = selectedRecordRedownloadTasks.isNotEmpty(),
+                    enabled = retryCount > 0 && !state.isStartingBatch,
                 ) { Text("重新下载") }
             },
             dismissButton = {
@@ -807,7 +800,7 @@ private fun CreatorDetailScreen(
             title = { Text("删除所选记录") },
             text = {
                 Column {
-                    Text("确定删除所选的 ${selectedRecordTasks.size} 个任务吗？")
+                    Text("确定删除所选的 ${selectedLocalWorks.size} 个本地下载记录吗？")
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
                             checked = deleteRecordFiles,
@@ -825,14 +818,15 @@ private fun CreatorDetailScreen(
                             requestAllFilesAccess()
                             mainViewModel.showMessage("授权后请再次点击批量删除")
                         } else {
-                            mainViewModel.deleteTasks(selectedRecordTasks, deleteRecordFiles)
+                            if (selectedRecordTasks.isNotEmpty()) mainViewModel.deleteTasks(selectedRecordTasks, deleteRecordFiles)
+                            viewModel.deleteLocalPreparations(selectedLocalWorkKeys)
                             recordSelectionMode = false
-                            selectedRecordTaskIds = emptySet()
+                            selectedLocalWorkKeys = emptySet()
                         }
                         showRecordDeleteDialog = false
                         deleteRecordFiles = false
                     },
-                    enabled = selectedRecordTasks.isNotEmpty(),
+                    enabled = selectedLocalWorks.isNotEmpty(),
                 ) { Text("删除") }
             },
             dismissButton = {
@@ -959,6 +953,7 @@ private fun CreatorWorkCard(
     onToggle: () -> Unit,
     onManage: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
+    showLocalProgress: Boolean = false,
 ) {
     OutlinedCard(
         modifier = Modifier.fillMaxWidth().then(if (selectionEnabled) Modifier.clickable(onClick = onToggle) else Modifier),
@@ -996,6 +991,24 @@ private fun CreatorWorkCard(
                 }
                 if (work.localStatus == CreatorWorkLocalStatus.AVAILABLE) {
                     Text("本地已有，当前页全选会跳过", style = MaterialTheme.typography.bodySmall)
+                }
+                if (showLocalProgress) {
+                    val task = work.task
+                    if (task != null && task.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)) {
+                        Text(task.stage, style = MaterialTheme.typography.bodySmall)
+                        if (task.status == TaskStatus.RUNNING && shouldShowDownloadProgress(task.stage)) {
+                            LinearProgressIndicator(
+                                progress = { task.progress.coerceIn(0, 100) / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    } else if (work.preparationFailed) {
+                        Text(work.preparation?.error.orEmpty().ifBlank { "作品准备失败，可重试" },
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    } else if (task == null && work.preparation != null) {
+                        Text(if (work.preparation.status == CreatorBatchWorkStatus.PAUSED) "准备已暂停" else "等待作品准备",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
                 }
                 if (onManage != null || onRetry != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1127,6 +1140,15 @@ private fun BatchSettingsDialog(
         title = { Text("本批次下载设置") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.selectedCreator?.platform == SourcePlatform.BILIBILI) {
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(settings.bilibiliAllParts, { onSettings(settings.copy(bilibiliAllParts = it)) })
+                            Text("多P稿件下载全部P（关闭则仅P1）")
+                        }
+                        Text("每个稿件显示一张卡，各P独立保存；实际下载数量可能多于勾选的稿件数。", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 if (state.selectedCreator?.platform == SourcePlatform.XIAOHONGSHU) {
                     item {
                         OutlinedCard(Modifier.fillMaxWidth()) {
@@ -1163,6 +1185,7 @@ private fun BatchSettingsDialog(
                     items(
                         listOf(
                             DownloadMode.MERGE_KEEP,
+                            DownloadMode.MP4_ONLY,
                             DownloadMode.TRACKS,
                             DownloadMode.VIDEO_ONLY,
                             DownloadMode.AUDIO_ONLY,
@@ -1172,6 +1195,7 @@ private fun BatchSettingsDialog(
                             selected = settings.mode == mode,
                             label = when (mode) {
                                 DownloadMode.MERGE_KEEP -> "合成并保留原视频和音频"
+                                DownloadMode.MP4_ONLY -> "仅保留成品 MP4"
                                 DownloadMode.TRACKS -> "分别下载视频和音频"
                                 DownloadMode.VIDEO_ONLY -> "仅视频"
                                 DownloadMode.AUDIO_ONLY -> "仅音频"

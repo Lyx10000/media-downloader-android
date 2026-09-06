@@ -33,6 +33,10 @@ class CreatorLibraryRepository @Inject internal constructor(
         taskRepository.observeAll(),
     ) { batches, works, tasks ->
         val tasksById = tasks.associateBy(TaskRecord::id)
+        val biliTasksByWork = tasks.filter { it.platform == SourcePlatform.BILIBILI }
+            .groupBy { creatorWorkKey(it.platform, bilibiliWorkId(it.platform, it.contentId)) }
+        fun entryTasks(entry: BatchWorkEntity): List<TaskRecord> = biliTasksByWork[entry.workKey]
+            ?: listOfNotNull(tasksById[entry.taskId])
         val latest = batches.distinctBy(DownloadBatchEntity::creatorKey)
         latest.associate { batch ->
             val entries = works.filter { it.batchId == batch.batchId }
@@ -45,7 +49,7 @@ class CreatorLibraryRepository @Inject internal constructor(
                         CreatorBatchWorkStatus.WEB_REQUIRED,
                         CreatorBatchWorkStatus.PREPARED,
                     ) || entry.status == CreatorBatchWorkStatus.SCHEDULED &&
-                        tasksById[entry.taskId]?.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)
+                        entryTasks(entry).any { it.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING) }
                 },
                 paused = entries.count {
                     it.status == CreatorBatchWorkStatus.PAUSED ||
@@ -56,11 +60,11 @@ class CreatorLibraryRepository @Inject internal constructor(
                     entries.count { it.status == CreatorBatchWorkStatus.WEB_REQUIRED }
                 } else 0,
                 complete = entries.count { entry ->
-                    tasksById[entry.taskId]?.status == TaskStatus.COMPLETE
+                    entryTasks(entry).let { records -> records.isNotEmpty() && records.all { it.status == TaskStatus.COMPLETE } }
                 },
                 failed = entries.count { entry ->
                     entry.status == "FAILED" ||
-                        tasksById[entry.taskId]?.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED)
+                        entryTasks(entry).any { it.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED) }
                 },
             )
         }
@@ -101,14 +105,32 @@ class CreatorLibraryRepository @Inject internal constructor(
     fun observeWorks(creatorKey: String): Flow<List<CreatorWork>> = combine(
         workDao.observeForCreator(creatorKey),
         taskRepository.observeAll(),
-    ) { works, tasks ->
+        batchDao.observeBatches(),
+        batchDao.observeWorks(),
+    ) { works, tasks, batches, preparations ->
         val platform = creatorKey.substringBefore(':')
         val byWork = tasks.asSequence()
             .filter { it.authorKey == creatorKey || it.authorKey.isBlank() }
             .filter { it.contentId.isNotBlank() && it.platform.wireValue == platform }
-            .groupBy { creatorWorkKey(it.platform, it.contentId) }
-            .mapValues { (_, records) -> records.maxByOrNull(TaskRecord::createdAt) }
-        works.map { entity -> entity.toWork(byWork[entity.workKey]) }
+            .groupBy { creatorWorkKey(it.platform, bilibiliWorkId(it.platform, it.contentId)) }
+        val creatorBatches = batches.filter { it.creatorKey == creatorKey }.associateBy { it.batchId }
+        val latest = preparations.filter { it.batchId in creatorBatches }
+            .groupBy { it.workKey }
+            .mapValues { (_, entries) -> entries.maxByOrNull { creatorBatches[it.batchId]?.createdAt ?: 0L } }
+        works.map { entity ->
+            val pending = latest[entity.workKey]?.takeIf { it.taskId.isBlank() }
+            val records = byWork[entity.workKey].orEmpty()
+            entity.toWork(if (entity.platform == SourcePlatform.BILIBILI.wireValue) representativeCreatorTask(records)
+                else records.maxByOrNull(TaskRecord::createdAt)).copy(
+                relatedTasks = if (entity.platform == SourcePlatform.BILIBILI.wireValue) records else emptyList(),
+                preparation = pending,
+                preparationCreatedAt = pending?.let { creatorBatches[it.batchId]?.createdAt } ?: 0L,
+            )
+        }
+    }
+
+    suspend fun deleteFailedPreparations(keys: Set<String>) {
+        if (keys.isNotEmpty()) batchDao.deleteFailedPreparations(keys.toList())
     }
 
     suspend fun getCreator(key: String): CreatorProfile? = creatorDao.get(key)?.toProfile()
@@ -118,10 +140,9 @@ class CreatorLibraryRepository @Inject internal constructor(
 
     suspend fun getPage(creatorKey: String, pageNumber: Int): List<CreatorWork> {
         val tasks = taskRepository.listForAuthor(creatorKey)
-        val byContent = tasks.groupBy { creatorWorkKey(it.platform, it.contentId) }
-            .mapValues { (_, records) -> records.maxByOrNull(TaskRecord::createdAt) }
+        val byContent = tasks.groupBy { creatorWorkKey(it.platform, bilibiliWorkId(it.platform, it.contentId)) }
         return workDao.listPage(creatorKey, pageNumber).map { entity ->
-            entity.toWork(byContent[entity.workKey])
+            entity.withTasks(byContent[entity.workKey].orEmpty())
         }
     }
 
@@ -138,9 +159,8 @@ class CreatorLibraryRepository @Inject internal constructor(
         if (keys.isEmpty()) return emptyList()
         val entities = workDao.listByKeys(keys.toList())
         val taskList = taskRepository.listForAuthor(entities.firstOrNull()?.creatorKey.orEmpty())
-        val byContent = taskList.groupBy { creatorWorkKey(it.platform, it.contentId) }
-            .mapValues { (_, records) -> records.maxByOrNull(TaskRecord::createdAt) }
-        return entities.map { it.toWork(byContent[it.workKey]) }
+        val byContent = taskList.groupBy { creatorWorkKey(it.platform, bilibiliWorkId(it.platform, it.contentId)) }
+        return entities.map { it.withTasks(byContent[it.workKey].orEmpty()) }
     }
 
     suspend fun upsert(profile: CreatorProfile) {
@@ -176,22 +196,25 @@ class CreatorLibraryRepository @Inject internal constructor(
             )
         creatorDao.upsert(profile.withStableDirectory().toEntity())
         if (result.ok && result.contentId.isNotBlank()) {
+            val indexedBili = if (result.platform == SourcePlatform.BILIBILI) workDao.listByKeys(
+                listOf(creatorWorkKey(result.platform, bilibiliWorkId(result.platform, result.contentId)))
+            ).firstOrNull() else null
             workDao.upsertAll(
                 listOf(
                     CreatorWork(
-                        key = creatorWorkKey(result.platform, result.contentId),
+                        key = creatorWorkKey(result.platform, bilibiliWorkId(result.platform, result.contentId)),
                         creatorKey = key,
                         platform = result.platform,
-                        contentId = result.contentId,
-                        canonicalUrl = result.canonicalUrl,
+                        contentId = bilibiliWorkId(result.platform, result.contentId),
+                        canonicalUrl = if (result.platform == SourcePlatform.BILIBILI) "https://www.bilibili.com/video/${bilibiliWorkId(result.platform, result.contentId)}" else result.canonicalUrl,
                         kind = result.kind,
-                        title = result.document?.title.orEmpty()
+                        title = result.bilibiliTitle.ifBlank { result.document?.title.orEmpty() }
                             .ifBlank { result.description }
                             .ifBlank { "${result.platform.displayName}作品 ${result.contentId}" },
                         coverUrl = result.coverUrl,
                         approximateBytes = result.variants.maxOfOrNull(MediaVariant::size) ?: 0L,
                         lastSeenAt = now,
-                        pageNumber = HISTORY_ONLY_PAGE,
+                        pageNumber = indexedBili?.pageNumber ?: HISTORY_ONLY_PAGE,
                     ).toEntity(),
                 ),
             )
@@ -216,7 +239,17 @@ class CreatorLibraryRepository @Inject internal constructor(
         } else {
             workDao.markPageNotDetectedExcept(page.profile.key, page.pageNumber, seen)
         }
-        if (page.works.isNotEmpty()) workDao.upsertAll(page.works.map(CreatorWork::toEntity))
+        val indexed = workDao.listByKeys(seen).associateBy(CreatorWorkEntity::workKey)
+        if (page.works.isNotEmpty()) workDao.upsertAll(page.works.map { work ->
+            val existing = indexed[work.key]
+            // A Reel/pinned media may appear again on a later page. Update metadata without
+            // moving its already-visible card out of the earlier cached page.
+            if (page.profile.platform in setOf(SourcePlatform.X, SourcePlatform.INSTAGRAM) &&
+                existing != null && existing.pageNumber < page.pageNumber &&
+                existing.remoteStatus == CreatorWorkRemoteStatus.PUBLIC.wireValue) {
+                work.copy(pageNumber = existing.pageNumber).toEntity()
+            } else work.toEntity()
+        })
         pageDao.upsert(
             CreatorPageEntity(
                 creatorKey = page.profile.key,
@@ -277,3 +310,7 @@ private fun CreatorProfile.withStableDirectory(): CreatorProfile = if (directory
 } else {
     copy(directoryName = creatorDirectoryName(this))
 }
+
+private fun CreatorWorkEntity.withTasks(records: List<TaskRecord>): CreatorWork =
+    if (platform == SourcePlatform.BILIBILI.wireValue) toWork(representativeCreatorTask(records)).copy(relatedTasks = records)
+    else toWork(records.maxByOrNull(TaskRecord::createdAt))

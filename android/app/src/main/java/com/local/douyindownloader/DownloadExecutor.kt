@@ -3,7 +3,6 @@ package com.local.douyindownloader
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
-import java.net.HttpURLConnection
 import java.net.URL
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,6 +26,7 @@ class DownloadExecutor @Inject internal constructor(
     private val repository: DownloadTaskRepository,
     private val logger: DiagnosticLogger,
     private val zhihuCommentExporter: ZhihuCommentExporter,
+    private val bilibiliDeferredResolver: BilibiliDeferredResolver,
 ) {
     private val acceleratedDownloader = AcceleratedDownloader()
     private val downloadPermits = Semaphore(MAX_CONCURRENT_DOWNLOADS)
@@ -40,7 +40,17 @@ class DownloadExecutor @Inject internal constructor(
         cookieHeader: String = "",
         progress: DownloadProgress,
     ): DownloadExecutionResult = downloadPermits.withPermit {
-        when (spec.result.kind) {
+        val readySpec = bilibiliDeferredResolver.resolve(spec, progress)
+        if (spec.result.attachments.isNotEmpty()) {
+            downloadAttachments(
+                taskId,
+                spec,
+                folder,
+                persistIntermediateOutputs,
+                onPublishedOutputs,
+                progress,
+            )
+        } else when (spec.result.kind) {
             MediaKind.IMAGE -> downloadImages(
                 taskId,
                 spec,
@@ -52,7 +62,7 @@ class DownloadExecutor @Inject internal constructor(
             MediaKind.VIDEO -> DownloadExecutionResult(
                 downloadVideo(
                     taskId,
-                    spec,
+                    readySpec,
                     folder,
                     persistIntermediateOutputs,
                     onPublishedOutputs,
@@ -69,6 +79,85 @@ class DownloadExecutor @Inject internal constructor(
                 progress,
             )
         }
+    }
+
+    private suspend fun downloadAttachments(
+        taskId: String,
+        spec: TaskSpec,
+        folder: File,
+        persistIntermediateOutputs: Boolean,
+        onPublishedOutputs: suspend (List<TaskOutput>) -> Unit,
+        progress: DownloadProgress,
+    ): DownloadExecutionResult {
+        val published = mutableListOf<TaskOutput>()
+        val selections = spec.attachmentSelections.associateBy(AttachmentSelection::attachmentId)
+        val ordered = spec.result.attachments.sortedBy(MediaAttachment::index)
+        ordered.forEachIndexed { position, attachment ->
+            val ordinal = (position + 1).toString().padStart(2, '0')
+            val files = when (attachment.kind) {
+                MediaAttachmentKind.IMAGE -> {
+                    val candidates = attachment.imageCandidates
+                    if (candidates.isEmpty()) error("第 ${position + 1} 个附件没有图片下载地址")
+                    val provisional = File(folder, "media_${ordinal}_image.download")
+                    progress("准备下载图片 ${position + 1}/${ordered.size}", 0, true)
+                    download(
+                        taskId = taskId,
+                        urls = candidates,
+                        target = provisional,
+                        label = "图片 ${position + 1}/${ordered.size}",
+                        referer = spec.result.referer,
+                        progress = progress,
+                    )
+                    val fallback = extensionFromUrl(candidates.first(), "jpg")
+                    val extension = provisional.inputStream().use { input ->
+                        val header = ByteArray(16)
+                        val count = input.read(header).coerceAtLeast(0)
+                        imageExtension(header.copyOf(count), fallback)
+                    }
+                    val name = "media_${ordinal}_image.$extension"
+                    val image = File(folder, name)
+                    check(provisional.renameTo(image)) { "无法按真实图片格式命名：$name" }
+                    listOf(image to name)
+                }
+                MediaAttachmentKind.VIDEO,
+                MediaAttachmentKind.GIF,
+                -> {
+                    val selectedIndex = selections[attachment.id]?.variantIndex ?: 0
+                    val variant = attachment.variants.getOrNull(selectedIndex)
+                        ?: attachment.variants.firstOrNull()
+                        ?: error("第 ${position + 1} 个附件没有可下载的 MP4 档位")
+                    prepareVideoFiles(
+                        taskId = taskId,
+                        spec = spec,
+                        variant = variant,
+                        mode = if (attachment.kind == MediaAttachmentKind.GIF) {
+                            DownloadMode.VIDEO_ONLY
+                        } else {
+                            spec.mode
+                        },
+                        audioUrls = emptyList(),
+                        prefix = "media_${ordinal}_video",
+                        finalDisplayName = if (attachment.kind == MediaAttachmentKind.GIF) {
+                            "media_${ordinal}_gif.mp4"
+                        } else {
+                            "media_${ordinal}_video.mp4"
+                        },
+                        folder = folder,
+                        progress = progress,
+                    )
+                }
+            }
+            files.forEach { (file, name) ->
+                published += PublicStorage.publish(context, file, spec, name)
+                recordPublishedOutputs(
+                    taskId,
+                    published,
+                    persistIntermediateOutputs,
+                    onPublishedOutputs,
+                )
+            }
+        }
+        return DownloadExecutionResult(published)
     }
 
     private suspend fun downloadDocument(
@@ -368,18 +457,59 @@ class DownloadExecutor @Inject internal constructor(
     ): List<TaskOutput> {
         val variant = spec.result.variants.getOrNull(spec.variantIndex)
             ?: error("没有可下载的视频档位")
-        val mode = spec.mode
-        val audioUrls = spec.result.audioUrls
-        val source = File(folder, "video_1_source.mp4")
-        val videoTrack = File(folder, "video_1_video.mp4")
-        val audioTrack = File(folder, "video_1_audio.m4a")
-        val merged = File(folder, "video_1.mp4")
+        val files = prepareVideoFiles(
+            taskId = taskId,
+            spec = spec,
+            variant = variant,
+            mode = spec.mode,
+            audioUrls = spec.result.audioUrls,
+            prefix = "video_1",
+            finalDisplayName = "video_1.mp4",
+            folder = folder,
+            progress = progress,
+        )
+        return publishAll(
+            taskId,
+            spec,
+            files,
+            persistIntermediateOutputs,
+            onPublishedOutputs,
+            progress,
+        )
+    }
+
+    private suspend fun prepareVideoFiles(
+        taskId: String,
+        spec: TaskSpec,
+        variant: MediaVariant,
+        mode: DownloadMode,
+        audioUrls: List<String>,
+        prefix: String,
+        finalDisplayName: String,
+        folder: File,
+        progress: DownloadProgress,
+    ): List<Pair<File, String>> {
+        val requestProfile = MediaRequestProfile.forPlatform(spec.result.platform, spec.result.referer)
+        if (spec.result.platform == SourcePlatform.BILIBILI) {
+            logger.event(taskId, "DOWNLOAD", "MEDIA_REQUEST_PROFILE_SELECTED", JSONObject().apply {
+                put("profile", "bilibili-media-v1")
+                put("user_agent_profile", "desktop_edge_124")
+                put("referer_host", "m.bilibili.com")
+                put("origin_present", true)
+                put("cdn_cookie_sent", false)
+            })
+        }
+        val source = File(folder, "${prefix}_source.mp4")
+        val videoTrack = File(folder, "${prefix}_video.mp4")
+        val audioTrack = File(folder, "${prefix}_audio.m4a")
+        val merged = File(folder, finalDisplayName)
 
         progress("准备下载原始视频", 0, true)
         download(
             taskId = taskId,
             urls = variant.urls,
             target = source,
+            requestProfile = requestProfile,
             label = "视频",
             referer = spec.result.referer,
             fallbackTotalBytes = variant.size.takeIf {
@@ -389,6 +519,14 @@ class DownloadExecutor @Inject internal constructor(
         )
         progress("分析音视频轨道", 0, true)
         val sourceProbe = MediaTrackProcessor.probe(source)
+        if (spec.result.platform == SourcePlatform.BILIBILI) {
+            check(sourceProbe.size == 1 && sourceProbe.single()["mime"] == "video/avc") {
+                "B站视频轨格式与解析结果不符，未发布文件"
+            }
+            check(mode == DownloadMode.VIDEO_ONLY || audioUrls.isNotEmpty()) {
+                "B站缺少独立音轨，无法完成所选下载模式"
+            }
+        }
         val probeText = sourceProbe.toString()
         val hasEmbeddedAudio = sourceProbe.any { track ->
             (track["mime"] as? String)?.startsWith("audio/") == true
@@ -415,6 +553,7 @@ class DownloadExecutor @Inject internal constructor(
                 source = source,
                 videoTrack = videoTrack,
                 audioTrack = audioTrack,
+                sourceDisplayName = finalDisplayName,
                 mode = mode,
                 progress = progress,
             )
@@ -427,6 +566,8 @@ class DownloadExecutor @Inject internal constructor(
                 audioUrls = audioUrls,
                 referer = spec.result.referer,
                 mode = mode,
+                validateBilibiliTracks = spec.result.platform == SourcePlatform.BILIBILI,
+                requestProfile = requestProfile,
                 progress = progress,
             )
             VideoAudioSource.MISSING -> {
@@ -436,23 +577,17 @@ class DownloadExecutor @Inject internal constructor(
                 logger.event(taskId, "MEDIA_PROCESS", "SILENT_VIDEO_PRESERVED", JSONObject().apply {
                     put("requested_mode", mode.wireValue)
                 })
-                listOf(source to videoTrack.name)
+                listOf(source to finalDisplayName)
             }
         }
-        return publishAll(
-            taskId,
-            spec,
-            files,
-            persistIntermediateOutputs,
-            onPublishedOutputs,
-            progress,
-        )
+        return files
     }
 
     private suspend fun processEmbeddedAudio(
         source: File,
         videoTrack: File,
         audioTrack: File,
+        sourceDisplayName: String,
         mode: DownloadMode,
         progress: DownloadProgress,
     ): List<Pair<File, String>> {
@@ -464,9 +599,10 @@ class DownloadExecutor @Inject internal constructor(
                 listOf(
                     videoTrack to videoTrack.name,
                     audioTrack to audioTrack.name,
-                    source to "video_1.mp4",
+                    source to sourceDisplayName,
                 )
             }
+            DownloadMode.MP4_ONLY -> listOf(source to sourceDisplayName)
             DownloadMode.TRACKS -> {
                 MediaTrackProcessor.extractVideo(source, videoTrack)
                 MediaTrackProcessor.extractAudio(source, audioTrack)
@@ -492,6 +628,8 @@ class DownloadExecutor @Inject internal constructor(
         audioUrls: List<String>,
         referer: String,
         mode: DownloadMode,
+        validateBilibiliTracks: Boolean,
+        requestProfile: MediaRequestProfile,
         progress: DownloadProgress,
     ): List<Pair<File, String>> {
         if (mode == DownloadMode.VIDEO_ONLY) {
@@ -503,22 +641,40 @@ class DownloadExecutor @Inject internal constructor(
             taskId = taskId,
             urls = audioUrls,
             target = audioTrack,
+            requestProfile = requestProfile,
             label = "独立音频",
             referer = referer,
             progress = progress,
         )
+        if (validateBilibiliTracks) {
+            val audioProbe = MediaTrackProcessor.probe(audioTrack)
+            check(audioProbe.size == 1 && audioProbe.single()["mime"] == "audio/mp4a-latm") {
+                "B站音频轨格式与解析结果不符，未发布文件"
+            }
+        }
         return when (mode) {
-            DownloadMode.MERGE_KEEP -> {
+            DownloadMode.MERGE_KEEP,
+            DownloadMode.MP4_ONLY,
+            -> {
                 progress("无损合并音视频", 0, true)
                 logger.event(taskId, "MEDIA_PROCESS", "MUX_STARTED")
                 MediaTrackProcessor.mux(source, audioTrack, merged)
-                val mergedProbe = MediaTrackProcessor.probe(merged).toString()
-                logger.saveMediaProbe(taskId, mergedProbe)
-                listOf(
-                    source to videoTrack.name,
-                    audioTrack to audioTrack.name,
-                    merged to merged.name,
-                )
+                val mergedProbe = MediaTrackProcessor.probe(merged)
+                if (validateBilibiliTracks) {
+                    check(mergedProbe.map { it["mime"] }.toSet() == setOf("video/avc", "audio/mp4a-latm")) {
+                        "B站合并产物缺少音视频轨，未发布文件"
+                    }
+                }
+                logger.saveMediaProbe(taskId, mergedProbe.toString())
+                if (mode == DownloadMode.MP4_ONLY) {
+                    listOf(merged to merged.name)
+                } else {
+                    listOf(
+                        source to videoTrack.name,
+                        audioTrack to audioTrack.name,
+                        merged to merged.name,
+                    )
+                }
             }
             DownloadMode.TRACKS -> listOf(
                 source to videoTrack.name,
@@ -569,6 +725,7 @@ class DownloadExecutor @Inject internal constructor(
         label: String,
         referer: String,
         fallbackTotalBytes: Long = -1L,
+        requestProfile: MediaRequestProfile = MediaRequestProfile.standard(referer),
         progress: DownloadProgress,
     ) {
         var lastError: Throwable? = null
@@ -587,6 +744,7 @@ class DownloadExecutor @Inject internal constructor(
                 addresses = securedUrls,
                 referer = referer,
                 fallbackTotalBytes = fallbackTotalBytes,
+                requestProfile = requestProfile,
             )
             if (selection != null) {
                 logger.event(taskId, "DOWNLOAD", "CDN_SELECTED", JSONObject().apply {
@@ -613,6 +771,7 @@ class DownloadExecutor @Inject internal constructor(
                             target = target,
                             referer = referer,
                             partCount = ACCELERATED_PART_COUNT,
+                            requestProfile = requestProfile,
                         ) { downloaded, total, bytesPerSecond ->
                             progress(
                                 formatDownloadStatus(label, downloaded, total, bytesPerSecond),
@@ -648,12 +807,7 @@ class DownloadExecutor @Inject internal constructor(
             repeat(3) { attempt ->
                 currentCoroutineContext().ensureActive()
                 try {
-                    val connection = URL(address).openConnection() as HttpURLConnection
-                    connection.connectTimeout = 20_000
-                    connection.readTimeout = 120_000
-                    connection.instanceFollowRedirects = true
-                    connection.setRequestProperty("User-Agent", USER_AGENT)
-                    connection.setRequestProperty("Referer", referer)
+                    val connection = requestProfile.open(address, 20_000, 120_000)
                     try {
                         val status = connection.responseCode
                         if (status !in 200..299) error("CDN HTTP $status")
@@ -725,6 +879,8 @@ class DownloadExecutor @Inject internal constructor(
                     logger.event(taskId, "DOWNLOAD", "CDN_ATTEMPT_FAILED", JSONObject().apply {
                         put("cdn_index", securedUrls.indexOf(address).takeIf { it >= 0 } ?: addressIndex)
                         put("attempt", attempt + 1)
+                        put("cdn_host", URL(address).host)
+                        put("media_label", label)
                         put("message", error.message ?: error.javaClass.simpleName)
                     })
                 }
@@ -748,8 +904,6 @@ class DownloadExecutor @Inject internal constructor(
         private const val MAX_CONCURRENT_DOWNLOADS = 2
         private const val ACCELERATED_PART_COUNT = 4
         private const val PROGRESS_REPORT_INTERVAL_NANOS = 750_000_000L
-        private const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
     }
 }
 

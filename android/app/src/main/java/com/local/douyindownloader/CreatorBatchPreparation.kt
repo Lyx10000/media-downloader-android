@@ -76,7 +76,8 @@ internal fun shouldUseCreatorWebFallback(
         "DETAIL_EMPTY",
         "LOGIN_REQUIRED",
     )
-    SourcePlatform.DOUYIN -> false
+    SourcePlatform.DOUYIN, SourcePlatform.BILIBILI -> false
+    SourcePlatform.X, SourcePlatform.INSTAGRAM -> false
 }
 
 internal fun batchStatusAfterPreparation(entries: List<BatchWorkEntity>): String = when {

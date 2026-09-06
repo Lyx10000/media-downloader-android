@@ -17,7 +17,16 @@ internal fun requiredRedownloadSourceGroups(
     result: ParseResult,
     variantIndex: Int,
     mode: DownloadMode,
-): List<List<String>> = when (result.kind) {
+): List<List<String>> = if (result.attachments.isNotEmpty()) {
+    result.attachments.mapNotNull { attachment ->
+        when (attachment.kind) {
+            MediaAttachmentKind.IMAGE -> attachment.imageCandidates.takeIf(List<String>::isNotEmpty)
+            MediaAttachmentKind.VIDEO,
+            MediaAttachmentKind.GIF,
+            -> attachment.variants.firstOrNull()?.urls?.takeIf(List<String>::isNotEmpty)
+        }
+    }
+} else when (result.kind) {
     MediaKind.VIDEO -> buildList {
         result.variants.getOrNull(variantIndex)?.urls?.takeIf(List<String>::isNotEmpty)?.let(::add)
         if (mode != DownloadMode.VIDEO_ONLY) {
@@ -50,15 +59,18 @@ internal class RedownloadSourceValidator @Inject constructor(
                     executor.submit<Boolean> {
                         urls.take(2).any { url ->
                             runCatching {
-                                httpClient.probeContentLength(
+                                if (result.platform == SourcePlatform.BILIBILI) {
+                                    MediaRequestProfile.forPlatform(result.platform, result.referer)
+                                        .probeContentLength(secureDownloadUrl(url))
+                                } else httpClient.probeContentLength(
                                     secureDownloadUrl(url),
                                     headers = mapOf(
                                         "User-Agent" to USER_AGENT,
                                         "Referer" to result.referer,
                                     ),
                                     timeoutSeconds = 4,
-                                ) > 0L
-                            }.getOrDefault(false)
+                                )
+                            }.getOrDefault(-1L) > 0L
                         }
                     }
                 }

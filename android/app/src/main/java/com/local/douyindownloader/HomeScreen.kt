@@ -5,12 +5,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.CookieManager
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -56,10 +59,12 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -139,7 +144,7 @@ internal fun HomeScreen(
                         value = uiState.inputText,
                         onValueChange = viewModel::setIncomingText,
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("抖音、小红书或知乎分享文本/链接") },
+                        label = { Text("抖音、小红书、知乎、X、Instagram 或 B站分享链接") },
                         minLines = 4,
                         supportingText = { Text("剪贴板只会在你点击“粘贴”后读取") },
                         trailingIcon = {
@@ -215,8 +220,12 @@ internal fun HomeScreen(
         is ParseUiState.Ready -> ResultScreen(
             result = state.result,
             selectedVariant = uiState.selectedVariant,
+            selectedAttachmentVariants = uiState.selectedAttachmentVariants,
+            selectedBilibiliCids = uiState.selectedBilibiliCids,
+            onBilibiliParts = viewModel::selectBilibiliParts,
             selectedMode = uiState.selectedMode,
             onVariant = viewModel::selectVariant,
+            onAttachmentVariant = viewModel::selectAttachmentVariant,
             onMode = viewModel::selectMode,
             onDownload = {
                 val taskId = viewModel.queueDownload(state.result)
@@ -255,6 +264,7 @@ private fun XiaohongshuCredentialProbe(onResult: (WebPageSnapshot?) -> Unit) {
     )
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun CreatorSearchContent(
     state: CreatorLibraryUiState,
@@ -263,7 +273,7 @@ private fun CreatorSearchContent(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("选择平台", style = MaterialTheme.typography.labelLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CREATOR_BATCH_PLATFORMS.forEach { platform ->
                 FilterChip(
                     selected = state.queryPlatform == platform,
@@ -276,9 +286,9 @@ private fun CreatorSearchContent(
             value = state.query,
             onValueChange = viewModel::setQuery,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("作者主页链接") },
+            label = { Text("作者主页链接 / 用户名") },
             supportingText = {
-                Text("请粘贴抖音或知乎作者主页链接")
+                    Text("粘贴作者主页链接；X、Instagram支持@用户名，B站支持UID")
             },
             trailingIcon = {
                 if (state.query.isNotEmpty()) {
@@ -431,6 +441,8 @@ internal fun WebEnvironment(
             url = url,
             onReady = ::finish,
             capturePage = capturePage,
+            snapshotScript = if (platform == SourcePlatform.INSTAGRAM) INSTAGRAM_SNAPSHOT_SCRIPT else PAGE_SNAPSHOT_SCRIPT,
+            desktopMode = platform != SourcePlatform.INSTAGRAM,
             snapshotDelayMs = snapshotDelayMs,
             modifier = Modifier
                 .fillMaxSize()
@@ -483,12 +495,38 @@ private fun PlatformWebView(
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            WebView(context).apply {
+            EnvironmentWebView(context).apply {
+                if (platform == SourcePlatform.INSTAGRAM) {
+                    // Compose's ViewGroup otherwise supplies WRAP_CONTENT defaults. Chromium
+                    // uses that height parameter to enable forceZeroLayoutHeight even when
+                    // Compose measures the native view to the full screen size (100vh = 0).
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                }
                 val currentWebView = this
+                val diagnoseInstagramLogin = assistLoginViewport && platform == SourcePlatform.INSTAGRAM
+                var scriptErrors = 0
+                val resourceFailures = linkedSetOf<String>()
+                fun recordResourceFailure(resourceUrl: String, code: Int) {
+                    if (!diagnoseInstagramLogin || resourceFailures.size >= 5) return
+                    val host = android.net.Uri.parse(resourceUrl).host.orEmpty()
+                    resourceFailures += "$host:$code"
+                }
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
-                if (desktopMode) settings.userAgentString = DESKTOP_USER_AGENT
-                settings.useWideViewPort = desktopMode
+                if (assistLoginViewport && shouldBypassLoginCache(platform)) {
+                    settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                    clearCache(true)
+                }
+                if (desktopMode) {
+                    settings.userAgentString = DESKTOP_USER_AGENT
+                } else if (platform in setOf(SourcePlatform.X, SourcePlatform.INSTAGRAM)) {
+                    // Avoid the embedded-WebView marker that can make X hide its normal login flow.
+                    settings.userAgentString = MOBILE_CHROME_USER_AGENT
+                }
+                settings.useWideViewPort = desktopMode || platform == SourcePlatform.INSTAGRAM
                 settings.loadWithOverviewMode = desktopMode
                 settings.setSupportZoom(true)
                 settings.builtInZoomControls = true
@@ -502,9 +540,18 @@ private fun PlatformWebView(
                     setAcceptCookie(true)
                     setAcceptThirdPartyCookies(currentWebView, true)
                 }
-                webChromeClient = WebChromeClient()
+                webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                        if (diagnoseInstagramLogin && message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                            // Count errors without logging console text, which may contain credentials.
+                            scriptErrors += 1
+                        }
+                        return super.onConsoleMessage(message)
+                    }
+                }
                 webViewClient = object : WebViewClient() {
                     private var delivered = false
+                    private var assistGeneration = 0L
 
                     private fun deliver(source: CookieReadySource, delayMs: Long = 0) {
                         if (delivered) return
@@ -522,12 +569,37 @@ private fun PlatformWebView(
 
                     override fun onPageFinished(view: WebView, finishedUrl: String) {
                         super.onPageFinished(view, finishedUrl)
+                        if (shouldFlushLoginCookiesOnPageFinished(platform)) {
+                            CookieManager.getInstance().flush()
+                        }
                         if (assistLoginViewport) {
-                            view.evaluateJavascript(loginViewportScript(platform)) { result ->
-                                onLoginAssistResult(
-                                    finishedUrl,
-                                    result.orEmpty().trim().trim('"'),
-                                )
+                            assistCallbacks.forEach { view.removeCallbacks(it) }
+                            assistCallbacks.clear()
+                            assistGeneration += 1L
+                            val generation = assistGeneration
+                            loginAssistDelays(platform).forEach { delayMs ->
+                                val assist = Runnable {
+                                    if (generation != assistGeneration) return@Runnable
+                                    view.evaluateJavascript(loginViewportScript(platform)) { result ->
+                                        val diagnostics = if (diagnoseInstagramLogin) {
+                                            val visibleRect = android.graphics.Rect()
+                                            val globallyVisible = view.getGlobalVisibleRect(visibleRect)
+                                            "|js_errors=$scriptErrors|resource_failures=${resourceFailures.joinToString(",")}" +
+                                                "|native_size=${view.width}:${view.height}" +
+                                                "|native_layout=${view.layoutParams?.width}:${view.layoutParams?.height}" +
+                                                "|native_visible=$globallyVisible:${view.isShown}:${view.alpha}" +
+                                                "|native_visible_size=${visibleRect.width()}:${visibleRect.height()}" +
+                                                "|native_render=${view.isHardwareAccelerated}:${view.layerType}" +
+                                                "|webview=${WebView.getCurrentWebViewPackage()?.versionName.orEmpty()}"
+                                        } else ""
+                                        onLoginAssistResult(
+                                            view.url.orEmpty().ifBlank { finishedUrl },
+                                            result.orEmpty().trim().trim('"') + diagnostics + "|pass_ms=$delayMs",
+                                        )
+                                    }
+                                }
+                                assistCallbacks += assist
+                                view.postDelayed(assist, delayMs)
                             }
                         }
                         onPageFinishedEvent(finishedUrl)
@@ -580,6 +652,7 @@ private fun PlatformWebView(
                         error: WebResourceError,
                     ) {
                         super.onReceivedError(view, request, error)
+                        recordResourceFailure(request.url.toString(), error.errorCode)
                         if (request.isForMainFrame) {
                             onMainFrameError(
                                 request.url.toString(),
@@ -596,6 +669,7 @@ private fun PlatformWebView(
                         errorResponse: WebResourceResponse,
                     ) {
                         super.onReceivedHttpError(view, request, errorResponse)
+                        recordResourceFailure(request.url.toString(), errorResponse.statusCode)
                         if (request.isForMainFrame) {
                             onMainFrameError(
                                 request.url.toString(),
@@ -624,8 +698,12 @@ private fun PlatformWebView(
 private fun ResultScreen(
     result: ParseResult,
     selectedVariant: Int,
+    selectedAttachmentVariants: Map<String, Int>,
+    selectedBilibiliCids: Set<String>,
+    onBilibiliParts: (Set<String>) -> Unit,
     selectedMode: DownloadMode,
     onVariant: (Int) -> Unit,
+    onAttachmentVariant: (String, Int) -> Unit,
     onMode: (DownloadMode) -> Unit,
     onDownload: () -> Unit,
     onDownloadQuestion: (ZhihuQuestionDownloadScope, Boolean) -> Unit,
@@ -653,6 +731,10 @@ private fun ResultScreen(
                 result.author.ifBlank { "${result.platform.displayName}作品" },
                 style = MaterialTheme.typography.titleLarge,
             )
+            if (result.platform == SourcePlatform.BILIBILI && result.message.isNotBlank()) {
+                Text(result.message, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (result.description.isNotBlank()) {
                 Text(
                     result.description,
@@ -662,7 +744,101 @@ private fun ResultScreen(
                 )
             }
         }
-        when (result.kind) {
+        if (result.platform == SourcePlatform.BILIBILI && result.bilibiliParts.size > 1) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("分P选择 · 已选 ${selectedBilibiliCids.size}/${result.bilibiliParts.size}", Modifier.weight(1f))
+                    TextButton(onClick = { onBilibiliParts(result.bilibiliParts.map { it.cid }.toSet()) }) { Text("全选") }
+                    TextButton(onClick = { onBilibiliParts(emptySet()) }) { Text("清空") }
+                }
+                Text("按稿件归为一张任务卡，各P独立下载、重试和删除。", style = MaterialTheme.typography.bodySmall)
+            }
+            items(result.bilibiliParts.size) { index ->
+                val part = result.bilibiliParts[index]
+                Row(Modifier.fillMaxWidth().clickable {
+                    onBilibiliParts(if (part.cid in selectedBilibiliCids) selectedBilibiliCids - part.cid else selectedBilibiliCids + part.cid)
+                }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = part.cid in selectedBilibiliCids, onCheckedChange = null)
+                    Text("P${part.page} · ${part.title}", Modifier.padding(start = 8.dp))
+                }
+            }
+        }
+        if (result.attachments.isNotEmpty()) {
+            item {
+                Text(
+                    "附件 ${result.attachments.size} 个 · 按帖子顺序保存",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+            items(result.attachments.size) { attachmentPosition ->
+                val attachment = result.attachments.sortedBy(MediaAttachment::index)[attachmentPosition]
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            when (attachment.kind) {
+                                MediaAttachmentKind.IMAGE -> "附件 ${attachmentPosition + 1} · 原图"
+                                MediaAttachmentKind.VIDEO -> "附件 ${attachmentPosition + 1} · 视频"
+                                MediaAttachmentKind.GIF -> "附件 ${attachmentPosition + 1} · GIF（保存为无声 MP4）"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        if (attachment.coverUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = attachment.coverUrl,
+                                contentDescription = "附件 ${attachmentPosition + 1} 预览",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(160.dp),
+                            )
+                        }
+                        if (attachment.kind != MediaAttachmentKind.IMAGE) {
+                            attachment.variants.forEachIndexed { index, variant ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .selectable(
+                                            selectedAttachmentVariants[attachment.id] == index,
+                                        ) { onAttachmentVariant(attachment.id, index) }
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(
+                                        selected = selectedAttachmentVariants[attachment.id] == index,
+                                        onClick = { onAttachmentVariant(attachment.id, index) },
+                                    )
+                                    Column(Modifier.padding(start = 8.dp)) {
+                                        Text(variant.label)
+                                        if (index == 0) {
+                                            Text("最高档", color = MaterialTheme.colorScheme.primary)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (result.attachments.any { it.kind == MediaAttachmentKind.VIDEO }) {
+                item {
+                    Text("视频保存模式（应用于全部视频附件）", style = MaterialTheme.typography.titleMedium)
+                }
+                items(videoModes(muxed = true)) { (mode, label) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .selectable(selectedMode == mode) { onMode(mode) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selectedMode == mode, onClick = { onMode(mode) })
+                        Text(label, Modifier.padding(start = 8.dp))
+                    }
+                }
+            }
+        } else when (result.kind) {
             MediaKind.IMAGE -> {
                 item {
                     OutlinedCard(Modifier.fillMaxWidth()) {
@@ -799,7 +975,17 @@ private fun ResultScreen(
                             onDownload()
                         }
                     },
-                    enabled = result.kind != MediaKind.VIDEO || result.variants.isNotEmpty(),
+                    enabled = if (result.platform == SourcePlatform.BILIBILI && result.bilibiliParts.size > 1 && selectedBilibiliCids.isEmpty()) false else if (result.attachments.isNotEmpty()) {
+                        result.attachments.all { attachment ->
+                            if (attachment.kind == MediaAttachmentKind.IMAGE) {
+                                attachment.imageCandidates.isNotEmpty()
+                            } else {
+                                attachment.variants.isNotEmpty()
+                            }
+                        }
+                    } else {
+                        result.kind != MediaKind.VIDEO || result.variants.isNotEmpty()
+                    },
                 ) {
                     Text(
                         when (result.kind) {
@@ -820,6 +1006,7 @@ private fun ResultScreen(
 
 @Composable
 private fun ErrorScreen(state: ParseUiState.Error, retry: () -> Unit, back: () -> Unit) {
+    val noMedia = state.code == "MEDIA_EMPTY"
     Column(
         Modifier
             .fillMaxSize()
@@ -827,13 +1014,19 @@ private fun ErrorScreen(state: ParseUiState.Error, retry: () -> Unit, back: () -
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("解析失败", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.error)
+        Text(
+            if (noMedia) "没有可下载媒体" else "解析失败",
+            style = MaterialTheme.typography.headlineSmall,
+            color = if (noMedia) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+        )
         Spacer(Modifier.height(8.dp))
         Text("${state.code}：${state.message}")
         Spacer(Modifier.height(20.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton(onClick = back) { Text("返回") }
-            Button(onClick = retry) { Icon(Icons.Default.Refresh, null); Text("重试") }
+            if (!noMedia) {
+                Button(onClick = retry) { Icon(Icons.Default.Refresh, null); Text("重试") }
+            }
         }
     }
 }
@@ -842,6 +1035,7 @@ private fun ErrorScreen(state: ParseUiState.Error, retry: () -> Unit, back: () -
 @Composable
 internal fun FullScreenWebEnvironment(
     platform: SourcePlatform,
+    credentialState: PlatformCredentialState,
     snackbarHostState: SnackbarHostState,
     onDismiss: () -> Unit,
     onPageFinished: (String) -> Unit,
@@ -850,6 +1044,18 @@ internal fun FullScreenWebEnvironment(
     onExternalNavigationFailed: (String) -> Unit,
 ) {
     BackHandler(onBack = onDismiss)
+    val instagram = platform == SourcePlatform.INSTAGRAM
+    val startUrl = remember(platform) { loginEnvironmentStartUrl(platform, credentialState) }
+    var reloadGeneration by remember(platform) { mutableStateOf(0) }
+    var pageRendered by remember(platform, reloadGeneration) { mutableStateOf(false) }
+    var pageFailed by remember(platform, reloadGeneration) { mutableStateOf(false) }
+    var slowLoading by remember(platform, reloadGeneration) { mutableStateOf(false) }
+    LaunchedEffect(platform, reloadGeneration) {
+        if (instagram) {
+            delay(20_000L)
+            slowLoading = true
+        }
+    }
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -864,28 +1070,71 @@ internal fun FullScreenWebEnvironment(
             )
         },
     ) { innerPadding ->
-        PlatformWebView(
-            platform = platform,
-            url = platform.loginUrl,
-            onReady = { _, _ -> },
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .consumeWindowInsets(innerPadding),
-            autoContinue = false,
-            desktopMode = shouldUseDesktopLoginMode(platform),
-            assistLoginViewport = shouldAssistLoginViewport(platform),
-            onPageFinishedEvent = onPageFinished,
-            onLoginAssistResult = onLoginAssistResult,
-            onMainFrameError = onPageError,
-            onExternalNavigationFailed = onExternalNavigationFailed,
-        )
+        Column(Modifier.fillMaxSize().padding(innerPadding).consumeWindowInsets(innerPadding)) {
+            if (platform == SourcePlatform.BILIBILI) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("完成官方网页登录后返回即可刷新状态。登录不保证取得高清或受限内容。",
+                        modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = { reloadGeneration += 1 }) { Text("重新加载") }
+                }
+            }
+            if (instagram && !pageRendered) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        when {
+                            pageFailed -> "登录网页加载失败，请检查网络后重新加载。"
+                            slowLoading -> "登录内容尚未显示，可继续等待，或检查网络后重新加载。"
+                            else -> "正在加载 Instagram 登录页面…"
+                        },
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (pageFailed || slowLoading) {
+                        OutlinedButton(onClick = { reloadGeneration += 1 }) { Text("重新加载") }
+                    }
+                }
+                if (!pageFailed && !slowLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+            key(platform, reloadGeneration) {
+                PlatformWebView(
+                    platform = platform,
+                    url = startUrl,
+                    onReady = { _, _ -> },
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    autoContinue = false,
+                    desktopMode = shouldUseDesktopLoginMode(platform),
+                    assistLoginViewport = shouldAssistLoginViewport(platform),
+                    onPageFinishedEvent = onPageFinished,
+                    onLoginAssistResult = { url, result ->
+                        if (instagram) {
+                            pageRendered = result.contains("|state=form-rendered|") ||
+                                result.contains("|state=page-content-rendered|")
+                        }
+                        onLoginAssistResult(url, result)
+                    },
+                    onMainFrameError = { url, code, description ->
+                        if (instagram) pageFailed = true
+                        onPageError(url, code, description)
+                    },
+                    onExternalNavigationFailed = onExternalNavigationFailed,
+                )
+            }
+        }
     }
 }
 
 internal fun videoModes(muxed: Boolean): List<Pair<DownloadMode, String>> = if (muxed) {
     listOf(
         DownloadMode.MERGE_KEEP to "原始音视频 + 视频分轨 + 音频分轨",
+        DownloadMode.MP4_ONLY to "仅保留成品 MP4（含声音）",
         DownloadMode.TRACKS to "视频分轨 + 音频分轨",
         DownloadMode.VIDEO_ONLY to "仅视频轨",
         DownloadMode.AUDIO_ONLY to "仅音频轨",
@@ -893,6 +1142,7 @@ internal fun videoModes(muxed: Boolean): List<Pair<DownloadMode, String>> = if (
 } else {
     listOf(
         DownloadMode.MERGE_KEEP to "合成文件 + 视频轨 + 音频轨",
+        DownloadMode.MP4_ONLY to "仅保留合成 MP4",
         DownloadMode.TRACKS to "视频轨 + 音频轨，不合成",
         DownloadMode.VIDEO_ONLY to "仅视频轨",
         DownloadMode.AUDIO_ONLY to "仅音频轨",
@@ -902,6 +1152,20 @@ internal fun videoModes(muxed: Boolean): List<Pair<DownloadMode, String>> = if (
 private const val DESKTOP_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
         "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"
+
+private const val MOBILE_CHROME_USER_AGENT =
+    "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
+
+private class EnvironmentWebView(context: Context) : WebView(context) {
+    val assistCallbacks = mutableListOf<Runnable>()
+
+    override fun destroy() {
+        assistCallbacks.forEach { removeCallbacks(it) }
+        assistCallbacks.clear()
+        super.destroy()
+    }
+}
 
 private const val WEB_ENVIRONMENT_TIMEOUT_MS = 15_000L
 private const val WEB_COOKIE_SETTLE_DELAY_MS = 1_500L
@@ -913,15 +1177,427 @@ private const val XHS_CREDENTIAL_PROBE_TIMEOUT_MS = 12_000L
 private const val XHS_WORK_SNAPSHOT_DELAY_MS = 4_500L
 
 internal fun shouldAssistLoginViewport(platform: SourcePlatform): Boolean =
-    platform == SourcePlatform.DOUYIN || platform == SourcePlatform.XIAOHONGSHU
+    platform == SourcePlatform.DOUYIN || platform == SourcePlatform.XIAOHONGSHU ||
+        platform == SourcePlatform.X || platform == SourcePlatform.INSTAGRAM
 
 internal fun shouldUseDesktopLoginMode(platform: SourcePlatform): Boolean =
     platform == SourcePlatform.DOUYIN || platform == SourcePlatform.XIAOHONGSHU
 
+internal fun shouldBypassLoginCache(platform: SourcePlatform): Boolean =
+    platform == SourcePlatform.X
+
+internal fun loginEnvironmentStartUrl(
+    platform: SourcePlatform,
+    credentialState: PlatformCredentialState,
+): String = if (platform == SourcePlatform.X && credentialState == PlatformCredentialState.DETECTED) {
+    "https://x.com/home"
+} else if (platform in setOf(SourcePlatform.INSTAGRAM, SourcePlatform.BILIBILI) &&
+    credentialState == PlatformCredentialState.DETECTED
+) {
+    platform.homeUrl
+} else {
+    platform.loginUrl
+}
+
+internal fun shouldFlushLoginCookiesOnPageFinished(platform: SourcePlatform): Boolean =
+    platform in setOf(SourcePlatform.X, SourcePlatform.INSTAGRAM, SourcePlatform.BILIBILI)
+
+internal fun loginAssistDelays(platform: SourcePlatform): List<Long> =
+    when (platform) {
+        SourcePlatform.X -> listOf(0L, 1_500L, 3_500L, 7_000L)
+        SourcePlatform.INSTAGRAM -> listOf(0L, 1_500L, 3_500L, 7_000L, 12_000L, 20_000L, 30_000L, 45_000L, 60_000L)
+        else -> listOf(0L)
+    }
+
 internal fun loginViewportScript(platform: SourcePlatform): String = when (platform) {
     SourcePlatform.XIAOHONGSHU -> XHS_LOGIN_VIEWPORT_SCRIPT
-    else -> DOUYIN_LOGIN_VIEWPORT_SCRIPT
+    SourcePlatform.X -> X_LOGIN_VIEWPORT_SCRIPT
+    SourcePlatform.INSTAGRAM -> INSTAGRAM_LOGIN_VIEWPORT_SCRIPT
+    SourcePlatform.DOUYIN -> DOUYIN_LOGIN_VIEWPORT_SCRIPT
+    SourcePlatform.ZHIHU, SourcePlatform.BILIBILI -> ""
 }
+
+internal const val X_LOGIN_VIEWPORT_SCRIPT = """
+    (function() {
+      try {
+        var DIAGNOSTIC_INPUT_SELECTOR = 'input[type="text"], input[type="email"], ' +
+          'input[type="tel"], input[type="password"], input:not([type]), textarea';
+
+        function diagnosticSafe(value, limit) {
+          return String(value || '').replace(/[|~^,]/g, '_').slice(0, limit);
+        }
+
+        function diagnosticRect(element) {
+          var rect = element.getBoundingClientRect();
+          return [rect.left, rect.top, rect.right, rect.bottom, rect.width, rect.height]
+            .map(function(value) { return Math.round(value); }).join(':');
+        }
+
+        function diagnosticVisible(element) {
+          if (!element) return false;
+          var style = window.getComputedStyle(element);
+          var rect = element.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' &&
+            Number(style.opacity || 1) > 0 && rect.width > 20 && rect.height > 5;
+        }
+
+        var diagnosticInputs = document.querySelectorAll(DIAGNOSTIC_INPUT_SELECTOR);
+        var diagnosticTarget = document.activeElement;
+        if (!diagnosticTarget || !diagnosticTarget.matches ||
+            !diagnosticTarget.matches(DIAGNOSTIC_INPUT_SELECTOR) ||
+            !diagnosticVisible(diagnosticTarget)) {
+          diagnosticTarget = null;
+          for (var diagnosticIndex = 0; diagnosticIndex < diagnosticInputs.length;
+              diagnosticIndex += 1) {
+            if (diagnosticVisible(diagnosticInputs[diagnosticIndex])) {
+              diagnosticTarget = diagnosticInputs[diagnosticIndex];
+              break;
+            }
+          }
+        }
+
+        var diagnosticViewport = window.visualViewport;
+        var diagnosticViewportHeight = Math.round(Math.max(
+          diagnosticViewport ? diagnosticViewport.height : 0,
+          window.innerHeight || 0,
+          document.documentElement ? document.documentElement.clientHeight : 0));
+        var diagnosticViewportText = [
+          diagnosticViewport ? diagnosticViewport.offsetLeft : 0,
+          diagnosticViewport ? diagnosticViewport.offsetTop : 0,
+          diagnosticViewport ? diagnosticViewport.width : window.innerWidth,
+          diagnosticViewport ? diagnosticViewport.height : window.innerHeight,
+          diagnosticViewport ? diagnosticViewport.scale : 1,
+        ].map(function(value) { return Math.round(Number(value) * 100) / 100; }).join(':');
+
+        function diagnosticFindScroller(target) {
+          if (!target) return null;
+          var diagnosticScroller = target.closest('.jf-vscroller');
+          if (!diagnosticScroller) {
+            var diagnosticCandidate = target.parentElement;
+            while (diagnosticCandidate && diagnosticCandidate !== document.body) {
+              var diagnosticCandidateStyle = window.getComputedStyle(diagnosticCandidate);
+              var diagnosticCandidateRect = diagnosticCandidate.getBoundingClientRect();
+              var diagnosticCandidateScrollable =
+                diagnosticCandidateStyle.overflowY === 'scroll' ||
+                diagnosticCandidateStyle.overflowY === 'auto';
+              if (diagnosticCandidateScrollable && diagnosticCandidateRect.height <= 64 &&
+                  diagnosticCandidate.scrollHeight > diagnosticCandidate.clientHeight * 2) {
+                diagnosticScroller = diagnosticCandidate;
+                break;
+              }
+              diagnosticCandidate = diagnosticCandidate.parentElement;
+            }
+          }
+          return diagnosticScroller;
+        }
+
+        function diagnosticRepairScroller(target) {
+          if (!target) return 'not-checked';
+          var diagnosticScroller = diagnosticFindScroller(target);
+          if (!diagnosticScroller) return 'not-found';
+          var diagnosticLiveViewport = window.visualViewport;
+          diagnosticViewportHeight = Math.round(Math.max(
+            diagnosticLiveViewport ? diagnosticLiveViewport.height : 0,
+            window.innerHeight || 0,
+            document.documentElement ? document.documentElement.clientHeight : 0));
+          var diagnosticScrollerBefore = diagnosticScroller.getBoundingClientRect();
+          diagnosticScroller.style.setProperty('top', '0px', 'important');
+          diagnosticScroller.style.setProperty('bottom', 'auto', 'important');
+          diagnosticScroller.style.setProperty(
+            'height', diagnosticViewportHeight + 'px', 'important');
+          diagnosticScroller.style.setProperty(
+            'min-height', diagnosticViewportHeight + 'px', 'important');
+          diagnosticScroller.style.setProperty(
+            'max-height', diagnosticViewportHeight + 'px', 'important');
+          diagnosticScroller.style.setProperty('box-sizing', 'border-box', 'important');
+          diagnosticScroller.style.setProperty('overflow-y', 'auto', 'important');
+          diagnosticScroller.style.setProperty(
+            '-webkit-overflow-scrolling', 'touch', 'important');
+          diagnosticScroller.style.setProperty('touch-action', 'pan-y pinch-zoom', 'important');
+          var diagnosticScrollerAfter = diagnosticScroller.getBoundingClientRect();
+          return 'expanded-' + Math.round(diagnosticScrollerBefore.height) + '-' +
+            Math.round(diagnosticScrollerAfter.height) + '-target-' + diagnosticViewportHeight;
+        }
+
+        var diagnosticScrollerState = diagnosticRepairScroller(diagnosticTarget);
+
+        if (!window.__aggregateXScrollerWatcher) {
+          var diagnosticWatcherPending = 0;
+          function diagnosticWatcherTarget() {
+            var active = document.activeElement;
+            if (active && active.matches && active.matches(DIAGNOSTIC_INPUT_SELECTOR) &&
+                diagnosticVisible(active)) {
+              return active;
+            }
+            var candidates = document.querySelectorAll(DIAGNOSTIC_INPUT_SELECTOR);
+            for (var candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+              if (diagnosticVisible(candidates[candidateIndex])) return candidates[candidateIndex];
+            }
+            return null;
+          }
+          function diagnosticWatcherRun() {
+            var target = diagnosticWatcherTarget();
+            diagnosticRepairScroller(target);
+            if (target && document.activeElement === target) {
+              window.requestAnimationFrame(function() {
+                target.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'auto'});
+              });
+            }
+          }
+          function diagnosticWatcherSchedule() {
+            window.clearTimeout(diagnosticWatcherPending);
+            diagnosticWatcherPending = window.setTimeout(diagnosticWatcherRun, 80);
+          }
+          document.addEventListener('focusin', diagnosticWatcherSchedule, true);
+          if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', diagnosticWatcherSchedule);
+          }
+          var diagnosticWatcherObserver = new MutationObserver(diagnosticWatcherSchedule);
+          diagnosticWatcherObserver.observe(
+            document.documentElement, {childList: true, subtree: true});
+          window.__aggregateXScrollerWatcher = {
+            schedule: diagnosticWatcherSchedule,
+            observer: diagnosticWatcherObserver,
+            marker: 'x-scroller-watch-v1',
+          };
+        } else {
+          window.__aggregateXScrollerWatcher.schedule();
+        }
+
+        var diagnosticResult;
+        if (!diagnosticTarget) {
+          diagnosticResult = 'waiting-for-input|ready=' + document.readyState +
+            '|inputs=' + diagnosticInputs.length + '|viewport=' + diagnosticViewportText +
+            '|body=' + (document.body ? document.body.children.length : -1) +
+            '|x-dom-diagnostic-v1';
+        } else {
+          var diagnosticAncestors = [];
+          var diagnosticNode = diagnosticTarget;
+          for (var diagnosticDepth = 0;
+              diagnosticNode && diagnosticDepth < 10;
+              diagnosticDepth += 1) {
+            var diagnosticStyle = window.getComputedStyle(diagnosticNode);
+            diagnosticAncestors.push([
+              diagnosticDepth + ':' + diagnosticNode.tagName.toLowerCase(),
+              'id=' + diagnosticSafe(diagnosticNode.id, 48),
+              'class=' + diagnosticSafe(diagnosticNode.className, 100),
+              'role=' + diagnosticSafe(diagnosticNode.getAttribute('role'), 32),
+              'rect=' + diagnosticRect(diagnosticNode),
+              'position=' + diagnosticStyle.position,
+              'display=' + diagnosticStyle.display,
+              'transform=' + diagnosticSafe(diagnosticStyle.transform, 96),
+              'overflow=' + diagnosticStyle.overflowX + '/' + diagnosticStyle.overflowY,
+              'margin=' + diagnosticStyle.marginTop + '/' + diagnosticStyle.marginBottom,
+              'padding=' + diagnosticStyle.paddingTop + '/' + diagnosticStyle.paddingBottom,
+              'scroll=' + diagnosticNode.scrollTop + '/' + diagnosticNode.scrollHeight +
+                '/' + diagnosticNode.clientHeight,
+            ].join('~'));
+            diagnosticNode = diagnosticNode.parentElement;
+          }
+          diagnosticResult = 'input-found|ready=' + document.readyState +
+            '|viewport=' + diagnosticViewportText +
+            '|type=' + diagnosticSafe(diagnosticTarget.getAttribute('type'), 24) +
+            '|name=' + diagnosticSafe(diagnosticTarget.getAttribute('name'), 48) +
+            '|autocomplete=' + diagnosticSafe(
+              diagnosticTarget.getAttribute('autocomplete'), 48) +
+            '|ancestors=' + diagnosticAncestors.join('^') + '|x-dom-diagnostic-v1';
+        }
+        diagnosticResult += '|vscroller=' + diagnosticScrollerState +
+          '|watcher=x-scroller-watch-v1|x-vscroller-fix-v1';
+        return diagnosticResult;
+
+        if (window.__aggregateXLoginAssist &&
+            typeof window.__aggregateXLoginAssist.run === 'function') {
+          return window.__aggregateXLoginAssist.run();
+        }
+        var pending = 0;
+        var dialogState = 'not-checked';
+        var INPUT_SELECTOR = 'input[type="text"], input[type="email"], input[type="tel"], ' +
+          'input[type="password"], input:not([type]), textarea';
+
+        function visible(element) {
+          if (!element) return false;
+          var style = window.getComputedStyle(element);
+          var rect = element.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' &&
+            Number(style.opacity || 1) > 0 && rect.width > 80 && rect.height > 20;
+        }
+
+        function currentInput() {
+          var active = document.activeElement;
+          if (active && active.matches &&
+              active.matches(INPUT_SELECTOR) && visible(active)) {
+            return active;
+          }
+          var inputs = document.querySelectorAll(INPUT_SELECTOR);
+          for (var i = 0; i < inputs.length; i += 1) {
+            if (visible(inputs[i])) return inputs[i];
+          }
+          return null;
+        }
+
+        function centerScrollableParents(target) {
+          var parent = target.parentElement;
+          while (parent && parent !== document.body && parent !== document.documentElement) {
+            if (parent.scrollHeight > parent.clientHeight + 8) {
+              var parentRect = parent.getBoundingClientRect();
+              var targetRect = target.getBoundingClientRect();
+              parent.scrollTop += targetRect.top - parentRect.top -
+                (parent.clientHeight - targetRect.height) / 2;
+            }
+            parent = parent.parentElement;
+          }
+        }
+
+        function stabilizeLoginDialog(target) {
+          var viewport = window.visualViewport;
+          var viewportTop = viewport ? viewport.offsetTop : 0;
+          var viewportHeight = viewport ? viewport.height : window.innerHeight;
+          var targetRect = target.getBoundingClientRect();
+          var safeTop = viewportTop + 24;
+          var safeBottom = viewportTop + viewportHeight - 24;
+          if (targetRect.top >= safeTop && targetRect.bottom <= safeBottom) {
+            dialogState = 'in-bounds';
+            return false;
+          }
+          var dialog = target.closest('[role="dialog"]');
+          var fallback = false;
+          var fallbackPosition = '';
+          if (!dialog) {
+            var ancestor = target.parentElement;
+            while (ancestor && ancestor !== document.body) {
+              var ancestorStyle = window.getComputedStyle(ancestor);
+              var position = ancestorStyle.position;
+              if (position === 'fixed') {
+                dialog = ancestor;
+                break;
+              }
+              var ancestorRect = ancestor.getBoundingClientRect();
+              var transformed = ancestorStyle.transform && ancestorStyle.transform !== 'none';
+              var clipped = ancestorStyle.overflowY === 'hidden' ||
+                ancestorStyle.overflowY === 'clip';
+              var offscreen = ancestorRect.top < safeTop &&
+                ancestorRect.bottom > viewportTop && ancestorRect.height >= targetRect.height;
+              if (!dialog && ancestorRect.width >= targetRect.width &&
+                  ancestorRect.height >= targetRect.height &&
+                  (transformed || position === 'absolute' || position === 'sticky' || clipped ||
+                    offscreen)) {
+                dialog = ancestor;
+                fallback = true;
+                fallbackPosition = transformed ? 'transform' :
+                  (clipped ? 'clipped' : (offscreen ? 'offscreen' : position));
+              }
+              ancestor = ancestor.parentElement;
+            }
+          }
+          if (!dialog) {
+            dialogState = 'container-missing';
+            return false;
+          }
+          if (fallback) {
+            var desiredTop = viewportTop + (viewportHeight - targetRect.height) / 2;
+            var previousShift = Number(dialog.getAttribute('data-aggregate-shift-y') || 0);
+            var delta = desiredTop - targetRect.top;
+            var nextShift = Math.max(-viewportHeight, Math.min(viewportHeight, previousShift + delta));
+            dialog.style.setProperty('translate', '0px ' + nextShift + 'px', 'important');
+            dialog.style.setProperty('touch-action', 'pan-y pinch-zoom', 'important');
+            dialog.setAttribute('data-aggregate-shift-y', String(nextShift));
+            dialogState = fallbackPosition === 'offscreen' ?
+              'shifted-offscreen' : 'shifted-' + fallbackPosition;
+            return true;
+          }
+          dialog.style.setProperty('position', 'fixed', 'important');
+          dialog.style.setProperty('top', viewportTop + 'px', 'important');
+          dialog.style.setProperty('bottom', 'auto', 'important');
+          dialog.style.setProperty('left', '0px', 'important');
+          dialog.style.setProperty('right', 'auto', 'important');
+          dialog.style.setProperty('width', '100%', 'important');
+          dialog.style.setProperty('height', viewportHeight + 'px', 'important');
+          dialog.style.setProperty('max-height', viewportHeight + 'px', 'important');
+          dialog.style.setProperty('margin', '0px', 'important');
+          dialog.style.setProperty('transform', 'none', 'important');
+          dialog.style.setProperty('overflow-y', 'auto', 'important');
+          dialog.style.setProperty('overscroll-behavior-y', 'contain', 'important');
+          dialog.style.setProperty('-webkit-overflow-scrolling', 'touch', 'important');
+          dialog.style.setProperty('touch-action', 'pan-y pinch-zoom', 'important');
+          dialogState = 'adjusted';
+          return true;
+        }
+
+        function centerInput() {
+          var target = currentInput();
+          if (!target) return false;
+          target.style.setProperty('scroll-margin-top', '96px', 'important');
+          target.style.setProperty('scroll-margin-bottom', '96px', 'important');
+          stabilizeLoginDialog(target);
+          centerScrollableParents(target);
+          target.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'auto'});
+          window.requestAnimationFrame(function() {
+            var viewport = window.visualViewport;
+            var viewportTop = viewport ? viewport.offsetTop : 0;
+            var viewportHeight = viewport ? viewport.height : window.innerHeight;
+            var rect = target.getBoundingClientRect();
+            var desiredTop = viewportTop + (viewportHeight - rect.height) / 2;
+            if (rect.top < viewportTop + 24 || rect.bottom > viewportTop + viewportHeight - 24) {
+              window.scrollBy(0, rect.top - desiredTop);
+              centerScrollableParents(target);
+            }
+          });
+          return true;
+        }
+
+        function scheduleCenter() {
+          window.clearTimeout(pending);
+          pending = window.setTimeout(centerInput, 120);
+          window.setTimeout(centerInput, 420);
+          window.setTimeout(centerInput, 780);
+        }
+
+        document.addEventListener('focusin', function(event) {
+          if (event.target && event.target.matches &&
+              event.target.matches(INPUT_SELECTOR)) {
+            scheduleCenter();
+          }
+        }, true);
+
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', scheduleCenter);
+        }
+
+        var observer = new MutationObserver(scheduleCenter);
+        observer.observe(document.documentElement, {childList: true, subtree: true});
+        window.setTimeout(function() { observer.disconnect(); }, 30000);
+
+        function runAndReport() {
+          dialogState = 'not-checked';
+          var centered = centerInput();
+          var target = currentInput();
+          var viewport = window.visualViewport;
+          var viewportTop = viewport ? viewport.offsetTop : 0;
+          var viewportHeight = viewport ? viewport.height : window.innerHeight;
+          var geometry = 'none';
+          if (target) {
+            var rect = target.getBoundingClientRect();
+            geometry = Math.round(rect.top) + ',' + Math.round(rect.bottom) + ',' +
+              Math.round(viewportTop) + ',' + Math.round(viewportHeight);
+          }
+          return (centered ? 'input-centered' : 'waiting-for-input') +
+            '|dialog=' + dialogState + '|target=' + geometry + '|x-layout-v6';
+        }
+
+        window.__aggregateXLoginAssist = {run: runAndReport};
+
+        var attempts = 0;
+        var timer = window.setInterval(function() {
+          attempts += 1;
+          if (centerInput() || attempts >= 20) window.clearInterval(timer);
+        }, 300);
+        return runAndReport();
+      } catch (error) {
+        return 'failed';
+      }
+    })();
+"""
 
 internal const val DOUYIN_LOGIN_VIEWPORT_SCRIPT = """
     (function() {

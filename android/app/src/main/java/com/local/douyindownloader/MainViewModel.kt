@@ -58,7 +58,8 @@ internal fun initialParserCredentialMode(
     platform: SourcePlatform,
     hasStoredCookie: Boolean,
 ): ParserCredentialMode? = when {
-    platform == SourcePlatform.XIAOHONGSHU -> ParserCredentialMode.ANONYMOUS
+    platform in setOf(SourcePlatform.XIAOHONGSHU, SourcePlatform.X) ->
+        ParserCredentialMode.ANONYMOUS
     hasStoredCookie -> ParserCredentialMode.STORED_COOKIE
     platform.anonymousFirst -> ParserCredentialMode.ANONYMOUS
     else -> null
@@ -71,7 +72,7 @@ internal fun nextParserCredentialMode(
     hasStoredCookie: Boolean,
     attemptedModes: Set<ParserCredentialMode>,
 ): ParserCredentialMode? {
-    if (platform != SourcePlatform.XIAOHONGSHU ||
+    if (platform !in setOf(SourcePlatform.XIAOHONGSHU, SourcePlatform.X, SourcePlatform.INSTAGRAM) ||
         !isRecoverableParseError(platform, errorCode)
     ) {
         return null
@@ -93,7 +94,8 @@ internal fun shouldRefreshCookieEnvironment(
     if (refreshAttempted || !isRecoverableParseError(platform, errorCode)) {
         return false
     }
-    return platform != SourcePlatform.ZHIHU || supportsTargetPageSnapshot
+    return platform != SourcePlatform.BILIBILI &&
+        (platform != SourcePlatform.ZHIHU || supportsTargetPageSnapshot)
 }
 
 private fun isRecoverableParseError(platform: SourcePlatform, errorCode: String): Boolean =
@@ -117,6 +119,8 @@ data class MainUiState(
     val inputText: String = "",
     val parseState: ParseUiState = ParseUiState.Idle,
     val selectedVariant: Int = 0,
+    val selectedAttachmentVariants: Map<String, Int> = emptyMap(),
+    val selectedBilibiliCids: Set<String> = emptySet(),
     val selectedMode: DownloadMode = DownloadMode.MERGE_KEEP,
     val tasks: List<TaskRecord> = emptyList(),
     val allTasks: List<TaskRecord> = emptyList(),
@@ -135,6 +139,7 @@ data class MainUiState(
 class MainViewModel @Inject internal constructor(
     application: Application,
     private val parser: ParserGateway,
+    private val bilibiliParser: BilibiliPlatformParser,
     private val store: DownloadTaskRepository,
     private val logger: DiagnosticLogger,
     private val inspector: StorageInspector,
@@ -154,6 +159,7 @@ class MainViewModel @Inject internal constructor(
     private val zhihuQuestionRepository: ZhihuQuestionRepository,
 ) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
+    private var bilibiliCredentialJob: Job? = null
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
     private val _expandedTaskId = MutableStateFlow<String?>(null)
     internal val expandedTaskId: StateFlow<String?> = _expandedTaskId.asStateFlow()
@@ -177,6 +183,9 @@ class MainViewModel @Inject internal constructor(
     var selectedVariant: Int
         get() = _uiState.value.selectedVariant
         set(value) = _uiState.update { it.copy(selectedVariant = value) }
+    var selectedAttachmentVariants: Map<String, Int>
+        get() = _uiState.value.selectedAttachmentVariants
+        private set(value) = _uiState.update { it.copy(selectedAttachmentVariants = value) }
     var selectedMode: DownloadMode
         get() = _uiState.value.selectedMode
         private set(value) = _uiState.update { it.copy(selectedMode = value) }
@@ -265,7 +274,7 @@ class MainViewModel @Inject internal constructor(
     fun beginParse() {
         val source = extractSupportedSource(inputText)
         if (source == null) {
-            message = "没有找到抖音、小红书或知乎链接"
+            message = "没有找到抖音、小红书、知乎、X、Instagram 或 B站链接"
             return
         }
         sessionPlatform = source.platform
@@ -275,7 +284,8 @@ class MainViewModel @Inject internal constructor(
             SourcePlatform.ZHIHU -> runCatching {
                 ZhihuSourceResolver.resolve(source.url).type != ZhihuContentType.VIDEO
             }.getOrDefault(false)
-            SourcePlatform.DOUYIN -> false
+            SourcePlatform.DOUYIN, SourcePlatform.BILIBILI -> false
+            SourcePlatform.X, SourcePlatform.INSTAGRAM -> true
         }
         sessionId = UUID.randomUUID().toString()
         sessionCredentialAttempts.clear()
@@ -411,12 +421,19 @@ class MainViewModel @Inject internal constructor(
                     put("variants", result.variants.size)
                     put("images", result.imageUrls.size)
                     put("document_assets", result.document?.assets?.size ?: 0)
+                    put("attachments", result.attachments.size)
                     put("separate_audio", result.audioUrls.isNotEmpty())
                     put("author_present", result.author.isNotBlank())
                     put("author_account_id_present", result.authorAccountId.isNotBlank())
                 })
                 logger.saveResponseShape(sessionId, result.responseShape)
                 selectedVariant = preferredVariant(result)
+                _uiState.update { it.copy(selectedBilibiliCids = setOf(result.contentId.substringAfter(':', ""))) }
+                selectedAttachmentVariants = result.attachments
+                    .filter { it.kind != MediaAttachmentKind.IMAGE }
+                    .associate { attachment ->
+                        attachment.id to preferredVariant(attachment.variants)
+                    }
                 parseState = ParseUiState.Ready(result)
             } else {
                 logger.event(sessionId, "PARSE", "PARSE_FAILED", JSONObject().apply {
@@ -444,14 +461,25 @@ class MainViewModel @Inject internal constructor(
         selectedVariant = index
     }
 
+    fun selectAttachmentVariant(attachmentId: String, index: Int) {
+        selectedAttachmentVariants = selectedAttachmentVariants.toMutableMap().apply {
+            put(attachmentId, index)
+        }
+    }
+
     fun selectMode(mode: DownloadMode) {
         selectedMode = mode
+    }
+
+    fun selectBilibiliParts(cids: Set<String>) {
+        _uiState.update { it.copy(selectedBilibiliCids = cids) }
     }
 
     fun queueDownload(result: ParseResult): String {
         val id = sessionId.ifBlank { UUID.randomUUID().toString() }
         val createdAt = System.currentTimeMillis()
         val storageMode = if (customTreeUri.isNullOrBlank()) StorageMode.DEFAULT else StorageMode.SAF
+        val requestedCids = _uiState.value.selectedBilibiliCids.toSet()
         viewModelScope.launch {
             try {
                 val authorKey = creatorRepository.upsertFromParse(result)
@@ -479,6 +507,14 @@ class MainViewModel @Inject internal constructor(
                     createdAt = createdAt,
                     result = result,
                     variantIndex = selectedVariant,
+                    attachmentSelections = result.attachments
+                        .filter { it.kind != MediaAttachmentKind.IMAGE }
+                        .map { attachment ->
+                            AttachmentSelection(
+                                attachmentId = attachment.id,
+                                variantIndex = selectedAttachmentVariants[attachment.id] ?: 0,
+                            )
+                        },
                     mode = selectedMode,
                     sourceText = inputText,
                     storageMode = storageMode,
@@ -486,15 +522,42 @@ class MainViewModel @Inject internal constructor(
                     taskFolder = taskFolder,
                     authorKey = authorKey,
                 )
-                store.insert(spec)
+                val selectedParts = if (result.platform == SourcePlatform.BILIBILI && result.bilibiliParts.size > 1) {
+                    result.bilibiliParts.filter { it.cid in requestedCids }
+                } else emptyList()
+                check(result.bilibiliParts.size <= 1 || result.platform != SourcePlatform.BILIBILI || selectedParts.isNotEmpty()) { "请至少选择一个分P" }
+                val specs = if (selectedParts.isEmpty()) listOf(spec) else selectedParts.mapIndexed { index, part ->
+                    val partResult = bilibiliPartResult(result, part)
+                    val partId = if (index == 0) id else UUID.randomUUID().toString()
+                    spec.copy(taskId = partId, result = partResult, sourceText = partResult.canonicalUrl,
+                        bilibiliPending = partResult.variants.all { it.urls.isEmpty() },
+                        taskFolder = "$taskFolder/P${part.page}_${part.cid}_${partId.take(8)}")
+                }
+                var submissionFailures = 0
+                specs.forEach { child ->
+                    try {
+                        store.insert(child)
+                        scheduler.enqueue(child.taskId, ExistingWorkPolicy.KEEP)
+                    } catch (cancelled: CancellationException) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                            store.update(child.taskId, TaskStatus.FAILED, "提交已中断，可手动重试", 0)
+                        }
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        submissionFailures++
+                        val hint = Redactor.sanitize(error.message ?: "启动下载失败")
+                        runCatching { store.update(child.taskId, TaskStatus.FAILED, "启动下载失败", 0, hint) }
+                        logger.event(child.taskId, "SCHEDULE", "TASK_SUBMISSION_FAILED", JSONObject().put("message", hint))
+                    }
+                }
                 runCatching {
                     logger.event(id, "QUALITY", "DOWNLOAD_CONFIRMED", JSONObject().apply {
                         put("variant", selectedVariant)
+                        put("attachment_variants", selectedAttachmentVariants.size)
                         put("mode", selectedMode.wireValue)
                     })
                 }
-                scheduler.enqueue(id, ExistingWorkPolicy.KEEP)
-                message = "已加入后台下载"
+                message = if (submissionFailures == 0) "已加入后台下载" else "${submissionFailures} 个任务提交失败，可在任务页重试"
                 resetParse()
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1092,7 +1155,20 @@ class MainViewModel @Inject internal constructor(
         } else {
             xiaohongshuCredentialCache.clear()
         }
-        _uiState.update { it.copy(platformCredentialStates = localStates) }
+        bilibiliCredentialJob?.cancel()
+        val bilibiliCookie = cookies.getValue(SourcePlatform.BILIBILI)
+        val checkBilibili = localStates[SourcePlatform.BILIBILI] == PlatformCredentialState.DETECTED
+        if (checkBilibili) localStates[SourcePlatform.BILIBILI] = PlatformCredentialState.CHECKING
+        _uiState.update { it.copy(platformCredentialStates = localStates.toMap()) }
+        if (checkBilibili) {
+            bilibiliCredentialJob = viewModelScope.launch {
+                val validated = withContext(Dispatchers.IO) { bilibiliParser.credentialState(bilibiliCookie) }
+                if (CookieManager.getInstance().getCookie(SourcePlatform.BILIBILI.homeUrl).orEmpty() == bilibiliCookie) {
+                    _uiState.update { current -> current.copy(platformCredentialStates =
+                        current.platformCredentialStates + (SourcePlatform.BILIBILI to validated)) }
+                }
+            }
+        }
     }
 
     fun onXiaohongshuCredentialProbe(snapshot: WebPageSnapshot?) {
@@ -1229,9 +1305,13 @@ class MainViewModel @Inject internal constructor(
     }
 
     private fun preferredVariant(result: ParseResult): Int {
-        if (!preferH264 || result.variants.isEmpty()) return 0
-        val highest = result.variants.first()
-        return result.variants.indexOfFirst {
+        return preferredVariant(result.variants)
+    }
+
+    private fun preferredVariant(variants: List<MediaVariant>): Int {
+        if (!preferH264 || variants.isEmpty()) return 0
+        val highest = variants.first()
+        return variants.indexOfFirst {
             it.width == highest.width && it.height == highest.height && it.codec.contains("264")
         }.takeIf { it >= 0 } ?: 0
     }

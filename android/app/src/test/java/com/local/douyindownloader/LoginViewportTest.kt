@@ -1,22 +1,51 @@
 package com.local.douyindownloader
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LoginViewportTest {
     @Test
-    fun douyinAndXiaohongshuUseLoginViewportAssistance() {
+    fun douyinXiaohongshuAndXUseLoginViewportAssistance() {
         assertTrue(shouldAssistLoginViewport(SourcePlatform.DOUYIN))
         assertTrue(shouldAssistLoginViewport(SourcePlatform.XIAOHONGSHU))
         assertFalse(shouldAssistLoginViewport(SourcePlatform.ZHIHU))
+        assertTrue(shouldAssistLoginViewport(SourcePlatform.X))
     }
 
     @Test
-    fun douyinAndXiaohongshuUseDesktopLoginMode() {
+    fun onlyDouyinAndXiaohongshuUseDesktopLoginMode() {
         assertTrue(shouldUseDesktopLoginMode(SourcePlatform.DOUYIN))
         assertTrue(shouldUseDesktopLoginMode(SourcePlatform.XIAOHONGSHU))
         assertFalse(shouldUseDesktopLoginMode(SourcePlatform.ZHIHU))
+        assertFalse(shouldUseDesktopLoginMode(SourcePlatform.X))
+    }
+
+    @Test
+    fun xLoginBypassesCachedShellAndGetsDelayedAssistPasses() {
+        assertTrue(shouldBypassLoginCache(SourcePlatform.X))
+        assertFalse(shouldBypassLoginCache(SourcePlatform.DOUYIN))
+        assertEquals(listOf(0L, 1_500L, 3_500L, 7_000L), loginAssistDelays(SourcePlatform.X))
+        assertEquals(listOf(0L), loginAssistDelays(SourcePlatform.ZHIHU))
+    }
+
+    @Test
+    fun xReusesDetectedSessionFromHomeAndFlushesCookiesDuringLoginFlow() {
+        assertEquals(
+            "https://x.com/home",
+            loginEnvironmentStartUrl(SourcePlatform.X, PlatformCredentialState.DETECTED),
+        )
+        assertEquals(
+            SourcePlatform.X.loginUrl,
+            loginEnvironmentStartUrl(SourcePlatform.X, PlatformCredentialState.NOT_DETECTED),
+        )
+        assertEquals(
+            SourcePlatform.DOUYIN.loginUrl,
+            loginEnvironmentStartUrl(SourcePlatform.DOUYIN, PlatformCredentialState.DETECTED),
+        )
+        assertTrue(shouldFlushLoginCookiesOnPageFinished(SourcePlatform.X))
+        assertFalse(shouldFlushLoginCookiesOnPageFinished(SourcePlatform.DOUYIN))
     }
 
     @Test
@@ -39,5 +68,33 @@ class LoginViewportTest {
         assertTrue(XHS_LOGIN_VIEWPORT_SCRIPT.contains("pan-y pinch-zoom"))
         assertTrue(XHS_LOGIN_VIEWPORT_SCRIPT.contains("-webkit-overflow-scrolling"))
         assertTrue(loginViewportScript(SourcePlatform.XIAOHONGSHU) === XHS_LOGIN_VIEWPORT_SCRIPT)
+    }
+
+    @Test
+    fun xDiagnosticRepairsScrollerAndWatchesDynamicLoginSteps() {
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("input[type=\"text\"]"))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("input[type=\"password\"]"))
+        assertFalse(X_LOGIN_VIEWPORT_SCRIPT.contains("input:not([type=\"hidden\"]"))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("visualViewport"))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("ancestors="))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("position="))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("transform="))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("overflow="))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("margin="))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("padding="))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("scroll="))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("x-dom-diagnostic-v1"))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains(".jf-vscroller"))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("diagnosticViewportHeight"))
+        assertTrue(
+            X_LOGIN_VIEWPORT_SCRIPT.contains(
+                "'height', diagnosticViewportHeight + 'px'",
+            ),
+        )
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("vscroller="))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("x-vscroller-fix-v1"))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("__aggregateXScrollerWatcher"))
+        assertTrue(X_LOGIN_VIEWPORT_SCRIPT.contains("x-scroller-watch-v1"))
+        assertTrue(loginViewportScript(SourcePlatform.X) === X_LOGIN_VIEWPORT_SCRIPT)
     }
 }

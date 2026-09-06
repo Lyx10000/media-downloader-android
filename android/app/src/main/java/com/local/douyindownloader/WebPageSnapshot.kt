@@ -11,6 +11,7 @@ data class WebPageSnapshot(
     val author: String = "",
     val contentHtml: String = "",
     val visibleText: String = "",
+    val captureDiagnostics: String = "",
 ) {
     companion object {
         fun fromJavascriptResult(value: String?): WebPageSnapshot? {
@@ -26,6 +27,7 @@ data class WebPageSnapshot(
                 author = root.optString("author"),
                 contentHtml = root.optString("contentHtml"),
                 visibleText = root.optString("visibleText"),
+                captureDiagnostics = root.optJSONObject("captureDiagnostics")?.toString().orEmpty(),
             ).takeIf { it.finalUrl.isNotBlank() }
         }
     }

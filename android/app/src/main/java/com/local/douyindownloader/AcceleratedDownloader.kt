@@ -4,7 +4,6 @@ import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
 import kotlinx.coroutines.CancellationException
@@ -59,11 +58,12 @@ internal class AcceleratedDownloader(
         addresses: List<String>,
         referer: String,
         fallbackTotalBytes: Long,
+        requestProfile: MediaRequestProfile = MediaRequestProfile.standard(referer),
     ): DownloadCandidateSelection? = coroutineScope {
         addresses.distinct().take(MAX_PROBE_CANDIDATES).map { address ->
             async(Dispatchers.IO) {
                 try {
-                    probeCandidate(address, referer, fallbackTotalBytes)
+                    probeCandidate(address, requestProfile, fallbackTotalBytes)
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
                     null
@@ -80,6 +80,7 @@ internal class AcceleratedDownloader(
         target: File,
         referer: String,
         partCount: Int = DEFAULT_PART_COUNT,
+        requestProfile: MediaRequestProfile = MediaRequestProfile.standard(referer),
         onProgress: suspend (downloadedBytes: Long, totalBytes: Long, bytesPerSecond: Long) -> Unit,
     ) = withContext(Dispatchers.IO) {
         if (!selection.rangeSupported || selection.totalBytes <= 0L) {
@@ -95,7 +96,7 @@ internal class AcceleratedDownloader(
                     async(Dispatchers.IO) {
                         downloadRangeWithRetries(
                             address = selection.address,
-                            referer = referer,
+                            requestProfile = requestProfile,
                             target = target,
                             range = range,
                             expectedTotalBytes = selection.totalBytes,
@@ -116,14 +117,12 @@ internal class AcceleratedDownloader(
 
     private fun probeCandidate(
         address: String,
-        referer: String,
+        requestProfile: MediaRequestProfile,
         fallbackTotalBytes: Long,
     ): DownloadCandidateSelection {
-        val connection = openConnection(address, referer).apply {
-            setRequestProperty("Range", "bytes=0-${probeBytes - 1}")
-            setRequestProperty("Accept-Encoding", "identity")
-        }
         val startedAt = System.nanoTime()
+        val connection = requestProfile.open(address, connectTimeoutMs, readTimeoutMs,
+            mapOf("Range" to "bytes=0-${probeBytes - 1}", "Accept-Encoding" to "identity"))
         try {
             val status = connection.responseCode
             if (status !in 200..299) throw IOException("CDN HTTP $status")
@@ -164,7 +163,7 @@ internal class AcceleratedDownloader(
 
     private suspend fun downloadRangeWithRetries(
         address: String,
-        referer: String,
+        requestProfile: MediaRequestProfile,
         target: File,
         range: DownloadByteRange,
         expectedTotalBytes: Long,
@@ -175,7 +174,7 @@ internal class AcceleratedDownloader(
         repeat(RANGE_ATTEMPTS) {
             currentCoroutineContext().ensureActive()
             try {
-                downloadRange(address, referer, target, range, expectedTotalBytes) { writtenBytes ->
+                downloadRange(address, requestProfile, target, range, expectedTotalBytes) { writtenBytes ->
                     if (writtenBytes > creditedBytes) {
                         progress.add(writtenBytes - creditedBytes)
                         creditedBytes = writtenBytes
@@ -193,16 +192,14 @@ internal class AcceleratedDownloader(
 
     private suspend fun downloadRange(
         address: String,
-        referer: String,
+        requestProfile: MediaRequestProfile,
         target: File,
         range: DownloadByteRange,
         expectedTotalBytes: Long,
         onBytesWritten: suspend (Long) -> Unit,
     ) {
-        val connection = openConnection(address, referer).apply {
-            setRequestProperty("Range", "bytes=${range.startInclusive}-${range.endInclusive}")
-            setRequestProperty("Accept-Encoding", "identity")
-        }
+        val connection = requestProfile.open(address, connectTimeoutMs, readTimeoutMs,
+            mapOf("Range" to "bytes=${range.startInclusive}-${range.endInclusive}", "Accept-Encoding" to "identity"))
         try {
             val status = connection.responseCode
             if (status != HttpURLConnection.HTTP_PARTIAL) {
@@ -239,15 +236,6 @@ internal class AcceleratedDownloader(
             connection.disconnect()
         }
     }
-
-    private fun openConnection(address: String, referer: String): HttpURLConnection =
-        (URL(address).openConnection() as HttpURLConnection).apply {
-            connectTimeout = connectTimeoutMs
-            readTimeout = readTimeoutMs
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", USER_AGENT)
-            setRequestProperty("Referer", referer)
-        }
 
     private data class ResponseContentRange(
         val startInclusive: Long,
@@ -312,8 +300,6 @@ internal class AcceleratedDownloader(
         private const val RANGE_ATTEMPTS = 3
         private const val REPORT_INTERVAL_NANOS = 750_000_000L
         private const val NANOS_PER_SECOND = 1_000_000_000L
-        private const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
         private val CONTENT_RANGE = Regex("bytes\\s+(\\d+)-(\\d+)/(\\d+)", RegexOption.IGNORE_CASE)
     }
 }

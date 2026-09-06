@@ -151,7 +151,7 @@ class CreatorBatchCoordinator @Inject internal constructor(
                 return@forEach
             }
             val existing = work.task
-            if (existing != null && existing.fileState == FileState.AVAILABLE) {
+            if (existing != null && existing.fileState == FileState.AVAILABLE && profile.platform != SourcePlatform.BILIBILI) {
                 val retry = runCatching {
                     redownloadCoordinator.retry(
                         existing,
@@ -333,7 +333,7 @@ class CreatorBatchCoordinator @Inject internal constructor(
                             .forEach(::put)
                     })
                 })
-                if (result.errorCode in setOf("AUTH_OR_RISK", "LOGIN_REQUIRED")) {
+                if (result.errorCode in setOf("AUTH_OR_RISK", "LOGIN_REQUIRED", "RATE_LIMITED", "BILIBILI_RISK")) {
                     riskTriggered = true
                 }
                 return@forEach
@@ -347,6 +347,7 @@ class CreatorBatchCoordinator @Inject internal constructor(
                 result = result,
                 settings = settings,
                 appSettings = appSettings,
+                cookieHeader = cookieHeader,
             )
             if (prepared.success) {
                 consecutiveXiaohongshuDetailFailures = 0

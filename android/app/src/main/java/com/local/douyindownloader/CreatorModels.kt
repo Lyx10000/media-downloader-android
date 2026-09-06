@@ -92,9 +92,17 @@ data class CreatorWork(
     val lastSeenAt: Long = System.currentTimeMillis(),
     val pageNumber: Int = 1,
     val task: TaskRecord? = null,
+    val preparation: BatchWorkEntity? = null,
+    val preparationCreatedAt: Long = 0L,
+    val relatedTasks: List<TaskRecord> = emptyList(),
 ) {
+    val hasLocalRecord: Boolean get() = task != null || preparation != null
+    val preparationFailed: Boolean get() = task == null && preparation?.status == CreatorBatchWorkStatus.FAILED
+
     val localStatus: CreatorWorkLocalStatus
         get() = when {
+            preparationFailed -> CreatorWorkLocalStatus.FAILED
+            task == null && preparation != null -> CreatorWorkLocalStatus.QUEUED
             task == null -> CreatorWorkLocalStatus.NOT_DOWNLOADED
             task.status == TaskStatus.QUEUED -> CreatorWorkLocalStatus.QUEUED
             task.status == TaskStatus.RUNNING -> CreatorWorkLocalStatus.DOWNLOADING
@@ -130,11 +138,13 @@ data class BatchDownloadSettings(
     val quality: BatchVideoQuality = BatchVideoQuality.HIGHEST,
     val mode: DownloadMode = DownloadMode.MERGE_KEEP,
     val preferH264: Boolean = false,
+    val bilibiliAllParts: Boolean = true,
 ) {
     fun toJson(): String = JSONObject().apply {
         put("quality", quality.wireValue)
         put("mode", mode.wireValue)
         put("prefer_h264", preferH264)
+        put("bilibili_all_parts", bilibiliAllParts)
     }.toString()
 
     companion object {
@@ -144,6 +154,7 @@ data class BatchDownloadSettings(
                 quality = BatchVideoQuality.fromWire(root.optString("quality")),
                 mode = DownloadMode.fromWire(root.optString("mode")),
                 preferH264 = root.optBoolean("prefer_h264"),
+                bilibiliAllParts = root.optBoolean("bilibili_all_parts", true),
             )
         }.getOrDefault(BatchDownloadSettings())
     }
@@ -159,6 +170,9 @@ data class BatchSizeEstimate(
 internal val CREATOR_BATCH_PLATFORMS = listOf(
     SourcePlatform.DOUYIN,
     SourcePlatform.ZHIHU,
+    SourcePlatform.X,
+    SourcePlatform.INSTAGRAM,
+    SourcePlatform.BILIBILI,
 )
 
 internal fun creatorKey(platform: SourcePlatform, stableId: String): String =

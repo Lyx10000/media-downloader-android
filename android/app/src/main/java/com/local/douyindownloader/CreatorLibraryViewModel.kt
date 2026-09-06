@@ -204,18 +204,21 @@ class CreatorLibraryViewModel @Inject internal constructor(
             notify("请输入作者主页链接")
             return
         }
-        val supportedSource = extractSupportedSource(query) ?: run {
-            notify("请粘贴抖音或知乎作者主页链接")
+        val supportedSource = extractSupportedSource(query)
+        val platform = supportedSource?.platform ?: current.queryPlatform
+        val url = supportedSource?.url ?: query
+        if (supportedSource == null && platform !in setOf(SourcePlatform.X, SourcePlatform.INSTAGRAM, SourcePlatform.BILIBILI)) {
+            notify("请粘贴作者主页链接；X、Instagram支持@用户名，B站支持UID")
             return
         }
-        val url = supportedSource.url
-        val platform = supportedSource.platform
         if (platform !in CREATOR_BATCH_PLATFORMS) {
             _state.update {
                 it.copy(
                     isLoading = false,
                     candidate = null,
-                    error = "小红书作者批量下载已停止支持，请在作品模式粘贴单个作品链接",
+                    error = if (platform == SourcePlatform.BILIBILI) {
+                        "B站暂不支持作者批量下载，请在作品模式粘贴单个视频链接"
+                    } else "小红书作者批量下载已停止支持，请在作品模式粘贴单个作品链接",
                 )
             }
             return
@@ -235,9 +238,17 @@ class CreatorLibraryViewModel @Inject internal constructor(
         snapshot: WebPageSnapshot?,
     ) {
         val request = _state.value.webResolveRequest ?: return
+        if (request.platform == SourcePlatform.INSTAGRAM) {
+            logger.event("creator-search", "CREATOR", "INSTAGRAM_PROFILE_SNAPSHOT_READY", JSONObject().apply {
+                put("source", source.name.lowercase())
+                put("snapshot_present", snapshot != null)
+                put("initial_chars", snapshot?.initialData?.length ?: 0)
+                put("capture_diagnostics_present", !snapshot?.captureDiagnostics.isNullOrBlank())
+            })
+        }
         _state.update { it.copy(webResolveRequest = null, isLoading = true) }
         if (snapshot == null) {
-            val reason = if (source == CookieReadySource.TIMEOUT) "小红书作者搜索加载超时" else "小红书作者搜索页面没有返回数据"
+            val reason = request.platform.displayName + if (source == CookieReadySource.TIMEOUT) "作者搜索加载超时" else "作者搜索页面没有返回数据"
             _state.update { it.copy(isLoading = false, error = reason) }
             return
         }
@@ -249,6 +260,37 @@ class CreatorLibraryViewModel @Inject internal constructor(
     fun cancelWebResolve() {
         _state.update {
             it.copy(webResolveRequest = null, isLoading = false, error = "已取消查找作者")
+        }
+    }
+
+    fun retryLocalPreparations(keys: Set<String>) {
+        val profile = _state.value.selectedCreator ?: return
+        val eligible = _state.value.allWorks.filter { it.key in keys && it.preparationFailed }.mapTo(linkedSetOf()) { it.key }
+        if (eligible.isEmpty() || _state.value.isStartingBatch) return
+        _state.update { it.copy(isStartingBatch = true) }
+        viewModelScope.launch {
+            try {
+                val result = creatorBatchCoordinator.start(profile, eligible, _state.value.batchSettings)
+                notify(result.message)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                notify(Redactor.sanitize(error.message ?: "重试失败"))
+            } finally {
+                _state.update { it.copy(isStartingBatch = false) }
+            }
+        }
+    }
+
+    fun deleteLocalPreparations(keys: Set<String>) {
+        viewModelScope.launch {
+            try {
+                creatorRepository.deleteFailedPreparations(keys)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                notify(Redactor.sanitize(error.message ?: "删除准备记录失败"))
+            }
         }
     }
 
@@ -273,6 +315,14 @@ class CreatorLibraryViewModel @Inject internal constructor(
             throw cancelled
         } catch (error: Throwable) {
             val safe = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+            if (platform == SourcePlatform.INSTAGRAM && snapshot == null &&
+                (error as? CreatorSourceException)?.code == "WEB_PROFILE_REQUIRED") {
+                val handle = socialCreatorHandle(platform, query)
+                logger.event("creator-search", "CREATOR", "PROFILE_WEB_REQUIRED", JSONObject().put("platform", platform.wireValue))
+                _state.update { it.copy(isLoading = true, error = "", webResolveRequest =
+                    CreatorWebResolveRequest(platform, query, "https://www.instagram.com/$handle/")) }
+                return
+            }
             logger.event("creator-search", "CREATOR", "PROFILE_RESOLVE_FAILED", JSONObject().apply {
                 put("platform", platform.wireValue)
                 put("code", (error as? CreatorSourceException)?.code.orEmpty())
@@ -425,10 +475,11 @@ class CreatorLibraryViewModel @Inject internal constructor(
         viewModelScope.launch {
             if (!force) {
                 val cached = creatorRepository.getPage(profile.key, page)
+                val info = creatorRepository.getPageInfo(profile.key, page)
                 val compatibleCache = profile.platform != SourcePlatform.ZHIHU ||
                     cached.size <= CREATOR_PAGE_SIZE
-                if (cached.isNotEmpty() && compatibleCache) {
-                    val info = creatorRepository.getPageInfo(profile.key, page)
+                val cachedSocialPage = profile.platform in setOf(SourcePlatform.X, SourcePlatform.INSTAGRAM) && info != null
+                if ((cached.isNotEmpty() || cachedSocialPage) && compatibleCache) {
                     nextCursor = info?.nextCursor.orEmpty()
                     _state.update {
                         it.copy(
@@ -482,8 +533,8 @@ class CreatorLibraryViewModel @Inject internal constructor(
                 val code = (error as? CreatorSourceException)?.code.orEmpty()
                 if (
                     allowWebFallback &&
-                    profile.platform == SourcePlatform.XIAOHONGSHU &&
-                    code in XHS_CREATOR_WEB_FALLBACK_ERRORS
+                    ((profile.platform == SourcePlatform.XIAOHONGSHU && code in XHS_CREATOR_WEB_FALLBACK_ERRORS) ||
+                        (profile.platform == SourcePlatform.INSTAGRAM && code == "WEB_PROFILE_REQUIRED"))
                 ) {
                     creatorRepository.restorePageAfterAmbiguousRefresh(profile.key, page)
                     val retained = creatorRepository.getPage(profile.key, page)
@@ -564,7 +615,7 @@ class CreatorLibraryViewModel @Inject internal constructor(
                     it.copy(
                         pageWorks = retained,
                         isLoading = false,
-                        error = "小红书网页刷新未取得作品数据，已保留上次缓存",
+                        error = "${profile.platform.displayName}网页刷新未取得作品数据，已保留上次缓存",
                     )
                 }
             }

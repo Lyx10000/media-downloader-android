@@ -165,6 +165,9 @@ interface DownloadBatchDao {
     @Query("SELECT * FROM batch_works")
     fun observeWorks(): Flow<List<BatchWorkEntity>>
 
+    @Query("DELETE FROM batch_works WHERE work_key IN (:keys) AND status = 'FAILED' AND task_id = ''")
+    suspend fun deleteFailedPreparations(keys: List<String>)
+
     @Query("SELECT * FROM download_batches WHERE creator_key = :creatorKey AND status IN ('PAUSED', 'WAITING_FOREGROUND') ORDER BY created_at DESC LIMIT 1")
     suspend fun latestPaused(creatorKey: String): DownloadBatchEntity?
 

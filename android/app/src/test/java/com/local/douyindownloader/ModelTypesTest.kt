@@ -45,6 +45,7 @@ class ModelTypesTest {
         assertEquals("tracks", DownloadMode.TRACKS.wireValue)
         assertEquals("video_only", DownloadMode.VIDEO_ONLY.wireValue)
         assertEquals("audio_only", DownloadMode.AUDIO_ONLY.wireValue)
+        assertEquals("mp4_only", DownloadMode.MP4_ONLY.wireValue)
         assertEquals("SAF", StorageMode.SAF.wireValue)
         assertEquals("AVAILABLE", FileState.AVAILABLE.wireValue)
         assertEquals("COMPLETE", TaskStatus.COMPLETE.wireValue)

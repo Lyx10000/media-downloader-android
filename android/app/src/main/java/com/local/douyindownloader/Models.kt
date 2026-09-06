@@ -56,6 +56,7 @@ value class TaskStatus private constructor(val wireValue: String) {
 
 enum class DownloadMode(val wireValue: String) {
     MERGE_KEEP("merge_keep"),
+    MP4_ONLY("mp4_only"),
     TRACKS("tracks"),
     VIDEO_ONLY("video_only"),
     AUDIO_ONLY("audio_only");
@@ -74,6 +75,18 @@ enum class MediaKind(val wireValue: String) {
     companion object {
         fun fromWire(value: String): MediaKind = entries.firstOrNull { it.wireValue == value }
             ?: VIDEO
+    }
+}
+
+enum class MediaAttachmentKind(val wireValue: String) {
+    IMAGE("image"),
+    VIDEO("video"),
+    GIF("gif");
+
+    companion object {
+        fun fromWire(value: String): MediaAttachmentKind = entries.firstOrNull {
+            it.wireValue == value
+        } ?: IMAGE
     }
 }
 
@@ -122,6 +135,52 @@ data class ParserAttempt(
     val errorCode: String = "",
 )
 
+data class MediaAttachment(
+    val id: String,
+    val index: Int,
+    val kind: MediaAttachmentKind,
+    val coverUrl: String = "",
+    val imageCandidates: List<String> = emptyList(),
+    val variants: List<MediaVariant> = emptyList(),
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("index", index)
+        put("kind", kind.wireValue)
+        put("cover_url", coverUrl)
+        put("image_candidates", JSONArray(imageCandidates))
+        put("variants", JSONArray().apply { variants.forEach { put(it.toJson()) } })
+    }
+
+    companion object {
+        fun fromJson(value: JSONObject): MediaAttachment = MediaAttachment(
+            id = value.optString("id"),
+            index = value.optInt("index"),
+            kind = MediaAttachmentKind.fromWire(value.optString("kind")),
+            coverUrl = value.optString("cover_url"),
+            imageCandidates = value.optJSONArray("image_candidates").toStrings(),
+            variants = value.optJSONArray("variants").toObjects(::mediaVariantFromJson),
+        )
+    }
+}
+
+data class AttachmentSelection(
+    val attachmentId: String,
+    val variantIndex: Int,
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("attachment_id", attachmentId)
+        put("variant_index", variantIndex)
+    }
+
+    companion object {
+        fun fromJson(value: JSONObject): AttachmentSelection? = AttachmentSelection(
+            attachmentId = value.optString("attachment_id"),
+            variantIndex = value.optInt("variant_index"),
+        ).takeIf { it.attachmentId.isNotBlank() }
+    }
+}
+
 data class LivePhotoPair(
     val imageIndex: Int,
     val imageCandidates: List<String>,
@@ -166,8 +225,11 @@ data class ParseResult(
     val imageCandidates: List<List<String>> = emptyList(),
     val musicUrls: List<String> = emptyList(),
     val livePhotos: List<LivePhotoPair> = emptyList(),
+    val attachments: List<MediaAttachment> = emptyList(),
     val document: DocumentContent? = null,
     val question: ZhihuQuestionInfo? = null,
+    val bilibiliParts: List<BilibiliPartInfo> = emptyList(),
+    val bilibiliTitle: String = "",
     val responseShape: String = "{}",
     val errorCode: String = "",
     val message: String = "",
@@ -203,8 +265,11 @@ data class ParseResult(
                 )
                 put("music_urls", JSONArray(musicUrls))
                 put("live_photos", JSONArray().apply { livePhotos.forEach { put(it.toJson()) } })
+                put("attachments", JSONArray().apply { attachments.forEach { put(it.toJson()) } })
                 document?.let { put("document", it.toJson()) }
                 question?.let { put("question_archive", it.toJson()) }
+                put("bilibili_parts", JSONArray().apply { bilibiliParts.forEach { put(it.toJson()) } })
+                put("bilibili_title", bilibiliTitle)
                 put(
                     "response_shape",
                     runCatching { JSONObject(responseShape) }.getOrElse { JSONObject() },
@@ -258,8 +323,11 @@ data class ParseResult(
                         array.optJSONObject(index)?.let(LivePhotoPair::fromJson)
                     }
                 },
+                attachments = root.optJSONArray("attachments").toObjects(MediaAttachment::fromJson),
                 document = root.optJSONObject("document")?.let(DocumentContent::fromJson),
                 question = root.optJSONObject("question_archive")?.let(ZhihuQuestionInfo::fromJson),
+                bilibiliParts = root.optJSONArray("bilibili_parts").toObjects { BilibiliPartInfo.fromJson(it) }.filterNotNull(),
+                bilibiliTitle = root.optString("bilibili_title"),
                 responseShape = root.optJSONObject("response_shape")?.toString(2) ?: "{}",
                 rawJson = text,
             )
@@ -272,6 +340,7 @@ data class TaskSpec(
     val createdAt: Long,
     val result: ParseResult,
     val variantIndex: Int,
+    val attachmentSelections: List<AttachmentSelection> = emptyList(),
     val mode: DownloadMode,
     val sourceText: String = "",
     val storageMode: StorageMode = StorageMode.LEGACY,
@@ -284,12 +353,18 @@ data class TaskSpec(
     val questionChild: Boolean = false,
     val zhihuCommentRequest: ZhihuCommentRequest? = null,
     val pendingRedownload: PendingRedownload? = null,
+    val bilibiliPending: Boolean = false,
+    val bilibiliBatchQuality: String = "",
 ) {
     fun toJson(): String = JSONObject().apply {
         put("task_id", taskId)
         put("created_at", createdAt)
         put("result", result.toJson())
         put("variant_index", variantIndex)
+        put(
+            "attachment_selections",
+            JSONArray().apply { attachmentSelections.forEach { put(it.toJson()) } },
+        )
         put("mode", mode.wireValue)
         put("source_text", sourceText)
         put("storage_mode", storageMode.wireValue)
@@ -300,6 +375,8 @@ data class TaskSpec(
         put("creator_child", creatorChild)
         put("question_archive_id", questionArchiveId)
         put("question_child", questionChild)
+        put("bilibili_pending", bilibiliPending)
+        put("bilibili_batch_quality", bilibiliBatchQuality)
         zhihuCommentRequest?.let { put("zhihu_comment_request", it.toJson()) }
         pendingRedownload?.let { put("pending_redownload", it.toJson()) }
     }.toString()
@@ -315,6 +392,9 @@ data class TaskSpec(
                 createdAt = createdAt,
                 result = ParseResult.fromJson(resultJson),
                 variantIndex = root.optInt("variant_index", 0),
+                attachmentSelections = root.optJSONArray("attachment_selections")
+                    .toObjects { AttachmentSelection.fromJson(it) }
+                    .filterNotNull(),
                 mode = DownloadMode.fromWire(root.optString("mode", DownloadMode.MERGE_KEEP.wireValue)),
                 sourceText = root.optString("source_text"),
                 storageMode = StorageMode.fromWire(
@@ -329,6 +409,8 @@ data class TaskSpec(
                 creatorChild = root.optBoolean("creator_child"),
                 questionArchiveId = root.optString("question_archive_id"),
                 questionChild = root.optBoolean("question_child"),
+                bilibiliPending = root.optBoolean("bilibili_pending"),
+                bilibiliBatchQuality = root.optString("bilibili_batch_quality"),
                 zhihuCommentRequest = root.optJSONObject("zhihu_comment_request")
                     ?.let(ZhihuCommentRequest::fromJson),
                 pendingRedownload = root.optJSONObject("pending_redownload")
@@ -339,6 +421,7 @@ data class TaskSpec(
 
     fun executionSpec(): TaskSpec = pendingRedownload?.let { pending ->
         copy(
+            bilibiliPending = false,
             result = pending.result,
             variantIndex = pending.variantIndex,
             mode = pending.mode ?: mode,
@@ -460,6 +543,8 @@ data class TaskRecord(
     val questionArchiveId: String = "",
     val questionChild: Boolean = false,
     val storageMode: StorageMode = StorageMode.LEGACY,
+    val bilibiliPage: Int = 0,
+    val bilibiliTitle: String = "",
 ) {
     val outputUris: List<String> get() = outputs.map(TaskOutput::uri)
 }

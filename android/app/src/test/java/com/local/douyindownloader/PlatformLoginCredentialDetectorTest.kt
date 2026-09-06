@@ -5,6 +5,17 @@ import org.junit.Test
 
 class PlatformLoginCredentialDetectorTest {
     @Test
+    fun `x requires both auth and csrf cookies`() {
+        assertEquals(
+            PlatformCredentialState.DETECTED,
+            detectPlatformCredential(SourcePlatform.X, "auth_token=session; ct0=csrf"),
+        )
+        assertEquals(
+            PlatformCredentialState.NOT_DETECTED,
+            detectPlatformCredential(SourcePlatform.X, "auth_token=session"),
+        )
+    }
+    @Test
     fun detectsOnlyPlatformSpecificLoginCookies() {
         assertEquals(
             PlatformCredentialState.DETECTED,

@@ -89,6 +89,25 @@ internal fun selectTaskPreview(candidates: List<PreviewCandidate>): TaskPreviewM
 }
 
 internal fun selectTaskPreviews(candidates: List<PreviewCandidate>): List<TaskPreviewMedia> {
+    val mixedPostMedia = candidates.filter {
+        it.output.relativePath.substringAfterLast('/').startsWith("media_")
+    }
+    if (mixedPostMedia.isNotEmpty()) {
+        val ordered = mixedPostMedia.sortedBy { it.output.displayName }
+        val imageCandidates = ordered.filter { previewKind(it.mimeType) == TaskPreviewKind.IMAGE }
+        return buildList {
+            if (imageCandidates.isNotEmpty()) {
+                selectTaskPreview(imageCandidates)?.let(::add)
+            }
+            ordered.filter { previewKind(it.mimeType) != TaskPreviewKind.IMAGE }
+                .groupBy { candidate ->
+                    mixedMediaGroupKey(candidate.output.displayName)
+                        ?: candidate.output.displayName
+                }
+                .values
+                .mapNotNullTo(this) { group -> selectTaskPreview(group) }
+        }
+    }
     val groups = documentPreviewGroups(candidates.map(PreviewCandidate::output))
     val documentMedia = candidates.filter { it.output.relativePath.startsWith("media/") }
     if (documentMedia.isEmpty()) return listOfNotNull(selectTaskPreview(candidates))
@@ -100,6 +119,11 @@ internal fun selectTaskPreviews(candidates: List<PreviewCandidate>): List<TaskPr
         if (isEmpty()) selectTaskPreview(documentMedia)?.let(::add)
     }
 }
+
+private val MIXED_MEDIA_PREFIX = Regex("^media_\\d+")
+
+internal fun mixedMediaGroupKey(displayName: String): String? =
+    MIXED_MEDIA_PREFIX.find(displayName)?.value
 
 internal data class DocumentPreviewGroups(
     val images: List<TaskOutput>,

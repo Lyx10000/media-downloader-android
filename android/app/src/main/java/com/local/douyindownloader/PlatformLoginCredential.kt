@@ -66,8 +66,16 @@ internal fun detectPlatformCredential(
         SourcePlatform.DOUYIN -> setOf("sessionid", "sessionid_ss", "sid_tt")
         SourcePlatform.XIAOHONGSHU -> setOf("web_session")
         SourcePlatform.ZHIHU -> setOf("z_c0")
+        SourcePlatform.X -> setOf("auth_token", "ct0")
+        SourcePlatform.INSTAGRAM -> setOf("sessionid")
+        SourcePlatform.BILIBILI -> setOf("sessdata")
     }
-    return if (cookieNames.any(loginCookies::contains)) {
+    val detected = if (platform == SourcePlatform.X) {
+        cookieNames.containsAll(loginCookies)
+    } else {
+        cookieNames.any(loginCookies::contains)
+    }
+    return if (detected) {
         PlatformCredentialState.DETECTED
     } else {
         PlatformCredentialState.NOT_DETECTED

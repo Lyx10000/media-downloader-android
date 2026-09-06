@@ -29,9 +29,13 @@ internal fun redownloadCredentialPlan(
     SourcePlatform.DOUYIN -> List(3) {
         if (hasStoredCookie) RedownloadCredential.STORED_COOKIE else RedownloadCredential.ANONYMOUS
     }
-    SourcePlatform.ZHIHU -> listOf(
+    SourcePlatform.ZHIHU, SourcePlatform.BILIBILI -> listOf(
         if (hasStoredCookie) RedownloadCredential.STORED_COOKIE else RedownloadCredential.ANONYMOUS,
     )
+    SourcePlatform.X, SourcePlatform.INSTAGRAM -> buildList {
+        add(RedownloadCredential.ANONYMOUS)
+        if (hasStoredCookie) add(RedownloadCredential.STORED_COOKIE)
+    }
 }
 
 internal fun isRetriableRedownloadParseFailure(errorCode: String): Boolean = errorCode in setOf(
@@ -43,8 +47,13 @@ internal fun isRetriableRedownloadParseFailure(errorCode: String): Boolean = err
 )
 
 internal fun hasReusableDownloadSources(result: ParseResult): Boolean = when (result.kind) {
-    MediaKind.VIDEO -> result.variants.any { it.urls.isNotEmpty() }
-    MediaKind.IMAGE -> result.imageCandidates.any { it.isNotEmpty() } || result.imageUrls.isNotEmpty()
+    MediaKind.VIDEO -> result.attachments.takeIf(List<MediaAttachment>::isNotEmpty)?.all { attachment ->
+        attachment.kind == MediaAttachmentKind.IMAGE && attachment.imageCandidates.isNotEmpty() ||
+            attachment.kind != MediaAttachmentKind.IMAGE && attachment.variants.any { it.urls.isNotEmpty() }
+    } ?: result.variants.any { it.urls.isNotEmpty() }
+    MediaKind.IMAGE -> result.attachments.takeIf(List<MediaAttachment>::isNotEmpty)?.all {
+        it.imageCandidates.isNotEmpty()
+    } ?: (result.imageCandidates.any { it.isNotEmpty() } || result.imageUrls.isNotEmpty())
     MediaKind.DOCUMENT -> result.document != null
 }
 
@@ -109,6 +118,13 @@ internal class TaskRedownloadCoordinator @Inject constructor(
         }
 
         val previous = originalSpec.result.variants.getOrNull(originalSpec.variantIndex)
+        if (originalSpec.result.platform == SourcePlatform.BILIBILI &&
+            refreshed.contentId != originalSpec.result.contentId
+        ) {
+            val hint = "B站稿件分P已变化，请在首页重新选择视频，旧文件未替换"
+            repository.update(task.id, TaskStatus.FAILED, "重新解析失败", 0, hint)
+            return failure(hint)
+        }
         val match = if (refreshed.kind == MediaKind.VIDEO && overrideSettings == null) {
             matchVariant(previous, refreshed.variants)
         } else if (refreshed.kind == MediaKind.VIDEO) {
@@ -135,6 +151,11 @@ internal class TaskRedownloadCoordinator @Inject constructor(
         }
 
         val now = System.currentTimeMillis()
+        if (refreshed.platform == SourcePlatform.BILIBILI && !match.exact && !originalSpec.bilibiliPending) {
+            val hint = "原B站档位当前不可用，请在首页重新选择画质，旧文件未替换"
+            repository.update(task.id, TaskStatus.FAILED, "重新解析失败", 0, hint)
+            return failure(hint)
+        }
         val selectedVariant = match.index.coerceAtLeast(0)
         val selectedMode = overrideSettings?.mode ?: originalSpec.mode
         val refreshedAuthorKey = creatorRepository.upsertFromParse(refreshed)
@@ -240,7 +261,7 @@ internal class TaskRedownloadCoordinator @Inject constructor(
             if (!isRetriableRedownloadParseFailure(result.errorCode)) break
             if (index < attempts.lastIndex) delay(REPARSE_RETRY_DELAYS_MS[index.coerceAtMost(REPARSE_RETRY_DELAYS_MS.lastIndex)])
         }
-        if (hasReusableDownloadSources(originalSpec.result)) {
+        if (originalSpec.result.platform != SourcePlatform.BILIBILI && hasReusableDownloadSources(originalSpec.result)) {
             logger.event(taskId, "REDOWNLOAD", "STORED_SOURCES_FALLBACK", JSONObject().apply {
                 put("attempts", attempted)
                 put("last_code", lastFailure?.errorCode.orEmpty())

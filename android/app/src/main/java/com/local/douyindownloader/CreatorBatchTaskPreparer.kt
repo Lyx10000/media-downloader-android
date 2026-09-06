@@ -17,6 +17,7 @@ internal class CreatorBatchTaskPreparer @Inject constructor(
     private val tasks: DownloadTaskRepository,
     private val batches: DownloadBatchDao,
     private val scheduler: DownloadScheduler,
+    private val redownload: TaskRedownloadCoordinator,
 ) {
     suspend fun prepare(
         batchId: String,
@@ -26,6 +27,7 @@ internal class CreatorBatchTaskPreparer @Inject constructor(
         result: ParseResult,
         settings: BatchDownloadSettings,
         appSettings: AppSettings,
+        cookieHeader: String = "",
     ): CreatorBatchPrepareOutcome {
         val taskId = UUID.randomUUID().toString()
         val createdAt = System.currentTimeMillis()
@@ -46,21 +48,51 @@ internal class CreatorBatchTaskPreparer @Inject constructor(
             batchId = batchId,
             creatorChild = true,
         )
+        val created = mutableListOf<String>()
         return try {
-            tasks.insert(spec)
+            val parts = result.bilibiliParts.takeIf { result.platform == SourcePlatform.BILIBILI && it.size > 1 }
+                ?.let { if (settings.bilibiliAllParts) it else it.filter { p -> p.page == 1 } }.orEmpty()
+            val specs = if (parts.isEmpty()) listOf(spec) else parts.mapIndexed { index, part ->
+                val child = bilibiliPartResult(result, part)
+                val childId = if (index == 0) taskId else UUID.randomUUID().toString()
+                spec.copy(taskId = childId, result = child, sourceText = child.canonicalUrl,
+                    bilibiliPending = child.variants.all { it.urls.isEmpty() },
+                    bilibiliBatchQuality = settings.quality.wireValue,
+                    taskFolder = "${spec.taskFolder}/P${part.page}_${part.cid}_${childId.take(8)}")
+            }
+            val existing = if (result.platform == SourcePlatform.BILIBILI) indexedWork.relatedTasks
+                .sortedByDescending { it.createdAt }.distinctBy { it.contentId }.associateBy { it.contentId } else emptyMap()
+            var reusedId = ""
+            specs.forEach { child ->
+                val previous = existing[child.result.contentId]
+                if (previous == null) {
+                    tasks.insert(child)
+                    created += child.taskId
+                } else {
+                    reusedId = previous.id
+                    if (previous.status !in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.DELETING)) {
+                        val retry = redownload.retry(previous, cookieHeader, appSettings.customTreeUri, settings)
+                        check(retry.success) { retry.message }
+                    }
+                }
+            }
+            val primaryId = created.firstOrNull() ?: reusedId
             batches.updateWork(
                 batchId,
                 indexedWork.key,
-                CreatorBatchWorkStatus.PREPARED,
-                taskId,
+                if (created.isEmpty()) CreatorBatchWorkStatus.SCHEDULED else CreatorBatchWorkStatus.PREPARED,
+                primaryId,
                 "",
             )
-            CreatorBatchPrepareOutcome(true, taskId)
+            CreatorBatchPrepareOutcome(true, primaryId)
         } catch (cancelled: CancellationException) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                created.forEach { tasks.update(it, TaskStatus.FAILED, "准备已中断，可手动重试", 0) }
+            }
             throw cancelled
         } catch (error: Throwable) {
             val safeMessage = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
-            runCatching { tasks.update(taskId, TaskStatus.FAILED, "创建下载任务失败", 0, safeMessage) }
+            created.forEach { id -> runCatching { tasks.update(id, TaskStatus.FAILED, "创建下载任务失败", 0, safeMessage) } }
             batches.updateWork(
                 batchId,
                 indexedWork.key,
@@ -73,17 +105,30 @@ internal class CreatorBatchTaskPreparer @Inject constructor(
     }
 
     suspend fun submitPrepared(batchId: String) {
+        val partTasks = tasks.listAll().filter { it.batchId == batchId && it.platform == SourcePlatform.BILIBILI }
         batches.listWorks(batchId)
             .filter { it.status == CreatorBatchWorkStatus.PREPARED && it.taskId.isNotBlank() }
             .forEach { entry ->
                 try {
-                    scheduler.enqueue(entry.taskId, ExistingWorkPolicy.KEEP)
+                    val grouped = partTasks.filter {
+                        creatorWorkKey(it.platform, bilibiliWorkId(it.platform, it.contentId)) == entry.workKey
+                    }
+                    val ids = grouped.map { it.id }.ifEmpty { listOf(entry.taskId) }
+                    var failure = ""
+                    ids.forEach { id ->
+                        try { scheduler.enqueue(id, ExistingWorkPolicy.KEEP) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (error: Throwable) {
+                            failure = Redactor.sanitize(error.message ?: "启动下载失败")
+                            tasks.update(id, TaskStatus.FAILED, "启动下载失败", 0, failure)
+                        }
+                    }
                     batches.updateWork(
                         batchId,
                         entry.workKey,
-                        CreatorBatchWorkStatus.SCHEDULED,
+                        if (failure.isEmpty()) CreatorBatchWorkStatus.SCHEDULED else CreatorBatchWorkStatus.FAILED,
                         entry.taskId,
-                        "",
+                        failure,
                     )
                 } catch (cancelled: CancellationException) {
                     throw cancelled

@@ -215,7 +215,9 @@ private fun TaskIndexRow.toRecord(payload: TaskRecordPayload): TaskRecord {
         status = if (!payload.outputsValid) TaskStatus.FAILED else TaskStatus.fromWire(status),
         stage = stage,
         progress = progress,
-        title = taskDisplayTitle(title, spec.description),
+        title = if (spec.bilibiliPage > 0) "P${spec.bilibiliPage} · " +
+            taskDisplayTitle(title, spec.description).substringAfter(" · P${spec.bilibiliPage} ")
+            else taskDisplayTitle(title, spec.description),
         platform = spec.platform,
         outputs = payload.outputs,
         error = if (!payload.outputsValid) error.ifBlank { "任务输出记录损坏" } else error,
@@ -228,6 +230,8 @@ private fun TaskIndexRow.toRecord(payload: TaskRecordPayload): TaskRecord {
         questionArchiveId = spec.questionArchiveId,
         questionChild = spec.questionChild,
         storageMode = spec.storageMode,
+        bilibiliPage = spec.bilibiliPage,
+        bilibiliTitle = spec.bilibiliTitle,
     )
 }
 
@@ -250,6 +254,8 @@ private data class TaskRecordSpec(
     val questionArchiveId: String = "",
     val questionChild: Boolean = false,
     val storageMode: StorageMode = StorageMode.LEGACY,
+    val bilibiliPage: Int = 0,
+    val bilibiliTitle: String = "",
 )
 
 private fun TaskSpec.toRecordSpec() = TaskRecordSpec(
@@ -265,6 +271,8 @@ private fun TaskSpec.toRecordSpec() = TaskRecordSpec(
     questionArchiveId = questionArchiveId,
     questionChild = questionChild,
     storageMode = storageMode,
+    bilibiliPage = result.bilibiliParts.firstOrNull { result.contentId.endsWith(":" + it.cid) }?.page ?: 0,
+    bilibiliTitle = result.bilibiliTitle.take(120),
 )
 
 private fun TaskPayloadRow.toRecordPayload(): TaskRecordPayload {
