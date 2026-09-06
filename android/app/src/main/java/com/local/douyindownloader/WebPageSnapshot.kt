@@ -44,6 +44,7 @@ internal object ZhihuWebSnapshotExtractor {
 
         snapshot.initialData.takeIf(String::isNotBlank)?.let { initialData ->
             val entityName = when (source.type) {
+                ZhihuContentType.QUESTION -> "questions"
                 ZhihuContentType.ARTICLE -> "articles"
                 ZhihuContentType.ANSWER -> "answers"
                 ZhihuContentType.PIN -> "pins"
@@ -51,6 +52,13 @@ internal object ZhihuWebSnapshotExtractor {
             }
             ZhihuPageStateExtractor.findEntityFromJson(initialData, entityName, source.contentId)?.let {
                 return it
+            }
+        }
+
+        if (source.type == ZhihuContentType.QUESTION && snapshot.title.isNotBlank()) {
+            return JSONObject().apply {
+                put("id", source.contentId)
+                put("title", snapshot.title.substringBefore(" - 知乎").trim())
             }
         }
 

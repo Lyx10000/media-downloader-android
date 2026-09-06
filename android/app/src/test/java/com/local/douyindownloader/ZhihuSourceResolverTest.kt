@@ -42,13 +42,18 @@ class ZhihuSourceResolverTest {
     }
 
     @Test
-    fun rejectsQuestionWithoutSpecificAnswer() {
-        try {
-            ZhihuSourceResolver.resolve("https://www.zhihu.com/question/26730775")
-            throw AssertionError("expected exception")
-        } catch (error: PlatformParseException) {
-            assertEquals("UNSUPPORTED_QUESTION", error.code)
-        }
+    fun resolvesQuestionWithoutSpecificAnswer() {
+        val source = ZhihuSourceResolver.resolve(
+            "https://www.zhihu.com/question/2078437532639949793?utm_psn=1",
+        )
+
+        assertEquals(ZhihuContentType.QUESTION, source.type)
+        assertEquals("2078437532639949793", source.questionId)
+        assertEquals("2078437532639949793", source.contentId)
+        assertEquals(
+            "https://www.zhihu.com/question/2078437532639949793",
+            source.canonicalUrl,
+        )
     }
 
     @Test

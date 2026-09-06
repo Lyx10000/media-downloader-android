@@ -174,4 +174,15 @@ class XiaohongshuMediaParserTest {
         )
         assertEquals("public-123", XiaohongshuMediaParser.profilePublicAccountId(profilePage))
     }
+
+    @Test
+    fun `reads note id from creator profile work url`() {
+        assertEquals(
+            "6a7592020000000021023f01",
+            XiaohongshuMediaParser.noteIdFromUrl(
+                "https://www.xiaohongshu.com/user/profile/user-1/6a7592020000000021023f01" +
+                    "?xsec_token=fresh&xsec_source=pc_user",
+            ),
+        )
+    }
 }

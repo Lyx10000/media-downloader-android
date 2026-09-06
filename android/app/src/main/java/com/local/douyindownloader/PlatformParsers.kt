@@ -54,7 +54,9 @@ internal class ZhihuPlatformParser @Inject constructor(
             ?.url
             ?: throw PlatformParseException("UNSUPPORTED_URL", "没有找到知乎链接")
         val source = ZhihuSourceResolver.resolve(sourceUrl)
-        if (source.type == ZhihuContentType.VIDEO) {
+        if (source.type == ZhihuContentType.QUESTION) {
+            ZhihuQuestionParser.normalizeQuestion(fetchQuestion(source, cookieHeader, pageSnapshot), source)
+        } else if (source.type == ZhihuContentType.VIDEO) {
             val payload = fetchStandaloneVideo(source, cookieHeader)
             hydrateSizes(
                 ZhihuMediaParser.normalizeStandaloneVideo(payload, source.contentId, source.canonicalUrl),
@@ -72,7 +74,11 @@ internal class ZhihuPlatformParser @Inject constructor(
             )
         }
     } catch (error: PlatformParseException) {
-        parseFailure(platform, error.code, error.message.orEmpty())
+        parseFailure(platform, error.code, error.message.orEmpty()).copy(
+            parserAttempts = error.statusCode.takeIf { it > 0 }?.let { status ->
+                listOf(ParserAttempt("request_failed", false, status, error.code))
+            }.orEmpty(),
+        )
     } catch (error: IOException) {
         parseFailure(platform, "NETWORK", "网络请求失败：${error.javaClass.simpleName}")
     } catch (error: Exception) {
@@ -100,6 +106,7 @@ internal class ZhihuPlatformParser @Inject constructor(
 
     private fun fetchDocument(source: ResolvedZhihuSource, cookieHeader: String): JSONObject {
         val (apiName, entityName) = when (source.type) {
+            ZhihuContentType.QUESTION -> error("问题使用独立解析路径")
             ZhihuContentType.ARTICLE -> "articles" to "articles"
             ZhihuContentType.ANSWER -> "answers" to "answers"
             ZhihuContentType.PIN -> "pins" to "pins"
@@ -115,11 +122,45 @@ internal class ZhihuPlatformParser @Inject constructor(
         if (pageResponse.statusCode !in 200..299) {
             throw statusError(pageResponse.statusCode)
         }
+        ZhihuPageStateExtractor.findEntity(pageResponse.body, entityName, source.contentId)
+            ?.let { return it }
         if (RESTRICTED.containsMatchIn(pageResponse.body)) {
             throw PlatformParseException("CONTENT_RESTRICTED", "当前知乎内容需要登录、付费或额外权限")
         }
-        return ZhihuPageStateExtractor.findEntity(pageResponse.body, entityName, source.contentId)
-            ?: throw PlatformParseException("DETAIL_EMPTY", "知乎页面中没有找到目标内容")
+        throw PlatformParseException("DETAIL_EMPTY", "知乎页面中没有找到目标内容")
+    }
+
+    private fun fetchQuestion(
+        source: ResolvedZhihuSource,
+        cookieHeader: String,
+        pageSnapshot: WebPageSnapshot?,
+    ): JSONObject {
+        pageSnapshot?.initialData?.takeIf(String::isNotBlank)?.let { initialData ->
+            ZhihuPageStateExtractor.findEntityFromJson(
+                initialData,
+                "questions",
+                source.contentId,
+            )?.let { return it }
+        }
+        val api = "https://www.zhihu.com/api/v4/questions/${source.contentId}" +
+            "?include=title,answer_count"
+        val response = request(api, source.canonicalUrl, cookieHeader)
+        if (response.statusCode in 200..299 && response.body.isNotBlank()) {
+            return JSONObject(response.body)
+        }
+        val pageResponse = request(
+            source.canonicalUrl,
+            SourcePlatform.ZHIHU.referer,
+            cookieHeader,
+            html = true,
+        )
+        if (pageResponse.statusCode !in 200..299) throw statusError(pageResponse.statusCode)
+        ZhihuPageStateExtractor.findEntity(
+            pageResponse.body,
+            "questions",
+            source.contentId,
+        )?.let { return it }
+        throw statusError(response.statusCode)
     }
 
     private fun fetchLensVideo(
@@ -158,9 +199,9 @@ internal class ZhihuPlatformParser @Inject constructor(
     )
 
     private fun statusError(status: Int): PlatformParseException = when (status) {
-        401, 403, 429 -> PlatformParseException("AUTH_OR_RISK", "知乎认证或风控拒绝了本次请求")
-        404, 410 -> PlatformParseException("CONTENT_UNAVAILABLE", "知乎内容不存在或已被删除")
-        else -> PlatformParseException("HTTP_ERROR", "知乎请求失败（HTTP $status）")
+        401, 403, 429 -> PlatformParseException("AUTH_OR_RISK", "知乎认证或风控拒绝了本次请求", status)
+        404, 410 -> PlatformParseException("CONTENT_UNAVAILABLE", "知乎内容不存在或已被删除", status)
+        else -> PlatformParseException("HTTP_ERROR", "知乎请求失败（HTTP $status）", status)
     }
 
     private fun hydrateSizes(result: ParseResult): ParseResult {
@@ -203,7 +244,10 @@ internal class ZhihuPlatformParser @Inject constructor(
         const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
-        private val RESTRICTED = Regex("登录后查看|盐选|付费|私密内容|无权查看|内容不可见")
+        private val RESTRICTED = Regex(
+            "登录后(?:查看|阅读全文)|仅限盐选会员|付费后(?:查看|阅读)|" +
+                "私密内容|无权查看|内容不可见|该内容暂不可查看",
+        )
     }
 }
 
@@ -485,75 +529,102 @@ internal class XiaohongshuPlatformParser @Inject constructor(
         shareText: String,
         cookieHeader: String,
         pageSnapshot: WebPageSnapshot?,
-    ): ParseResult = try {
-        val sourceUrl = XiaohongshuMediaParser.extractShareUrl(shareText)
-        var response: ParserHttpResponse? = null
-        var canonicalUrl = pageSnapshot?.finalUrl.orEmpty()
-        var state = pageSnapshot?.takeIf { snapshot ->
-            SourcePlatform.XIAOHONGSHU.matchesHost(
-                runCatching { java.net.URI(snapshot.finalUrl).host.orEmpty() }.getOrDefault(""),
-            )
-        }?.initialData?.let(XiaohongshuMediaParser::parseStatePayload)
-        if (state == null) {
-            response = requestPage(sourceUrl, cookieHeader)
-            canonicalUrl = response.finalUrl
-            XiaohongshuMediaParser.redirectTarget(canonicalUrl).takeIf(String::isNotBlank)?.let { target ->
-                response = requestPage(target, cookieHeader)
+    ): ParseResult {
+        var resolvedCanonicalUrl = ""
+        var resolvedNoteId = ""
+        return try {
+            val sourceUrl = XiaohongshuMediaParser.extractShareUrl(shareText)
+            var response: ParserHttpResponse? = null
+            var canonicalUrl = pageSnapshot?.finalUrl.orEmpty()
+            var state = pageSnapshot?.takeIf { snapshot ->
+                SourcePlatform.XIAOHONGSHU.matchesHost(
+                    runCatching { java.net.URI(snapshot.finalUrl).host.orEmpty() }.getOrDefault(""),
+                )
+            }?.initialData?.let(XiaohongshuMediaParser::parseStatePayload)
+            if (state == null) {
+                response = requestPage(sourceUrl, cookieHeader)
                 canonicalUrl = response.finalUrl
+                XiaohongshuMediaParser.redirectTarget(canonicalUrl).takeIf(String::isNotBlank)?.let { target ->
+                    response = requestPage(target, cookieHeader)
+                    canonicalUrl = response.finalUrl
+                }
             }
-        }
-        val noteId = XiaohongshuMediaParser.noteIdFromUrl(canonicalUrl)
-            .ifBlank { XiaohongshuMediaParser.noteIdFromUrl(sourceUrl) }
-        if (noteId.isBlank()) {
-            throw PlatformParseException(
-                "URL_RESOLVE_FAILED",
-                "短链接已打开，但没有识别到小红书笔记 ID，请重新复制最新分享链接",
-            )
-        }
-        val pageBody = response?.body.orEmpty()
-        val unavailable = UNAVAILABLE.find(pageBody)?.value
-        if (unavailable != null) {
-            throw PlatformParseException("CONTENT_UNAVAILABLE", "小红书笔记$unavailable")
-        }
-        if ("/login" in canonicalUrl || "登录后查看" in pageBody) {
-            throw PlatformParseException("LOGIN_REQUIRED", "请返回首页点击小红书登录状态")
-        }
-        state = state ?: XiaohongshuMediaParser.extractInitialState(pageBody)
-            ?: throw PlatformParseException("DETAIL_EMPTY", "页面没有返回小红书笔记状态")
-        val match = XiaohongshuMediaParser.findTargetNoteWithStrategy(state, noteId)
-            ?: throw PlatformParseException("DETAIL_EMPTY", "页面状态中没有匹配目标笔记")
-        val note = match.note
-        val normalized = XiaohongshuMediaParser.normalizeNote(note, noteId, canonicalUrl)
-        val enriched = if (normalized.authorAccountId.isNotBlank()) normalized else {
-            normalized.copy(
-                authorAccountId = fetchPublicAccountId(note, canonicalUrl, cookieHeader),
-            )
-        }
-        enriched.copy(
-            variants = MediaSizeHydrator.hydrate(
-                variants = enriched.variants,
-                probe = { urls -> probeVariantSize(urls) },
-            ),
-            parserAttempts = listOf(
-                ParserAttempt(
-                    strategy = if (pageSnapshot != null) "webview_snapshot/${match.strategy}" else match.strategy,
-                    selected = true,
-                    statusCode = response?.statusCode ?: 200,
+            resolvedCanonicalUrl = canonicalUrl
+            val noteId = XiaohongshuMediaParser.noteIdFromUrl(canonicalUrl)
+                .ifBlank { XiaohongshuMediaParser.noteIdFromUrl(sourceUrl) }
+            resolvedNoteId = noteId
+            if (noteId.isBlank()) {
+                val finalLocation = runCatching {
+                    java.net.URI(canonicalUrl).let { uri ->
+                        uri.host.orEmpty() + uri.path.orEmpty()
+                    }
+                }.getOrDefault("").ifBlank { "未知页面" }
+                throw PlatformParseException(
+                    "URL_RESOLVE_FAILED",
+                    "短链接已打开，但没有识别到小红书笔记 ID（最终落点：$finalLocation）",
+                )
+            }
+            val pageBody = response?.body.orEmpty()
+            val unavailable = UNAVAILABLE.find(pageBody)?.value
+            if (unavailable != null) {
+                throw PlatformParseException("CONTENT_UNAVAILABLE", "小红书笔记$unavailable")
+            }
+            if ("/login" in canonicalUrl || "登录后查看" in pageBody) {
+                throw PlatformParseException("LOGIN_REQUIRED", "请返回首页点击小红书登录状态")
+            }
+            state = state ?: XiaohongshuMediaParser.extractInitialState(pageBody)
+                ?: throw PlatformParseException("DETAIL_EMPTY", "页面没有返回小红书笔记状态")
+            val match = XiaohongshuMediaParser.findTargetNoteWithStrategy(state, noteId)
+                ?: throw PlatformParseException("DETAIL_EMPTY", "页面状态中没有匹配目标笔记")
+            val note = match.note
+            val normalized = XiaohongshuMediaParser.normalizeNote(note, noteId, canonicalUrl)
+            val enriched = if (normalized.authorAccountId.isNotBlank()) normalized else {
+                normalized.copy(
+                    authorAccountId = fetchPublicAccountId(note, canonicalUrl, cookieHeader),
+                )
+            }
+            enriched.copy(
+                variants = MediaSizeHydrator.hydrate(
+                    variants = enriched.variants,
+                    probe = { urls -> probeVariantSize(urls) },
                 ),
-            ),
-        )
-    } catch (error: PlatformParseException) {
-        parseFailure(platform, error.code, error.message.orEmpty())
-    } catch (error: ParserHttpStatusException) {
-        parseFailure(
-            platform,
-            if (error.statusCode in listOf(401, 403, 429)) "AUTH_OR_RISK" else "HTTP_ERROR",
-            "小红书详情请求失败（HTTP ${error.statusCode}）",
-        )
-    } catch (error: IOException) {
-        parseFailure(platform, "NETWORK", "网络请求失败：${error.javaClass.simpleName}")
-    } catch (error: Exception) {
-        parseFailure(platform, "PARSE_FAILED", error.message ?: error.javaClass.simpleName)
+                parserAttempts = listOf(
+                    ParserAttempt(
+                        strategy = if (pageSnapshot != null) "webview_snapshot/${match.strategy}" else match.strategy,
+                        selected = true,
+                        statusCode = response?.statusCode ?: 200,
+                    ),
+                ),
+            )
+        } catch (error: PlatformParseException) {
+            parseFailure(platform, error.code, error.message.orEmpty()).copy(
+                canonicalUrl = resolvedCanonicalUrl,
+                contentId = resolvedNoteId,
+            )
+        } catch (error: ParserHttpStatusException) {
+            parseFailure(
+                platform,
+                if (error.statusCode in listOf(401, 403, 429)) "AUTH_OR_RISK" else "HTTP_ERROR",
+                "小红书详情请求失败（HTTP ${error.statusCode}）",
+            ).copy(
+                canonicalUrl = resolvedCanonicalUrl,
+                contentId = resolvedNoteId,
+                parserAttempts = listOf(
+                    ParserAttempt(
+                        strategy = "page_request",
+                        selected = false,
+                        statusCode = error.statusCode,
+                        errorCode = if (error.statusCode in listOf(401, 403, 429)) {
+                            "AUTH_OR_RISK"
+                        } else "HTTP_ERROR",
+                    ),
+                ),
+            )
+        } catch (error: IOException) {
+            parseFailure(platform, "NETWORK", "网络请求失败：${error.javaClass.simpleName}")
+        } catch (error: Exception) {
+            parseFailure(platform, "PARSE_FAILED", error.message ?: error.javaClass.simpleName)
+        }
     }
 
     private fun requestPage(url: String, cookieHeader: String): ParserHttpResponse {

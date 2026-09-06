@@ -38,6 +38,8 @@ class TaskDatabaseMigrationTest {
 
         assertNotNull(entity)
         assertEquals("UNKNOWN", entity?.fileStatus)
+        assertEquals("", entity?.authorKey)
+        assertEquals(false, entity?.creatorChild)
         assertEquals("[\"content://media/legacy.mp4\"]", entity?.outputs)
     }
 
@@ -50,6 +52,37 @@ class TaskDatabaseMigrationTest {
         assertEquals("AVAILABLE", entity?.fileStatus)
         assertEquals("COMPLETE", entity?.status)
         assertEquals(100, entity?.progress)
+        assertEquals("", entity?.batchId)
+    }
+
+    @Test
+    fun migratesVersionThreeAndCreatesCreatorTables() = runBlocking {
+        createLegacyDatabase(version = 3)
+        val room = openRoom()
+        val entity = room.taskDao().get(TASK_ID)
+        room.creatorDao().upsert(
+            CreatorProfile(
+                key = "douyin:stable",
+                platform = SourcePlatform.DOUYIN,
+                stableId = "stable",
+                accountId = "account",
+                profileUrl = "https://www.douyin.com/user/stable",
+                directoryName = "author_account_stable",
+                nickname = "author",
+            ).toEntity(),
+        )
+        room.downloadBatchDao().upsertBatch(
+            DownloadBatchEntity("batch", "douyin:stable", 1L, "QUEUED", "{}", 1),
+        )
+        room.downloadBatchDao().upsertWorks(
+            listOf(BatchWorkEntity("batch", "douyin:work", "QUEUED", "", "")),
+        )
+
+        assertNotNull(entity)
+        assertEquals("", entity?.authorKey)
+        assertEquals("author_account_stable", room.creatorDao().get("douyin:stable")?.directoryName)
+        assertEquals("", room.downloadBatchDao().getWork("batch", "douyin:work")?.sourceUrl)
+        assertEquals(0, room.downloadBatchDao().getWork("batch", "douyin:work")?.attemptCount)
     }
 
     private fun createLegacyDatabase(version: Int) {
@@ -102,7 +135,12 @@ class TaskDatabaseMigrationTest {
         context,
         TaskDatabase::class.java,
         TEST_DATABASE,
-    ).addMigrations(TaskDatabase.MIGRATION_1_2, TaskDatabase.MIGRATION_2_3)
+    ).addMigrations(
+        TaskDatabase.MIGRATION_1_2,
+        TaskDatabase.MIGRATION_2_3,
+        TaskDatabase.MIGRATION_3_4,
+        TaskDatabase.MIGRATION_4_5,
+    )
         .build()
         .also { database = it }
 

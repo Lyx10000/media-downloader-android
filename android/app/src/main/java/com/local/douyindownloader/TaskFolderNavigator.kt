@@ -70,7 +70,7 @@ class TaskFolderNavigator @Inject constructor(
             val exact = root?.let { tree ->
                 runCatching {
                     DocumentFile.fromTreeUri(appContext, tree)
-                        ?.findFile(spec.taskFolder)
+                        ?.findRelativeDirectory(spec.taskFolder, create = false)
                         ?.takeIf(DocumentFile::exists)
                         ?.uri
                 }.getOrNull()

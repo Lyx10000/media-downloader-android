@@ -71,12 +71,14 @@ private sealed interface DocumentReaderState {
     data object Loading : DocumentReaderState
     data object Unavailable : DocumentReaderState
     data class Ready(val data: DocumentReaderData) : DocumentReaderState
+    data class MarkdownReady(val title: String, val text: String) : DocumentReaderState
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun DocumentReaderScreen(
     task: TaskRecord,
+    selectedOutput: TaskOutput?,
     viewModel: MainViewModel,
     onBack: () -> Unit,
 ) {
@@ -84,14 +86,20 @@ internal fun DocumentReaderScreen(
     val imageLoader = remember(context.applicationContext) {
         ImageLoader.Builder(context.applicationContext).crossfade(true).build()
     }
-    var state by remember(task.id, task.outputs) {
+    var state by remember(task.id, task.outputs, selectedOutput?.uri) {
         mutableStateOf<DocumentReaderState>(DocumentReaderState.Loading)
     }
     var openedImageId by remember(task.id) { mutableStateOf<String?>(null) }
-    LaunchedEffect(task.id, task.outputs) {
-        state = viewModel.loadDocumentReader(task)
-            ?.let(DocumentReaderState::Ready)
-            ?: DocumentReaderState.Unavailable
+    LaunchedEffect(task.id, task.outputs, selectedOutput?.uri) {
+        state = if (selectedOutput?.displayName.equals("comments.md", ignoreCase = true)) {
+            viewModel.loadMarkdownOutput(task.id, selectedOutput!!)
+                ?.let { DocumentReaderState.MarkdownReady("评论", it) }
+                ?: DocumentReaderState.Unavailable
+        } else {
+            viewModel.loadDocumentReader(task)
+                ?.let(DocumentReaderState::Ready)
+                ?: DocumentReaderState.Unavailable
+        }
     }
     DisposableEffect(imageLoader) { onDispose(imageLoader::shutdown) }
     BackHandler {
@@ -101,7 +109,10 @@ internal fun DocumentReaderScreen(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             TopAppBar(
-                title = {},
+                title = {
+                    val title = (state as? DocumentReaderState.MarkdownReady)?.title.orEmpty()
+                    if (title.isNotBlank()) Text(title)
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回文件管理")
@@ -126,6 +137,7 @@ internal fun DocumentReaderScreen(
                     viewModel = viewModel,
                     onOpenImage = { openedImageId = it },
                 )
+                is DocumentReaderState.MarkdownReady -> MarkdownCommentContent(current.text)
             }
         }
     }
@@ -144,6 +156,71 @@ internal fun DocumentReaderScreen(
         }
     }
 }
+
+internal enum class MarkdownLineType { HEADING, QUOTE, TEXT }
+
+internal data class MarkdownDisplayLine(
+    val type: MarkdownLineType,
+    val text: String,
+)
+
+@Composable
+private fun MarkdownCommentContent(markdown: String) {
+    val lines = remember(markdown) { parseMarkdownDisplayLines(markdown) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 64.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(lines) { line ->
+            when (line.type) {
+                MarkdownLineType.HEADING -> Text(
+                    line.text,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+                MarkdownLineType.QUOTE -> Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        line.text,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                MarkdownLineType.TEXT -> Text(
+                    line.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * 1.25f,
+                )
+            }
+        }
+    }
+}
+
+internal fun parseMarkdownDisplayLines(markdown: String): List<MarkdownDisplayLine> = markdown
+    .lineSequence()
+    .map(String::trimEnd)
+    .filter(String::isNotBlank)
+    .map { raw ->
+        when {
+            raw.startsWith("#") -> MarkdownDisplayLine(
+                MarkdownLineType.HEADING,
+                documentDisplayText(raw.trimStart('#').trim()),
+            )
+            raw.startsWith(">") -> MarkdownDisplayLine(
+                MarkdownLineType.QUOTE,
+                documentDisplayText(raw.removePrefix(">").trim()),
+            )
+            else -> MarkdownDisplayLine(MarkdownLineType.TEXT, documentDisplayText(raw))
+        }
+    }
+    .filter { it.text.isNotBlank() }
+    .toList()
 
 @Composable
 private fun NativeDocumentContent(
@@ -495,6 +572,10 @@ private fun documentDisplayText(value: String): String = value
     .replace(Regex("(?<!\\*)\\*([^*]+?)\\*"), "$1")
     .replace(Regex("`([^`]+)`"), "$1")
     .replace(Regex("\\[([^]]+)]\\((https?://[^)]+)\\)"), "$1 ($2)")
+    .replace("\\*", "*")
+    .replace("\\_", "_")
+    .replace("\\[", "[")
+    .replace("\\]", "]")
 
 private fun openExternalUrl(context: Context, value: String, viewModel: MainViewModel) {
     val uri = runCatching { Uri.parse(value) }.getOrNull()

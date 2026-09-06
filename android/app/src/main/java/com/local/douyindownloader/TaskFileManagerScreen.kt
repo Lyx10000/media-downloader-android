@@ -87,7 +87,7 @@ internal fun TaskFileManagerScreen(
     task: TaskRecord,
     viewModel: MainViewModel,
     snackbarHostState: SnackbarHostState,
-    onOpenDocument: () -> Unit,
+    onOpenDocument: (TaskOutput) -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -276,7 +276,7 @@ internal fun TaskFileManagerScreen(
                                 when {
                                     !item.available -> viewModel.showMessage("文件已被删除")
                                     selectionMode -> selectedUris = selectedUris.toggle(item.output.uri)
-                                    item.output.isMarkdownDocument() -> onOpenDocument()
+                                    item.output.isMarkdownDocument() -> onOpenDocument(item.output)
                                     else -> viewModel.openManagedFile(context, task.id, item)
                                 }
                             },

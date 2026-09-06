@@ -182,7 +182,8 @@ class TaskDeletionCoordinator @Inject constructor(
         return runCatching {
             val root = DocumentFile.fromTreeUri(context, Uri.parse(spec.storageRoot))
                 ?: return FolderDeleteResult(false, message = "保存目录已失效")
-            val folder = root.findFile(spec.taskFolder) ?: return FolderDeleteResult(true)
+            val folder = root.findRelativeDirectory(spec.taskFolder, create = false)
+                ?: return FolderDeleteResult(true)
             pruneEmptySafDirectories(folder)
             if (folder.listFiles().isNotEmpty()) FolderDeleteResult(true, retained = true)
             else if (!folder.exists() || folder.delete()) FolderDeleteResult(true)

@@ -19,6 +19,7 @@ data class AppSettings(
     val preferH264: Boolean = false,
     val customTreeUri: String? = null,
     val lastUpdateCheckEpochDay: Long = Long.MIN_VALUE,
+    val batchDownloadSettings: BatchDownloadSettings = BatchDownloadSettings(),
 )
 
 @Singleton
@@ -38,6 +39,9 @@ class SettingsRepository @Inject constructor(
                 preferH264 = preferences[PREFER_H264] ?: false,
                 customTreeUri = preferences[CUSTOM_TREE_URI]?.takeIf(String::isNotBlank),
                 lastUpdateCheckEpochDay = preferences[LAST_UPDATE_CHECK_EPOCH_DAY] ?: Long.MIN_VALUE,
+                batchDownloadSettings = BatchDownloadSettings.fromJson(
+                    preferences[BATCH_DOWNLOAD_SETTINGS] ?: "{}",
+                ),
             )
         }
 
@@ -62,10 +66,15 @@ class SettingsRepository @Inject constructor(
         dataStore.edit { it[LAST_UPDATE_CHECK_EPOCH_DAY] = value }
     }
 
+    suspend fun setBatchDownloadSettings(value: BatchDownloadSettings) {
+        dataStore.edit { it[BATCH_DOWNLOAD_SETTINGS] = value.toJson() }
+    }
+
     companion object {
         val DEFAULT_MODE = stringPreferencesKey("default_mode")
         val PREFER_H264 = booleanPreferencesKey("prefer_h264")
         val CUSTOM_TREE_URI = stringPreferencesKey("custom_tree_uri")
         val LAST_UPDATE_CHECK_EPOCH_DAY = longPreferencesKey("last_update_check_epoch_day")
+        val BATCH_DOWNLOAD_SETTINGS = stringPreferencesKey("batch_download_settings")
     }
 }

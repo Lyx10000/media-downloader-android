@@ -4,6 +4,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 
 interface DownloadTaskRepository {
@@ -17,6 +19,7 @@ interface DownloadTaskRepository {
         error: String = "",
     )
     suspend fun replaceSpec(taskId: String, spec: TaskSpec)
+    suspend fun updateAuthorKey(taskId: String, authorKey: String)
     suspend fun updateFileState(taskId: String, fileState: FileState)
     suspend fun clearOutputs(taskId: String, fileState: FileState = FileState.UNKNOWN)
     suspend fun replaceOutputs(taskId: String, outputs: List<TaskOutput>)
@@ -24,7 +27,10 @@ interface DownloadTaskRepository {
     suspend fun delete(taskId: String)
     suspend fun complete(taskId: String, outputs: List<TaskOutput>, stage: String = "已完成")
     suspend fun list(): List<TaskRecord>
+    suspend fun listAll(): List<TaskRecord>
     fun observe(): Flow<List<TaskRecord>>
+    fun observeAll(): Flow<List<TaskRecord>>
+    suspend fun listForAuthor(authorKey: String): List<TaskRecord>
     suspend fun get(taskId: String): TaskRecord?
 }
 
@@ -32,7 +38,11 @@ interface DownloadTaskRepository {
 class RoomDownloadTaskRepository @Inject constructor(
     private val dao: TaskDao,
 ) : DownloadTaskRepository {
+    private val payloadMutex = Mutex()
+    private val payloadCache = mutableMapOf<String, TaskRecordPayload>()
+
     override suspend fun insert(spec: TaskSpec) {
+        val specJson = spec.toJson()
         val storedTitle = spec.result.document?.title?.take(40).orEmpty().ifBlank {
             spec.result.author.ifBlank {
                 spec.result.description.take(30).ifBlank { spec.result.contentId }
@@ -47,11 +57,18 @@ class RoomDownloadTaskRepository @Inject constructor(
                 stage = "等待下载",
                 progress = 0,
                 title = title,
-                spec = spec.toJson(),
+                spec = specJson,
                 outputs = "[]",
                 error = "",
                 fileStatus = FileState.UNKNOWN.wireValue,
+                authorKey = spec.authorKey,
+                batchId = spec.batchId,
+                creatorChild = spec.creatorChild,
             ),
+        )
+        cachePayload(
+            spec.taskId,
+            TaskRecordPayload(spec.toRecordSpec(), emptyList(), outputsValid = true),
         )
     }
 
@@ -76,7 +93,15 @@ class RoomDownloadTaskRepository @Inject constructor(
     }
 
     override suspend fun replaceSpec(taskId: String, spec: TaskSpec) {
-        dao.replaceSpec(taskId, spec.toJson())
+        val json = spec.toJson()
+        payloadMutex.withLock {
+            dao.replaceSpec(taskId, json)
+            payloadCache[taskId]?.let { payloadCache[taskId] = it.copy(spec = spec.toRecordSpec()) }
+        }
+    }
+
+    override suspend fun updateAuthorKey(taskId: String, authorKey: String) {
+        dao.updateAuthorKey(taskId, authorKey)
     }
 
     override suspend fun updateFileState(taskId: String, fileState: FileState) {
@@ -84,68 +109,198 @@ class RoomDownloadTaskRepository @Inject constructor(
     }
 
     override suspend fun clearOutputs(taskId: String, fileState: FileState) {
-        dao.clearOutputs(taskId, fileState.wireValue)
+        payloadMutex.withLock {
+            dao.clearOutputs(taskId, fileState.wireValue)
+            payloadCache[taskId]?.let {
+                payloadCache[taskId] = it.copy(outputs = emptyList(), outputsValid = true)
+            }
+        }
     }
 
     override suspend fun replaceOutputs(taskId: String, outputs: List<TaskOutput>) {
-        dao.replaceOutputs(
-            taskId,
-            outputs.toJson(),
-            if (outputs.isEmpty()) FileState.UNKNOWN.wireValue else FileState.AVAILABLE.wireValue,
-        )
+        val json = outputs.toJson()
+        payloadMutex.withLock {
+            dao.replaceOutputs(
+                taskId,
+                json,
+                if (outputs.isEmpty()) FileState.UNKNOWN.wireValue else FileState.AVAILABLE.wireValue,
+            )
+            payloadCache[taskId]?.let {
+                payloadCache[taskId] = it.copy(outputs = outputs, outputsValid = true)
+            }
+        }
     }
 
     override suspend fun setDeleteFailed(taskId: String, progress: Int, error: String) {
         dao.setDeleteFailed(taskId, progress.coerceIn(0, 100), Redactor.sanitize(error))
     }
 
-    override suspend fun delete(taskId: String) = dao.delete(taskId)
+    override suspend fun delete(taskId: String) {
+        payloadMutex.withLock {
+            dao.delete(taskId)
+            payloadCache.remove(taskId)
+        }
+    }
 
     override suspend fun complete(taskId: String, outputs: List<TaskOutput>, stage: String) {
-        dao.complete(taskId, outputs.toJson(), stage)
+        val json = outputs.toJson()
+        payloadMutex.withLock {
+            dao.complete(taskId, json, stage)
+            payloadCache[taskId]?.let {
+                payloadCache[taskId] = it.copy(outputs = outputs, outputsValid = true)
+            }
+        }
     }
 
-    override suspend fun list(): List<TaskRecord> = dao.list().map(TaskEntity::toRecord)
+    override suspend fun list(): List<TaskRecord> = hydrate(dao.listIndex())
 
-    override fun observe(): Flow<List<TaskRecord>> = dao.observe().map { entities ->
-        entities.map(TaskEntity::toRecord)
+    override suspend fun listAll(): List<TaskRecord> = hydrate(dao.listAllIndex())
+
+    override fun observe(): Flow<List<TaskRecord>> = dao.observeIndex().map { rows ->
+        hydrate(rows)
     }
 
-    override suspend fun get(taskId: String): TaskRecord? = dao.get(taskId)?.toRecord()
+    override fun observeAll(): Flow<List<TaskRecord>> = dao.observeAllIndex().map { rows ->
+        hydrate(rows)
+    }
+
+    override suspend fun listForAuthor(authorKey: String): List<TaskRecord> =
+        hydrate(dao.listForAuthorIndex(authorKey))
+
+    override suspend fun get(taskId: String): TaskRecord? = payloadMutex.withLock {
+        dao.get(taskId)?.let { entity ->
+            val payload = TaskPayloadRow(entity.spec, entity.outputs).toRecordPayload()
+            payloadCache[entity.id] = payload
+            entity.toIndexRow().toRecord(payload)
+        }
+    }
+
+    private suspend fun hydrate(rows: List<TaskIndexRow>): List<TaskRecord> = buildList(rows.size) {
+        rows.forEach { row ->
+            payloadFor(row.id)?.let { add(row.toRecord(it)) }
+        }
+    }
+
+    private suspend fun payloadFor(taskId: String): TaskRecordPayload? = payloadMutex.withLock {
+        payloadCache[taskId] ?: dao.getPayload(taskId)?.toRecordPayload()?.also {
+            payloadCache[taskId] = it
+        }
+    }
+
+    private suspend fun cachePayload(taskId: String, payload: TaskRecordPayload) {
+        payloadMutex.withLock { payloadCache[taskId] = payload }
+    }
+
 }
 
 internal fun TaskEntity.toRecord(): TaskRecord {
-    val storedSpec = runCatching { TaskSpec.fromJson(spec) }.getOrNull()
-    val parsedResult = storedSpec?.result
-    val sourcePlatform = parsedResult?.platform ?: SourcePlatform.DOUYIN
+    return toIndexRow().toRecord(TaskPayloadRow(spec, outputs).toRecordPayload())
+}
+
+private fun TaskEntity.toIndexRow() = TaskIndexRow(
+    id = id,
+    createdAt = createdAt,
+    status = status,
+    stage = stage,
+    progress = progress,
+    title = title,
+    error = error,
+    fileStatus = fileStatus,
+    authorKey = authorKey,
+    batchId = batchId,
+    creatorChild = creatorChild,
+)
+
+private fun TaskIndexRow.toRecord(payload: TaskRecordPayload): TaskRecord {
+    val spec = payload.spec
+    return TaskRecord(
+        id = id,
+        contentId = spec.contentId,
+        createdAt = createdAt,
+        status = if (!payload.outputsValid) TaskStatus.FAILED else TaskStatus.fromWire(status),
+        stage = stage,
+        progress = progress,
+        title = taskDisplayTitle(title, spec.platform, spec.kind, spec.description),
+        platform = spec.platform,
+        outputs = payload.outputs,
+        error = if (!payload.outputsValid) error.ifBlank { "任务输出记录损坏" } else error,
+        fileState = if (!payload.outputsValid) FileState.UNKNOWN else FileState.fromWire(fileStatus),
+        author = spec.author,
+        authorAccountId = spec.authorAccountId,
+        authorKey = authorKey.ifBlank { spec.authorKey },
+        batchId = batchId.ifBlank { spec.batchId },
+        creatorChild = creatorChild || spec.creatorChild,
+        questionArchiveId = spec.questionArchiveId,
+        questionChild = spec.questionChild,
+        storageMode = spec.storageMode,
+    )
+}
+
+private data class TaskRecordPayload(
+    val spec: TaskRecordSpec,
+    val outputs: List<TaskOutput>,
+    val outputsValid: Boolean,
+)
+
+private data class TaskRecordSpec(
+    val contentId: String = "",
+    val platform: SourcePlatform = SourcePlatform.DOUYIN,
+    val kind: MediaKind? = null,
+    val description: String = "",
+    val author: String = "",
+    val authorAccountId: String = "",
+    val authorKey: String = "",
+    val batchId: String = "",
+    val creatorChild: Boolean = false,
+    val questionArchiveId: String = "",
+    val questionChild: Boolean = false,
+    val storageMode: StorageMode = StorageMode.LEGACY,
+)
+
+private fun TaskSpec.toRecordSpec() = TaskRecordSpec(
+    contentId = result.contentId,
+    platform = result.platform,
+    kind = result.kind,
+    description = result.description.take(60),
+    author = result.author,
+    authorAccountId = result.authorAccountId,
+    authorKey = authorKey,
+    batchId = batchId,
+    creatorChild = creatorChild,
+    questionArchiveId = questionArchiveId,
+    questionChild = questionChild,
+    storageMode = storageMode,
+)
+
+private fun TaskPayloadRow.toRecordPayload(): TaskRecordPayload {
+    val storedSpec = runCatching { TaskSpec.fromJson(this.spec) }.getOrNull()
+        ?.toRecordSpec()
+        ?: TaskRecordSpec()
     val outputJson = runCatching { JSONArray(outputs) }.getOrNull()
-    val outputRecords = if (outputJson == null) {
+    val parsedOutputs = if (outputJson == null) {
         emptyList()
     } else {
         (0 until outputJson.length()).mapNotNull { index ->
             TaskOutput.fromJson(outputJson.opt(index))
         }
     }
-    return TaskRecord(
-        id = id,
-        createdAt = createdAt,
-        status = if (outputJson == null) TaskStatus.FAILED else TaskStatus.fromWire(status),
-        stage = stage,
-        progress = progress,
-        title = taskDisplayTitle(title, parsedResult),
-        platform = sourcePlatform,
-        outputs = outputRecords,
-        error = if (outputJson == null) error.ifBlank { "任务输出记录损坏" } else error,
-        fileState = if (outputJson == null) FileState.UNKNOWN else FileState.fromWire(fileStatus),
-        author = parsedResult?.author.orEmpty(),
-        authorAccountId = parsedResult?.authorAccountId.orEmpty(),
-    )
+    return TaskRecordPayload(storedSpec, parsedOutputs, outputsValid = outputJson != null)
 }
 
 internal fun taskDisplayTitle(storedTitle: String, result: ParseResult?): String = when {
-    result?.platform == SourcePlatform.ZHIHU && result.kind == MediaKind.VIDEO ->
-        result.description.take(60).ifBlank { storedTitle }
-    else -> storedTitle
+    result == null -> storedTitle
+    else -> taskDisplayTitle(storedTitle, result.platform, result.kind, result.description)
+}
+
+private fun taskDisplayTitle(
+    storedTitle: String,
+    platform: SourcePlatform,
+    kind: MediaKind?,
+    description: String,
+): String = if (platform == SourcePlatform.ZHIHU && kind == MediaKind.VIDEO) {
+    description.take(60).ifBlank { storedTitle }
+} else {
+    storedTitle
 }
 
 private fun List<TaskOutput>.toJson(): String = JSONArray().apply {

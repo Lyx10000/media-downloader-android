@@ -22,7 +22,7 @@ enum class SourcePlatform(
         wireValue = "xiaohongshu",
         displayName = "小红书",
         homeUrl = "https://www.xiaohongshu.com/",
-        loginUrl = "https://www.xiaohongshu.com/",
+        loginUrl = "https://www.xiaohongshu.com/login",
         referer = "https://www.xiaohongshu.com/",
         anonymousFirst = true,
     ),
@@ -82,6 +82,17 @@ internal fun classifyWebNavigation(url: String): WebNavigationTarget {
         "", "javascript", "file", "content" -> WebNavigationTarget.BLOCKED
         else -> WebNavigationTarget.EXTERNAL_APP
     }
+}
+
+internal fun upgradePlatformCleartextUrl(url: String, platform: SourcePlatform): String? {
+    val uri = runCatching { URI(url) }.getOrNull() ?: return null
+    if (!uri.scheme.equals("http", ignoreCase = true) || !platform.matchesHost(uri.host.orEmpty())) {
+        return null
+    }
+    return runCatching {
+        val securePort = if (uri.port == 80) -1 else uri.port
+        URI("https", uri.userInfo, uri.host, securePort, uri.path, uri.query, uri.fragment).toString()
+    }.getOrNull()
 }
 
 private val WEB_URL = Regex(

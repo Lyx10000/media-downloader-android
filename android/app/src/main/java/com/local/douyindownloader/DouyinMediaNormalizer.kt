@@ -49,6 +49,15 @@ internal object DouyinMediaNormalizer {
                 .ifBlank { author.firstString("short_id", "shortId") }
                 .takeUnless { it == "0" }
                 .orEmpty(),
+            authorStableId = author.firstString("sec_uid", "secUid")
+                .ifBlank { author.firstString("uid", "user_id", "userId") },
+            authorProfileUrl = author.firstString("sec_uid", "secUid")
+                .takeIf(String::isNotBlank)
+                ?.let { "https://www.douyin.com/user/$it" }
+                .orEmpty(),
+            authorAvatarUrl = addressUrls(
+                author.firstValue("avatar_larger", "avatarLarger", "avatar_medium", "avatarMedium"),
+            ).firstOrNull().orEmpty(),
             description = detail.firstString("desc", "description"),
             coverUrl = coverUrl,
             variants = variants,

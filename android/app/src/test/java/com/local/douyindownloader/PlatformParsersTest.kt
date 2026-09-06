@@ -103,6 +103,29 @@ class PlatformParsersTest {
     }
 
     @Test
+    fun `xiaohongshu parser retains resolved target when page state is incomplete`() {
+        val noteId = "6a29473c0000000022021134"
+        val targetUrl = "https://www.xiaohongshu.com/explore/$noteId?xsec_token=token"
+        val http = FakeParserHttpClient(
+            responses = ArrayDeque(
+                listOf(
+                    response(
+                        finalUrl = targetUrl,
+                        body = "<script>window.__INITIAL_STATE__={\"note\":{\"noteDetailMap\":{}}};</script>",
+                    ),
+                ),
+            ),
+        )
+
+        val result = XiaohongshuPlatformParser(http).parse("复制 https://xhslink.cn/example", "")
+
+        assertFalse(result.ok)
+        assertEquals("DETAIL_EMPTY", result.errorCode)
+        assertEquals(noteId, result.contentId)
+        assertEquals(targetUrl, result.canonicalUrl)
+    }
+
+    @Test
     fun `platform errors retain stable codes`() {
         val http = FakeParserHttpClient(
             responses = ArrayDeque(
@@ -178,6 +201,56 @@ class PlatformParsersTest {
         assertEquals(MediaKind.DOCUMENT, result.kind)
         assertEquals(1, result.document?.assets?.size)
         assertEquals(listOf("d_c0=cookie", "d_c0=cookie"), http.requests.map { it.cookie })
+    }
+
+    @Test
+    fun `zhihu valid page state wins over unrelated restricted marketing text`() {
+        val answerId = "2079127079271011205"
+        val page = """
+            <div>盐选会员 · 付费内容推荐</div>
+            <script id="js-initialData" type="application/json">
+            {"initialState":{"entities":{"answers":{"$answerId":{
+              "id":"$answerId","question":{"title":"问题"},"author":{"name":"作者"},
+              "content":"<p>公开正文</p>"
+            }}}}}
+            </script>
+        """.trimIndent()
+        val http = FakeParserHttpClient(
+            responses = ArrayDeque(
+                listOf(
+                    response(statusCode = 403),
+                    response(body = page),
+                ),
+            ),
+        )
+
+        val result = ZhihuPlatformParser(http).parse(
+            "https://www.zhihu.com/question/26730775/answer/$answerId",
+            "d_c0=cookie",
+        )
+
+        assertTrue(result.ok)
+        assertEquals("公开正文", result.document?.blocks?.single()?.text)
+    }
+
+    @Test
+    fun `zhihu explicit restricted page is reported only after entity extraction fails`() {
+        val http = FakeParserHttpClient(
+            responses = ArrayDeque(
+                listOf(
+                    response(statusCode = 403),
+                    response(body = "<html><body>登录后阅读全文</body></html>"),
+                ),
+            ),
+        )
+
+        val result = ZhihuPlatformParser(http).parse(
+            "https://www.zhihu.com/question/1/answer/2079127079271011205",
+            "",
+        )
+
+        assertFalse(result.ok)
+        assertEquals("CONTENT_RESTRICTED", result.errorCode)
     }
 
     @Test

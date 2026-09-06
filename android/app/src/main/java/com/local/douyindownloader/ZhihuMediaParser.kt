@@ -221,6 +221,10 @@ internal object ZhihuMediaParser {
             referer = canonicalUrl,
             kind = MediaKind.VIDEO,
             author = authorName,
+            authorStableId = author.firstString("url_token", "urlToken", "id"),
+            authorProfileUrl = author.firstString("url_token", "urlToken")
+                .takeIf(String::isNotBlank)?.let { "https://www.zhihu.com/people/$it" }.orEmpty(),
+            authorAvatarUrl = author.firstString("avatar_url", "avatarUrl"),
             description = payload.firstString("title", "description", "excerpt"),
             coverUrl = payload.firstString("image_url", "image_cover").ifBlank {
                 video.firstString("thumbnail", "image_url")
@@ -236,6 +240,7 @@ internal object ZhihuMediaParser {
         videoResolver: (String) -> JSONObject? = { null },
     ): ParseResult {
         val type = when (source.type) {
+            ZhihuContentType.QUESTION -> error("问题不能归一化为单篇文档")
             ZhihuContentType.ARTICLE -> DocumentType.ARTICLE
             ZhihuContentType.ANSWER -> DocumentType.ANSWER
             ZhihuContentType.PIN -> DocumentType.PIN
@@ -285,6 +290,10 @@ internal object ZhihuMediaParser {
             referer = source.canonicalUrl,
             kind = MediaKind.DOCUMENT,
             author = author,
+            authorStableId = authorObject.firstString("url_token", "urlToken", "id"),
+            authorProfileUrl = authorObject.firstString("url_token", "urlToken")
+                .takeIf(String::isNotBlank)?.let { "https://www.zhihu.com/people/$it" }.orEmpty(),
+            authorAvatarUrl = authorObject.firstString("avatar_url", "avatarUrl"),
             description = title,
             coverUrl = cover,
             document = document,

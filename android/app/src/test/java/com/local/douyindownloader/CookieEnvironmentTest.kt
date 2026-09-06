@@ -12,6 +12,14 @@ class CookieEnvironmentTest {
         assertTrue(shouldRefreshCookieEnvironment("AUTH_OR_RISK", refreshAttempted = false))
         assertTrue(shouldRefreshCookieEnvironment("DETAIL_EMPTY", refreshAttempted = false))
         assertTrue(shouldRefreshCookieEnvironment("LOGIN_REQUIRED", refreshAttempted = false))
+        assertTrue(
+            shouldRefreshCookieEnvironment(
+                "URL_RESOLVE_FAILED",
+                refreshAttempted = false,
+                platform = SourcePlatform.XIAOHONGSHU,
+                supportsTargetPageSnapshot = true,
+            ),
+        )
         assertFalse(shouldRefreshCookieEnvironment("AUTH_OR_RISK", refreshAttempted = true))
     }
 
@@ -19,6 +27,13 @@ class CookieEnvironmentTest {
     fun doesNotRefreshEnvironmentForOrdinaryNetworkErrors() {
         assertFalse(shouldRefreshCookieEnvironment("NETWORK", refreshAttempted = false))
         assertFalse(shouldRefreshCookieEnvironment("HTTP_ERROR", refreshAttempted = false))
+        assertFalse(
+            shouldRefreshCookieEnvironment(
+                "URL_RESOLVE_FAILED",
+                refreshAttempted = false,
+                platform = SourcePlatform.DOUYIN,
+            ),
+        )
     }
 
     @Test
@@ -68,6 +83,16 @@ class CookieEnvironmentTest {
 
     @Test
     fun xiaohongshuFallsBackBetweenAnonymousAndStoredCookieOnlyOnce() {
+        assertEquals(
+            ParserCredentialMode.STORED_COOKIE,
+            nextParserCredentialMode(
+                platform = SourcePlatform.XIAOHONGSHU,
+                errorCode = "URL_RESOLVE_FAILED",
+                currentMode = ParserCredentialMode.ANONYMOUS,
+                hasStoredCookie = true,
+                attemptedModes = setOf(ParserCredentialMode.ANONYMOUS),
+            ),
+        )
         assertEquals(
             ParserCredentialMode.STORED_COOKIE,
             nextParserCredentialMode(

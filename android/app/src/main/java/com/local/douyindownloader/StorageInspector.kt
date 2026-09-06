@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.StatFs
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
@@ -15,6 +16,13 @@ import javax.inject.Singleton
 class StorageInspector @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
+    fun defaultStorageCapacity(): Pair<Long, Long>? = runCatching {
+        val stats = StatFs(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath,
+        )
+        stats.availableBytes to stats.totalBytes
+    }.getOrNull()
+
     fun inspect(task: TaskRecord, spec: TaskSpec?): FileState {
         if (task.fileState == FileState.DELETE_FAILED) return FileState.DELETE_FAILED
         if (spec?.storageMode == StorageMode.SAF && !isTreeAvailable(spec.storageRoot)) {

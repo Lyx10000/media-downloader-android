@@ -68,4 +68,59 @@ class PlatformLoginCredentialDetectorTest {
             detectPlatformCredential(SourcePlatform.ZHIHU, "z_c0=; _xsrf=value"),
         )
     }
+
+    @Test
+    fun xiaohongshuWebSnapshotDistinguishesAccountGuestAndUnknownSessions() {
+        assertEquals(
+            PlatformCredentialState.DETECTED,
+            classifyXiaohongshuCredentialSnapshot("""{"loggedIn":true,"loginPrompt":false}"""),
+        )
+        assertEquals(
+            PlatformCredentialState.ANONYMOUS,
+            classifyXiaohongshuCredentialSnapshot("""{"loggedIn":false,"loginPrompt":true}"""),
+        )
+        assertEquals(
+            PlatformCredentialState.CHALLENGE_REQUIRED,
+            classifyXiaohongshuCredentialSnapshot(
+                """{"loggedIn":false,"challengeRequired":true,"loginPrompt":false}""",
+            ),
+        )
+        assertEquals(
+            PlatformCredentialState.UNVERIFIED,
+            classifyXiaohongshuCredentialSnapshot("""{"loggedIn":false,"loginPrompt":false}"""),
+        )
+        assertEquals(
+            PlatformCredentialState.UNVERIFIED,
+            classifyXiaohongshuCredentialSnapshot("not-json"),
+        )
+    }
+
+    @Test
+    fun xiaohongshuSuccessfulValidationIsReusedUntilCookieChangesOrCacheExpires() {
+        val cache = XiaohongshuCredentialValidationCache()
+        val now = 1_000_000L
+        cache.update("web_session=one", PlatformCredentialState.DETECTED, now)
+
+        assertEquals(
+            PlatformCredentialState.DETECTED,
+            cache.reusableState("web_session=one", now + 29 * 60_000L),
+        )
+        assertEquals(null, cache.reusableState("web_session=two", now + 1_000L))
+        assertEquals(null, cache.reusableState("web_session=one", now + 31 * 60_000L))
+        cache.clear()
+        assertEquals(null, cache.reusableState("web_session=one", now + 1_000L))
+    }
+
+    @Test
+    fun xiaohongshuUnknownValidationUsesShortCache() {
+        val cache = XiaohongshuCredentialValidationCache()
+        val now = 1_000_000L
+        cache.update("web_session=one", PlatformCredentialState.UNVERIFIED, now)
+
+        assertEquals(
+            PlatformCredentialState.UNVERIFIED,
+            cache.reusableState("web_session=one", now + 59_000L),
+        )
+        assertEquals(null, cache.reusableState("web_session=one", now + 61_000L))
+    }
 }

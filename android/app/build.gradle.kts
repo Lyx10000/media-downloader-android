@@ -6,6 +6,11 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
+val releaseMinifyEnabled = providers.gradleProperty("releaseMinifyEnabled")
+    .orNull
+    ?.toBooleanStrictOrNull()
+    ?: true
+
 android {
     namespace = "com.local.douyindownloader"
     compileSdk = 35
@@ -14,8 +19,8 @@ android {
         applicationId = "com.local.douyindownloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 40
-        versionName = "1.6.1"
+        versionCode = 42
+        versionName = "1.6.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -27,8 +32,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            isMinifyEnabled = releaseMinifyEnabled
+            isShrinkResources = releaseMinifyEnabled
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

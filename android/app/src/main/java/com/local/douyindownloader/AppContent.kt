@@ -62,15 +62,25 @@ private data class Destination(val label: String, val icon: androidx.compose.ui.
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun DownloaderApp(viewModel: MainViewModel) {
+internal fun DownloaderApp(
+    viewModel: MainViewModel,
+    creatorViewModel: CreatorLibraryViewModel,
+    questionArchiveViewModel: ZhihuQuestionArchiveViewModel,
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val creatorState by creatorViewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     var destination by remember { mutableIntStateOf(0) }
     var managedTaskId by remember { mutableStateOf<String?>(null) }
     var readerTaskId by remember { mutableStateOf<String?>(null) }
+    var readerOutputUri by remember { mutableStateOf<String?>(null) }
+    var questionArchiveTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var loginPlatform by rememberSaveable { mutableStateOf<SourcePlatform?>(null) }
     var taskSelectionMode by remember { mutableStateOf(false) }
+    var taskSection by rememberSaveable { mutableIntStateOf(0) }
+    var taskPlatformFilterWire by rememberSaveable { mutableStateOf("") }
+    var focusedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedTaskIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
     var showBatchRedownloadDialog by remember { mutableStateOf(false) }
@@ -148,6 +158,9 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             }
         }
     }
+    LaunchedEffect(creatorViewModel) {
+        creatorViewModel.messages.collectLatest(viewModel::showMessage)
+    }
     LaunchedEffect(viewModel) {
         viewModel.updateLaunchRequests.collectLatest { request ->
             runCatching { context.startActivity(request.intent) }.onFailure { error ->
@@ -158,12 +171,18 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             }
         }
     }
-    val selectableTaskIds = uiState.tasks
+    val taskPlatformFilter = SourcePlatform.entries.firstOrNull {
+        it.wireValue == taskPlatformFilterWire
+    }
+    val visibleTasks = if (taskPlatformFilter == null) uiState.tasks else {
+        uiState.tasks.filter { it.platform == taskPlatformFilter }
+    }
+    val selectableTaskIds = visibleTasks
         .filter { it.status != TaskStatus.DELETING }
         .mapTo(linkedSetOf(), TaskRecord::id)
-    LaunchedEffect(destination, selectableTaskIds) {
+    LaunchedEffect(destination, taskSection, selectableTaskIds) {
         selectedTaskIds = reconcileTaskSelection(selectedTaskIds, selectableTaskIds)
-        if (destination != 1 || selectableTaskIds.isEmpty()) {
+        if (destination != 1 || taskSection != 0 || selectableTaskIds.isEmpty()) {
             taskSelectionMode = false
             selectedTaskIds = emptySet()
             showBatchDeleteDialog = false
@@ -173,6 +192,16 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     }
     val selectedTasks = uiState.tasks.filter { it.id in selectedTaskIds }
     val selectedRedownloadTasks = selectedTasks.filter(::isTaskRedownloadEligible)
+
+    val openIndependentTasks: (String?) -> Unit = { taskId ->
+        creatorViewModel.closeCreator()
+        taskSection = 0
+        taskPlatformFilterWire = ""
+        taskSelectionMode = false
+        selectedTaskIds = emptySet()
+        focusedTaskId = taskId
+        destination = 1
+    }
 
     val openLoginEnvironment: (SourcePlatform) -> Unit = { platform ->
         viewModel.onLoginEnvironmentOpened(platform)
@@ -190,6 +219,9 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             onPageFinished = { url ->
                 viewModel.onLoginPageFinished(activeLoginPlatform, url)
             },
+            onLoginAssistResult = { url, result ->
+                viewModel.onLoginAssistResult(activeLoginPlatform, url, result)
+            },
             onPageError = { url, code, description ->
                 viewModel.onLoginPageError(activeLoginPlatform, url, code, description)
             },
@@ -199,19 +231,26 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
     }
 
     val managedTask = managedTaskId?.let { taskId ->
-        uiState.tasks.firstOrNull { it.id == taskId }
+        uiState.allTasks.firstOrNull { it.id == taskId }
     }
     val readerTask = readerTaskId?.let { taskId ->
-        uiState.tasks.firstOrNull { it.id == taskId }
+        uiState.allTasks.firstOrNull { it.id == taskId }
     }
     if (readerTaskId != null && readerTask == null) {
-        LaunchedEffect(readerTaskId) { readerTaskId = null }
+        LaunchedEffect(readerTaskId) {
+            readerTaskId = null
+            readerOutputUri = null
+        }
     }
     if (readerTask != null) {
         DocumentReaderScreen(
             task = readerTask,
+            selectedOutput = readerTask.outputs.firstOrNull { it.uri == readerOutputUri },
             viewModel = viewModel,
-            onBack = { readerTaskId = null },
+            onBack = {
+                readerTaskId = null
+                readerOutputUri = null
+            },
         )
         return
     }
@@ -223,8 +262,22 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
             task = managedTask,
             viewModel = viewModel,
             snackbarHostState = snackbar,
-            onOpenDocument = { readerTaskId = managedTask.id },
+            onOpenDocument = { output ->
+                readerOutputUri = output.uri
+                readerTaskId = managedTask.id
+            },
             onBack = { managedTaskId = null },
+        )
+        return
+    }
+    LaunchedEffect(questionArchiveTaskId) {
+        questionArchiveTaskId?.let(questionArchiveViewModel::open)
+    }
+    if (questionArchiveTaskId != null) {
+        ZhihuQuestionArchiveScreen(
+            viewModel = questionArchiveViewModel,
+            onBack = { questionArchiveTaskId = null },
+            onOpenChildTask = { childTaskId -> managedTaskId = childTaskId },
         )
         return
     }
@@ -254,7 +307,9 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                         }
                     },
                     actions = {
-                        if (destination == 1) {
+                        if (destination == 1 && taskSection == 0 &&
+                            creatorState.selectedCreator == null
+                        ) {
                             if (taskSelectionMode) {
                                 IconButton(onClick = {
                                     selectedTaskIds = if (selectedTaskIds == selectableTaskIds) {
@@ -295,8 +350,10 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                     NavigationBarItem(
                         selected = destination == index,
                         onClick = {
-                            destination = index
-                            if (index != 1) {
+                            if (index == 1) {
+                                openIndependentTasks(uiState.tasks.firstOrNull()?.id)
+                            } else {
+                                destination = index
                                 taskSelectionMode = false
                                 selectedTaskIds = emptySet()
                             }
@@ -318,19 +375,46 @@ internal fun DownloaderApp(viewModel: MainViewModel) {
                 0 -> HomeScreen(
                     uiState = uiState,
                     viewModel = viewModel,
-                    onShowTasks = { destination = 1 },
+                    creatorState = creatorState,
+                    creatorViewModel = creatorViewModel,
+                    onShowTasks = openIndependentTasks,
+                    onShowCreators = {
+                        taskSection = 1
+                        taskSelectionMode = false
+                        selectedTaskIds = emptySet()
+                        destination = 1
+                    },
                     onOpenLoginEnvironment = openLoginEnvironment,
                 )
-                1 -> TasksScreen(
-                    tasks = uiState.tasks,
+                1 -> TaskHubScreen(
+                    uiState = uiState,
                     viewModel = viewModel,
+                    creatorState = creatorState,
+                    creatorViewModel = creatorViewModel,
+                    selectedSection = taskSection,
+                    onSelectedSection = { section ->
+                        taskSection = section
+                        if (section != 0) {
+                            taskSelectionMode = false
+                            selectedTaskIds = emptySet()
+                        }
+                    },
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,
                     onManageTask = { taskId -> managedTaskId = taskId },
                     selectionMode = taskSelectionMode,
                     selectedTaskIds = selectedTaskIds,
+                    taskPlatformFilter = taskPlatformFilter,
+                    onTaskPlatformFilter = { platform ->
+                        taskPlatformFilterWire = platform?.wireValue.orEmpty()
+                    },
                     onToggleTaskSelection = { taskId ->
                         selectedTaskIds = toggleTaskSelection(selectedTaskIds, taskId)
+                    },
+                    focusedTaskId = focusedTaskId,
+                    onTaskFocused = { focusedTaskId = null },
+                    onOpenQuestionArchive = { taskId ->
+                        questionArchiveTaskId = taskId
                     },
                 )
                 2 -> DiagnosticsScreen(

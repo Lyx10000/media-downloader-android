@@ -72,7 +72,7 @@ internal fun nextParserCredentialMode(
     attemptedModes: Set<ParserCredentialMode>,
 ): ParserCredentialMode? {
     if (platform != SourcePlatform.XIAOHONGSHU ||
-        errorCode !in setOf("AUTH_OR_RISK", "DETAIL_EMPTY", "LOGIN_REQUIRED")
+        !isRecoverableParseError(platform, errorCode)
     ) {
         return null
     }
@@ -90,11 +90,23 @@ internal fun shouldRefreshCookieEnvironment(
     platform: SourcePlatform = SourcePlatform.DOUYIN,
     supportsTargetPageSnapshot: Boolean = false,
 ): Boolean {
-    if (refreshAttempted || errorCode !in setOf("AUTH_OR_RISK", "DETAIL_EMPTY", "LOGIN_REQUIRED")) {
+    if (refreshAttempted || !isRecoverableParseError(platform, errorCode)) {
         return false
     }
     return platform != SourcePlatform.ZHIHU || supportsTargetPageSnapshot
 }
+
+private fun isRecoverableParseError(platform: SourcePlatform, errorCode: String): Boolean =
+    errorCode in COMMON_RECOVERABLE_PARSE_ERRORS ||
+        (platform == SourcePlatform.XIAOHONGSHU && errorCode == "URL_RESOLVE_FAILED")
+
+private val COMMON_RECOVERABLE_PARSE_ERRORS = setOf(
+    "AUTH_OR_RISK",
+    "DETAIL_EMPTY",
+    "LOGIN_REQUIRED",
+)
+
+private const val MAX_MARKDOWN_PREVIEW_CHARS = 2_000_000
 
 private data class TaskCapabilities(
     val requiresAllFilesAccess: Boolean = false,
@@ -107,6 +119,7 @@ data class MainUiState(
     val selectedVariant: Int = 0,
     val selectedMode: DownloadMode = DownloadMode.MERGE_KEEP,
     val tasks: List<TaskRecord> = emptyList(),
+    val allTasks: List<TaskRecord> = emptyList(),
     val logText: String = "",
     val isExportingDiagnostics: Boolean = false,
     val message: String = "",
@@ -115,6 +128,7 @@ data class MainUiState(
     val platformCredentialStates: Map<SourcePlatform, PlatformCredentialState> =
         SourcePlatform.entries.associateWith { PlatformCredentialState.NOT_DETECTED },
     val updateState: UpdateUiState = UpdateUiState(),
+    val questionArchives: Map<String, ZhihuQuestionArchive> = emptyMap(),
 )
 
 @HiltViewModel
@@ -135,6 +149,9 @@ class MainViewModel @Inject internal constructor(
     private val taskFolderNavigator: TaskFolderNavigator,
     private val taskFileOperationCoordinator: TaskFileOperationCoordinator,
     private val updateRepository: UpdateRepository,
+    private val creatorRepository: CreatorLibraryRepository,
+    private val zhihuQuestionArchiveCoordinator: ZhihuQuestionArchiveCoordinator,
+    private val zhihuQuestionRepository: ZhihuQuestionRepository,
 ) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -187,6 +204,7 @@ class MainViewModel @Inject internal constructor(
     private val sessionCredentialAttempts = mutableSetOf<ParserCredentialMode>()
     private var parsingStarted = false
     private var environmentRefreshAttempted = false
+    private val xiaohongshuCredentialCache = XiaohongshuCredentialValidationCache()
     private val refreshMutex = Mutex()
     private var taskCapabilities = emptyMap<String, TaskCapabilities>()
     private var tasksVisible = false
@@ -209,8 +227,9 @@ class MainViewModel @Inject internal constructor(
             }
         }
         viewModelScope.launch {
-            store.observe().collectLatest { records ->
-                tasks = records
+            store.observeAll().collectLatest { records ->
+                tasks = records.filterNot(TaskRecord::creatorChild)
+                _uiState.update { state -> state.copy(allTasks = records) }
                 val expanded = _expandedTaskId.value
                 if (expanded != null && records.none { it.id == expanded }) {
                     mediaPreviewCoordinator.stopIfTask(expanded, "TASK_REMOVED")
@@ -221,9 +240,16 @@ class MainViewModel @Inject internal constructor(
             }
         }
         viewModelScope.launch {
+            zhihuQuestionRepository.observeQuestions().collectLatest { archives ->
+                _uiState.update { state ->
+                    state.copy(questionArchives = archives.associateBy(ZhihuQuestionArchive::parentTaskId))
+                }
+            }
+        }
+        viewModelScope.launch {
             while (isActive) {
                 delay(15_000)
-                if (tasksVisible && tasks.isNotEmpty()) refreshTasks()
+                if (tasksVisible && _uiState.value.allTasks.isNotEmpty()) refreshTasks()
             }
         }
     }
@@ -298,6 +324,7 @@ class MainViewModel @Inject internal constructor(
             put("snapshot_initial_bytes", pageSnapshot?.initialData?.length ?: 0)
             put("snapshot_content_bytes", pageSnapshot?.contentHtml?.length ?: 0)
             put("snapshot_host", pageSnapshot?.finalUrl?.let { Uri.parse(it).host }.orEmpty())
+            put("snapshot_path", pageSnapshot?.finalUrl?.let { Uri.parse(it).path }.orEmpty())
         })
         startParse(cookieHeader, pageSnapshot)
     }
@@ -325,6 +352,18 @@ class MainViewModel @Inject internal constructor(
                         put("error_code", attempt.errorCode)
                     },
                 )
+            }
+            if (
+                !result.ok && sessionPlatform == SourcePlatform.XIAOHONGSHU &&
+                result.canonicalUrl.isNotBlank() &&
+                XiaohongshuMediaParser.noteIdFromUrl(result.canonicalUrl).isNotBlank()
+            ) {
+                sessionSourceUrl = result.canonicalUrl
+                logger.event(sessionId, "PARSE", "RESOLVED_TARGET_RETAINED", JSONObject().apply {
+                    put("host", runCatching { Uri.parse(result.canonicalUrl).host }.getOrDefault(""))
+                    put("path", runCatching { Uri.parse(result.canonicalUrl).path }.getOrDefault(""))
+                    put("content_id", result.contentId)
+                })
             }
             val fallbackMode = nextParserCredentialMode(
                 platform = sessionPlatform,
@@ -409,23 +448,44 @@ class MainViewModel @Inject internal constructor(
         selectedMode = mode
     }
 
-    fun queueDownload(result: ParseResult) {
+    fun queueDownload(result: ParseResult): String {
         val id = sessionId.ifBlank { UUID.randomUUID().toString() }
         val createdAt = System.currentTimeMillis()
         val storageMode = if (customTreeUri.isNullOrBlank()) StorageMode.DEFAULT else StorageMode.SAF
-        val spec = TaskSpec(
-            taskId = id,
-            createdAt = createdAt,
-            result = result,
-            variantIndex = selectedVariant,
-            mode = selectedMode,
-            sourceText = inputText,
-            storageMode = storageMode,
-            storageRoot = customTreeUri.orEmpty(),
-            taskFolder = taskFolderName(createdAt, id),
-        )
         viewModelScope.launch {
             try {
+                val authorKey = creatorRepository.upsertFromParse(result)
+                val taskFolder = if (authorKey.isBlank()) {
+                    taskFolderName(createdAt, id)
+                } else {
+                    creatorRepository.getCreator(authorKey)?.let { profile ->
+                        creatorWorkFolder(
+                            profile,
+                            CreatorWork(
+                                key = creatorWorkKey(result.platform, result.contentId),
+                                creatorKey = authorKey,
+                                platform = result.platform,
+                                contentId = result.contentId,
+                                canonicalUrl = result.canonicalUrl,
+                                kind = result.kind,
+                                title = result.description,
+                            ),
+                            createdAt,
+                        )
+                    } ?: taskFolderName(createdAt, id)
+                }
+                val spec = TaskSpec(
+                    taskId = id,
+                    createdAt = createdAt,
+                    result = result,
+                    variantIndex = selectedVariant,
+                    mode = selectedMode,
+                    sourceText = inputText,
+                    storageMode = storageMode,
+                    storageRoot = customTreeUri.orEmpty(),
+                    taskFolder = taskFolder,
+                    authorKey = authorKey,
+                )
                 store.insert(spec)
                 runCatching {
                     logger.event(id, "QUALITY", "DOWNLOAD_CONFIRMED", JSONObject().apply {
@@ -452,14 +512,53 @@ class MainViewModel @Inject internal constructor(
                 message = "创建下载任务失败：$safeMessage"
             }
         }
+        return id
+    }
+
+    fun queueQuestionArchive(
+        result: ParseResult,
+        scope: ZhihuQuestionDownloadScope,
+        includeComments: Boolean,
+    ): String {
+        val id = sessionId.ifBlank { UUID.randomUUID().toString() }
+        viewModelScope.launch {
+            try {
+                zhihuQuestionArchiveCoordinator.start(id, result, scope, includeComments)
+                message = if (scope == ZhihuQuestionDownloadScope.ALL) {
+                    "已开始归档当前账号可见的全部回答"
+                } else {
+                    "已开始归档第一页回答"
+                }
+                resetParse()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val safeMessage = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+                runCatching {
+                    store.update(id, TaskStatus.FAILED, "启动问题归档失败", 0, safeMessage)
+                }
+                runCatching {
+                    logger.event(id, "QUESTION", "QUESTION_ARCHIVE_SUBMISSION_FAILED", JSONObject().apply {
+                        put("type", error.javaClass.name)
+                        put("message", safeMessage)
+                    })
+                }
+                message = "创建知乎问题归档失败：$safeMessage"
+            }
+        }
+        return id
     }
 
     fun cancelTask(task: TaskRecord) {
         viewModelScope.launch {
             runCatching { logger.event(task.id, "DOWNLOAD", "CANCEL_REQUESTED") }
             try {
-                scheduler.cancel(task.id)
-                store.update(task.id, TaskStatus.CANCELLED, "已取消", task.progress)
+                if (task.questionArchiveId.isNotBlank() && !task.questionChild) {
+                    zhihuQuestionArchiveCoordinator.cancel(task.id)
+                } else {
+                    scheduler.cancel(task.id)
+                    store.update(task.id, TaskStatus.CANCELLED, "已取消", task.progress)
+                }
                 runCatching { logger.event(task.id, "DOWNLOAD", "CANCEL_ACCEPTED") }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -477,10 +576,25 @@ class MainViewModel @Inject internal constructor(
     }
 
     fun retryTask(task: TaskRecord) {
+        if (task.questionArchiveId.isNotBlank() && !task.questionChild) {
+            viewModelScope.launch {
+                message = zhihuQuestionArchiveCoordinator.resume(task.id)
+                refreshTasks()
+            }
+            return
+        }
         val cookieHeader = CookieManager.getInstance()
             .getCookie(task.platform.homeUrl).orEmpty()
         viewModelScope.launch {
             message = redownloadCoordinator.retry(task, cookieHeader, customTreeUri).message
+            refreshTasks()
+        }
+    }
+
+    fun continueQuestionArchive(task: TaskRecord) {
+        if (task.questionArchiveId.isBlank() || task.questionChild) return
+        viewModelScope.launch {
+            message = zhihuQuestionArchiveCoordinator.continueNextPage(task.id)
             refreshTasks()
         }
     }
@@ -495,6 +609,13 @@ class MainViewModel @Inject internal constructor(
             uniqueTasks.forEach { task ->
                 if (!isTaskRedownloadEligible(task)) {
                     skipped += 1
+                    return@forEach
+                }
+                if (task.questionArchiveId.isNotBlank() && !task.questionChild) {
+                    val resumed = runCatching {
+                        zhihuQuestionArchiveCoordinator.resume(task.id)
+                    }.isSuccess
+                    if (resumed) started += 1 else failed += 1
                     return@forEach
                 }
                 val cookieHeader = CookieManager.getInstance()
@@ -614,6 +735,41 @@ class MainViewModel @Inject internal constructor(
             DocumentReaderData(document, assetOutputs)
         }
 
+    internal suspend fun loadMarkdownOutput(taskId: String, output: TaskOutput): String? =
+        withContext(Dispatchers.IO) {
+            if (!inspector.outputExists(output.uri)) return@withContext null
+            val uri = runCatching { Uri.parse(output.uri) }.getOrNull() ?: return@withContext null
+            val input = runCatching {
+                if (uri.scheme == "file") {
+                    uri.path?.let { path -> java.io.File(path).inputStream() }
+                } else {
+                    getApplication<Application>().contentResolver.openInputStream(uri)
+                }
+            }.getOrNull() ?: return@withContext null
+            runCatching {
+                input.bufferedReader(Charsets.UTF_8).use { reader ->
+                    val text = StringBuilder()
+                    val buffer = CharArray(8_192)
+                    while (text.length < MAX_MARKDOWN_PREVIEW_CHARS) {
+                        val count = reader.read(
+                            buffer,
+                            0,
+                            minOf(buffer.size, MAX_MARKDOWN_PREVIEW_CHARS - text.length),
+                        )
+                        if (count < 0) break
+                        text.append(buffer, 0, count)
+                    }
+                    text.toString()
+                }
+            }.onFailure { error ->
+                logger.event(taskId, "DOCUMENT_READER", "MARKDOWN_READ_FAILED", JSONObject().apply {
+                    put("name", output.displayName)
+                    put("type", error.javaClass.name)
+                    put("message", Redactor.sanitize(error.message.orEmpty()))
+                })
+            }.getOrNull()
+        }
+
     internal fun openDocumentMedia(context: Context, taskId: String, output: TaskOutput) {
         val uri = runCatching { Uri.parse(output.uri) }.getOrNull()
         if (uri == null || !inspector.outputExists(output.uri)) {
@@ -730,7 +886,7 @@ class MainViewModel @Inject internal constructor(
             _expandedTaskId.value = null
         }
         viewModelScope.launch {
-            val result = deletionCoordinator.deleteTask(task.id, deleteFiles)
+            val result = deleteTaskIncludingQuestionChildren(task, deleteFiles)
             message = result.message
             refreshTasks()
         }
@@ -748,7 +904,7 @@ class MainViewModel @Inject internal constructor(
         }
         viewModelScope.launch {
             val results = uniqueTasks.map { task ->
-                runCatching { deletionCoordinator.deleteTask(task.id, deleteFiles) }
+                runCatching { deleteTaskIncludingQuestionChildren(task, deleteFiles) }
                     .getOrElse { error ->
                         logger.event(task.id, "DELETE", "BATCH_DELETE_FAILED", JSONObject().apply {
                             put("type", error.javaClass.name)
@@ -766,6 +922,27 @@ class MainViewModel @Inject internal constructor(
             }
             refreshTasks()
         }
+    }
+
+    private suspend fun deleteTaskIncludingQuestionChildren(
+        task: TaskRecord,
+        deleteFiles: Boolean,
+    ): TaskDeleteResult {
+        if (task.questionArchiveId.isBlank() || task.questionChild) {
+            return deletionCoordinator.deleteTask(task.id, deleteFiles)
+        }
+        runCatching { zhihuQuestionArchiveCoordinator.cancel(task.id) }
+        val children = zhihuQuestionRepository.listAnswers(task.questionArchiveId)
+            .mapNotNull { it.taskId.takeIf(String::isNotBlank) }
+        val childFailures = children.map { childTaskId ->
+            deletionCoordinator.deleteTask(childTaskId, deleteFiles)
+        }.count { !it.success }
+        if (childFailures > 0) {
+            return TaskDeleteResult(false, "$childFailures 个回答任务删除失败，请稍后重试")
+        }
+        val parentResult = deletionCoordinator.deleteTask(task.id, deleteFiles)
+        if (parentResult.success) zhihuQuestionRepository.delete(task.questionArchiveId)
+        return parentResult
     }
 
     internal fun onDocumentImageLoadFailed(
@@ -812,25 +989,26 @@ class MainViewModel @Inject internal constructor(
                 "credential_detected",
                 _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
             )
+            put("credential_state", _uiState.value.platformCredentialStates[platform]?.name.orEmpty())
         })
         refreshLogs()
     }
 
     fun onLoginEnvironmentClosed(platform: SourcePlatform) {
         CookieManager.getInstance().flush()
-        refreshPlatformCredentialStates()
+        refreshPlatformCredentialStates(forceXiaohongshuValidation = platform == SourcePlatform.XIAOHONGSHU)
         logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_ENVIRONMENT_CLOSED", JSONObject().apply {
             put("platform", platform.wireValue)
             put(
                 "credential_detected",
                 _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
             )
+            put("credential_state", _uiState.value.platformCredentialStates[platform]?.name.orEmpty())
         })
         refreshLogs()
     }
 
     fun onLoginPageFinished(platform: SourcePlatform, url: String) {
-        refreshPlatformCredentialStates()
         logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_PAGE_FINISHED", JSONObject().apply {
             put("platform", platform.wireValue)
             put("host", runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault(""))
@@ -838,6 +1016,17 @@ class MainViewModel @Inject internal constructor(
                 "credential_detected",
                 _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
             )
+            put("credential_state", _uiState.value.platformCredentialStates[platform]?.name.orEmpty())
+        })
+    }
+
+    fun onLoginAssistResult(platform: SourcePlatform, url: String, result: String) {
+        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_ASSIST_RESULT", JSONObject().apply {
+            put("platform", platform.wireValue)
+            put("host", runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault(""))
+            put("path", runCatching { Uri.parse(url).path.orEmpty() }.getOrDefault(""))
+            put("result", Redactor.sanitize(result))
+            put("desktop_mode", shouldUseDesktopLoginMode(platform))
         })
     }
 
@@ -857,8 +1046,7 @@ class MainViewModel @Inject internal constructor(
     }
 
     fun onAppBackground() {
-        _fullscreenTaskId.value = null
-        mediaPreviewCoordinator.stopAndRelease("APP_BACKGROUNDED")
+        mediaPreviewCoordinator.pause("APP_BACKGROUNDED")
     }
 
     fun onTasksVisible() {
@@ -876,19 +1064,69 @@ class MainViewModel @Inject internal constructor(
         viewModelScope.launch(Dispatchers.IO) {
             if (!refreshMutex.tryLock()) return@launch
             try {
-                fileStateRefresher.refresh(store.list())
+                fileStateRefresher.refresh(store.listAll())
             } finally {
                 refreshMutex.unlock()
             }
         }
     }
 
-    private fun refreshPlatformCredentialStates() {
+    private fun refreshPlatformCredentialStates(forceXiaohongshuValidation: Boolean = false) {
         val cookieManager = CookieManager.getInstance()
-        val states = SourcePlatform.entries.associateWith { platform ->
-            detectPlatformCredential(platform, cookieManager.getCookie(platform.homeUrl).orEmpty())
+        if (forceXiaohongshuValidation) xiaohongshuCredentialCache.clear()
+        val cookies = SourcePlatform.entries.associateWith { platform ->
+            cookieManager.getCookie(platform.homeUrl).orEmpty()
         }
-        _uiState.update { it.copy(platformCredentialStates = states) }
+        val localStates = SourcePlatform.entries.associateWith { platform ->
+            detectPlatformCredential(platform, cookies.getValue(platform))
+        }.toMutableMap()
+        if (localStates[SourcePlatform.XIAOHONGSHU] == PlatformCredentialState.DETECTED) {
+            localStates[SourcePlatform.XIAOHONGSHU] = if (forceXiaohongshuValidation) {
+                PlatformCredentialState.CHECKING
+            } else {
+                xiaohongshuCredentialCache.reusableState(
+                    cookies.getValue(SourcePlatform.XIAOHONGSHU),
+                    System.currentTimeMillis(),
+                ) ?: PlatformCredentialState.CHECKING
+            }
+        } else {
+            xiaohongshuCredentialCache.clear()
+        }
+        _uiState.update { it.copy(platformCredentialStates = localStates) }
+    }
+
+    fun onXiaohongshuCredentialProbe(snapshot: WebPageSnapshot?) {
+        if (_uiState.value.platformCredentialStates[SourcePlatform.XIAOHONGSHU] !=
+            PlatformCredentialState.CHECKING
+        ) {
+            return
+        }
+        val state = snapshot?.initialData
+            ?.let(::classifyXiaohongshuCredentialSnapshot)
+            ?: PlatformCredentialState.UNVERIFIED
+        val cookieHeader = CookieManager.getInstance()
+            .getCookie(SourcePlatform.XIAOHONGSHU.homeUrl)
+            .orEmpty()
+        if (cookieHeader.isNotBlank()) {
+            xiaohongshuCredentialCache.update(cookieHeader, state, System.currentTimeMillis())
+        } else {
+            xiaohongshuCredentialCache.clear()
+        }
+        _uiState.update { current ->
+            current.copy(
+                platformCredentialStates = current.platformCredentialStates.toMutableMap().apply {
+                    put(SourcePlatform.XIAOHONGSHU, state)
+                },
+            )
+        }
+        logger.event("app-login", "LOGIN_STATUS", "CREDENTIAL_VALIDATED", JSONObject().apply {
+            put("platform", SourcePlatform.XIAOHONGSHU.wireValue)
+            put("state", state.name)
+            put("source", "webview")
+            put("final_path", runCatching {
+                Uri.parse(snapshot?.finalUrl).path.orEmpty()
+            }.getOrDefault(""))
+        })
     }
 
     fun refreshLogs() {

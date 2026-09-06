@@ -10,6 +10,8 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 
 typealias DownloadProgress = suspend (stage: String, progress: Int, persist: Boolean) -> Unit
@@ -20,12 +22,14 @@ data class DownloadExecutionResult(
 )
 
 @Singleton
-class DownloadExecutor @Inject constructor(
+class DownloadExecutor @Inject internal constructor(
     @ApplicationContext private val context: Context,
     private val repository: DownloadTaskRepository,
     private val logger: DiagnosticLogger,
+    private val zhihuCommentExporter: ZhihuCommentExporter,
 ) {
     private val acceleratedDownloader = AcceleratedDownloader()
+    private val downloadPermits = Semaphore(MAX_CONCURRENT_DOWNLOADS)
 
     suspend fun execute(
         taskId: String,
@@ -33,34 +37,38 @@ class DownloadExecutor @Inject constructor(
         folder: File,
         persistIntermediateOutputs: Boolean = true,
         onPublishedOutputs: suspend (List<TaskOutput>) -> Unit = {},
+        cookieHeader: String = "",
         progress: DownloadProgress,
-    ): DownloadExecutionResult = when (spec.result.kind) {
-        MediaKind.IMAGE -> downloadImages(
-            taskId,
-            spec,
-            folder,
-            persistIntermediateOutputs,
-            onPublishedOutputs,
-            progress,
-        )
-        MediaKind.VIDEO -> DownloadExecutionResult(
-            downloadVideo(
+    ): DownloadExecutionResult = downloadPermits.withPermit {
+        when (spec.result.kind) {
+            MediaKind.IMAGE -> downloadImages(
                 taskId,
                 spec,
                 folder,
                 persistIntermediateOutputs,
                 onPublishedOutputs,
                 progress,
-            ),
-        )
-        MediaKind.DOCUMENT -> downloadDocument(
-            taskId,
-            spec,
-            folder,
-            persistIntermediateOutputs,
-            onPublishedOutputs,
-            progress,
-        )
+            )
+            MediaKind.VIDEO -> DownloadExecutionResult(
+                downloadVideo(
+                    taskId,
+                    spec,
+                    folder,
+                    persistIntermediateOutputs,
+                    onPublishedOutputs,
+                    progress,
+                ),
+            )
+            MediaKind.DOCUMENT -> downloadDocument(
+                taskId,
+                spec,
+                folder,
+                persistIntermediateOutputs,
+                onPublishedOutputs,
+                cookieHeader,
+                progress,
+            )
+        }
     }
 
     private suspend fun downloadDocument(
@@ -69,6 +77,7 @@ class DownloadExecutor @Inject constructor(
         folder: File,
         persistIntermediateOutputs: Boolean,
         onPublishedOutputs: suspend (List<TaskOutput>) -> Unit,
+        cookieHeader: String,
         progress: DownloadProgress,
     ): DownloadExecutionResult {
         val document = spec.result.document ?: error("知乎文档内容不存在")
@@ -196,10 +205,33 @@ class DownloadExecutor @Inject constructor(
             }
         }
 
+        var commentWarningCount = 0
+        val commentRequest = spec.zhihuCommentRequest
+        if (commentRequest != null) {
+            progress("下载回答评论", 0, true)
+            val comments = File(folder, "comments.md")
+            val commentResult = zhihuCommentExporter.export(commentRequest, cookieHeader, comments)
+            outputs += PublicStorage.publish(context, comments, spec, "comments.md")
+            recordPublishedOutputs(taskId, outputs, persistIntermediateOutputs, onPublishedOutputs)
+            if (commentResult.incomplete) commentWarningCount += 1
+            logger.event(taskId, "COMMENTS", "COMMENTS_EXPORTED", JSONObject().apply {
+                put("answer_id", commentRequest.answerId)
+                put("comments", commentResult.count)
+                put("incomplete", commentResult.incomplete)
+                put("message", commentResult.warning)
+            })
+        }
+
         progress("生成 Markdown 文档", 0, true)
         val markdownName = document.type.fileName
         val markdown = File(folder, markdownName)
-        markdown.writeText(MarkdownRenderer.render(document, localPaths, failures), Charsets.UTF_8)
+        val rendered = MarkdownRenderer.render(document, localPaths, failures)
+        markdown.writeText(
+            if (commentRequest == null) rendered else {
+                rendered.trimEnd() + "\n\n---\n\n[查看全部评论](comments.md)\n"
+            },
+            Charsets.UTF_8,
+        )
         val markdownOutput = PublicStorage.publish(context, markdown, spec, markdownName)
         outputs.add(0, markdownOutput)
         recordPublishedOutputs(taskId, outputs, persistIntermediateOutputs, onPublishedOutputs)
@@ -208,7 +240,10 @@ class DownloadExecutor @Inject constructor(
             put("downloaded", localPaths.size)
             put("failed", failures.size)
         })
-        return DownloadExecutionResult(outputs, failures.size + document.warnings.size)
+        return DownloadExecutionResult(
+            outputs,
+            failures.size + document.warnings.size + commentWarningCount,
+        )
     }
 
     private suspend fun downloadImages(
@@ -710,6 +745,7 @@ class DownloadExecutor @Inject constructor(
     }
 
     companion object {
+        private const val MAX_CONCURRENT_DOWNLOADS = 2
         private const val ACCELERATED_PART_COUNT = 4
         private const val PROGRESS_REPORT_INTERVAL_NANOS = 750_000_000L
         private const val USER_AGENT =

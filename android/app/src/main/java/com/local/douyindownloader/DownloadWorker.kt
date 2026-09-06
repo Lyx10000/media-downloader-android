@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.webkit.CookieManager
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -104,6 +105,13 @@ class DownloadWorker internal constructor(
                         repository.replaceSpec(taskId, updated)
                         originalSpec = updated
                     }
+                },
+                cookieHeader = if (spec.zhihuCommentRequest != null) {
+                    withContext(Dispatchers.Main) {
+                        CookieManager.getInstance().getCookie(SourcePlatform.ZHIHU.homeUrl).orEmpty()
+                    }
+                } else {
+                    ""
                 },
             ) { stage, progress, persist ->
                 if (persist) repository.update(taskId, TaskStatus.RUNNING, stage, progress)

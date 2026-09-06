@@ -3,6 +3,7 @@ package com.local.douyindownloader
 import java.net.URI
 
 internal enum class ZhihuContentType {
+    QUESTION,
     ARTICLE,
     ANSWER,
     PIN,
@@ -64,10 +65,13 @@ internal object ZhihuSourceResolver {
                 canonicalUrl = "https://www.zhihu.com/zvideo/$videoId",
             )
         }
-        if (QUESTION.matchEntire(path) != null) {
-            throw PlatformParseException(
-                "UNSUPPORTED_QUESTION",
-                "请分享具体回答链接，暂不支持下载整个问题的全部回答",
+        QUESTION.matchEntire(path)?.let { match ->
+            val questionId = match.groupValues[1]
+            return ResolvedZhihuSource(
+                type = ZhihuContentType.QUESTION,
+                contentId = questionId,
+                questionId = questionId,
+                canonicalUrl = "https://www.zhihu.com/question/$questionId",
             )
         }
         throw PlatformParseException("UNSUPPORTED_URL", "暂不支持该知乎内容地址")

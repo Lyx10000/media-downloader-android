@@ -30,12 +30,33 @@ internal class TaskFolderPruner @Inject constructor(
         return runCatching {
             val root = DocumentFile.fromTreeUri(context, Uri.parse(spec.storageRoot))
                 ?: return TaskFolderPruneResult(false, message = "保存目录已失效")
-            val folder = root.findFile(spec.taskFolder) ?: return TaskFolderPruneResult(true)
+            val folder = root.findRelativeDirectory(spec.taskFolder, create = false)
+                ?: return TaskFolderPruneResult(true)
             pruneEmptySafDirectories(folder)
             if (folder.listFiles().isNotEmpty()) TaskFolderPruneResult(true, retained = true)
             else if (!folder.exists() || folder.delete()) TaskFolderPruneResult(true)
             else TaskFolderPruneResult(false, message = "任务文件夹删除失败")
         }.getOrElse { TaskFolderPruneResult(false, message = it.message ?: "任务文件夹删除失败") }
+    }
+
+    fun pruneCreatorParents(spec: TaskSpec) {
+        val authorPath = spec.taskFolder.substringBeforeLast('/', "")
+        if (authorPath.isBlank()) return
+        if (spec.storageMode == StorageMode.SAF) {
+            if (!inspector.isTreeAvailable(spec.storageRoot)) return
+            val root = DocumentFile.fromTreeUri(context, Uri.parse(spec.storageRoot)) ?: return
+            val author = root.findRelativeDirectory(authorPath, create = false) ?: return
+            if (author.listFiles().isEmpty()) author.delete()
+            val platformPath = authorPath.substringBeforeLast('/', "")
+            val platform = root.findRelativeDirectory(platformPath, create = false)
+            if (platform != null && platform.listFiles().isEmpty()) platform.delete()
+        } else if (StorageInspector.hasAllFilesAccess()) {
+            val work = StorageInspector.defaultTaskDirectory(spec.taskFolder)
+            val author = work.parentFile
+            if (author != null && author.listFiles()?.isEmpty() == true) author.delete()
+            val platform = author?.parentFile
+            if (platform != null && platform.listFiles()?.isEmpty() == true) platform.delete()
+        }
     }
 
     private fun pruneDefault(folderName: String): TaskFolderPruneResult {

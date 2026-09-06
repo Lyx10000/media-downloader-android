@@ -4,12 +4,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 enum class DocumentType(val wireValue: String, val fileName: String) {
+    QUESTION("question", "index.md"),
     ARTICLE("article", "article.md"),
     ANSWER("answer", "answer.md"),
     PIN("pin", "pin.md");
 
     val displayLabel: String
         get() = when (this) {
+            QUESTION -> "问题"
             ARTICLE -> "文章"
             ANSWER -> "回答"
             PIN -> "想法"

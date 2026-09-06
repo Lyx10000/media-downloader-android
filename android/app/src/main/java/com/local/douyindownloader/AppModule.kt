@@ -23,11 +23,32 @@ object AppModule {
     @Singleton
     fun provideTaskDatabase(@ApplicationContext context: Context): TaskDatabase =
         Room.databaseBuilder(context, TaskDatabase::class.java, TaskDatabase.DATABASE_NAME)
-            .addMigrations(TaskDatabase.MIGRATION_1_2, TaskDatabase.MIGRATION_2_3)
+            .addMigrations(
+                TaskDatabase.MIGRATION_1_2,
+                TaskDatabase.MIGRATION_2_3,
+                TaskDatabase.MIGRATION_3_4,
+                TaskDatabase.MIGRATION_4_5,
+                TaskDatabase.MIGRATION_5_6,
+            )
             .build()
 
     @Provides
     fun provideTaskDao(database: TaskDatabase): TaskDao = database.taskDao()
+
+    @Provides
+    fun provideCreatorDao(database: TaskDatabase): CreatorDao = database.creatorDao()
+
+    @Provides
+    fun provideCreatorWorkDao(database: TaskDatabase): CreatorWorkDao = database.creatorWorkDao()
+
+    @Provides
+    fun provideDownloadBatchDao(database: TaskDatabase): DownloadBatchDao = database.downloadBatchDao()
+
+    @Provides
+    fun provideCreatorPageDao(database: TaskDatabase): CreatorPageDao = database.creatorPageDao()
+
+    @Provides
+    fun provideZhihuQuestionDao(database: TaskDatabase): ZhihuQuestionDao = database.zhihuQuestionDao()
 
     @Provides
     @Singleton

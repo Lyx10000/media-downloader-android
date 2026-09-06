@@ -11,6 +11,8 @@ import dagger.hilt.android.AndroidEntryPoint
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<MainViewModel>()
+    private val creatorViewModel by viewModels<CreatorLibraryViewModel>()
+    private val questionArchiveViewModel by viewModels<ZhihuQuestionArchiveViewModel>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -18,7 +20,7 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
         setContent {
             DownloaderTheme {
-                DownloaderApp(viewModel)
+                DownloaderApp(viewModel, creatorViewModel, questionArchiveViewModel)
             }
         }
     }

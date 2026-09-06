@@ -28,11 +28,14 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Fullscreen
@@ -51,6 +54,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -90,6 +94,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.compose.ContentFrame
+import androidx.media3.ui.compose.SURFACE_TYPE_TEXTURE_VIEW
 import coil.ImageLoader
 import coil.compose.SubcomposeAsyncImage
 import coil.decode.VideoFrameDecoder
@@ -112,13 +117,19 @@ internal fun EmptyTasksStatus() {
 @Composable
 internal fun TasksScreen(
     tasks: List<TaskRecord>,
+    questionArchives: Map<String, ZhihuQuestionArchive>,
     viewModel: MainViewModel,
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
     onManageTask: (String) -> Unit,
     selectionMode: Boolean,
     selectedTaskIds: Set<String>,
+    platformFilter: SourcePlatform?,
+    onPlatformFilter: (SourcePlatform?) -> Unit,
     onToggleTaskSelection: (String) -> Unit,
+    focusedTaskId: String?,
+    onTaskFocused: () -> Unit,
+    onOpenQuestionArchive: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
@@ -135,10 +146,6 @@ internal fun TasksScreen(
     var pendingRedownload by remember { mutableStateOf<TaskRecord?>(null) }
     var deleteFiles by remember { mutableStateOf(false) }
     var recoveryTask by remember { mutableStateOf<TaskRecord?>(null) }
-    DisposableEffect(Unit) {
-        viewModel.onTasksVisible()
-        onDispose(viewModel::onTasksHidden)
-    }
     DisposableEffect(previewImageLoader) {
         onDispose(previewImageLoader::shutdown)
     }
@@ -146,11 +153,51 @@ internal fun TasksScreen(
         EmptyTasksStatus()
         return
     }
+    val visibleTasks = if (platformFilter == null) tasks else {
+        tasks.filter { it.platform == platformFilter }
+    }
+    val listState = rememberLazyListState()
+    val focusedTaskIndex = focusedTaskId?.let { taskId ->
+        visibleTasks.indexOfFirst { it.id == taskId }.takeIf { it >= 0 }
+    }
+    LaunchedEffect(focusedTaskId, focusedTaskIndex) {
+        if (focusedTaskIndex != null) {
+            // The platform filter occupies the first list item.
+            listState.scrollToItem(focusedTaskIndex + 1)
+            onTaskFocused()
+        }
+    }
     LazyColumn(
+        state = listState,
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(tasks, key = TaskRecord::id) { task ->
+        item(key = "platform-filter") {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = platformFilter == null,
+                    onClick = { onPlatformFilter(null) },
+                    label = { Text("全部") },
+                )
+                SourcePlatform.entries.forEach { platform ->
+                    FilterChip(
+                        selected = platformFilter == platform,
+                        onClick = { onPlatformFilter(platform) },
+                        label = { Text(platform.displayName) },
+                    )
+                }
+            }
+        }
+        if (visibleTasks.isEmpty()) {
+            item(key = "empty-platform") {
+                Text(
+                    "当前平台还没有下载任务",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 24.dp),
+                )
+            }
+        }
+        items(visibleTasks, key = TaskRecord::id) { task ->
             val recoverable = task.fileState in setOf(
                 FileState.PARTIAL,
                 FileState.MISSING,
@@ -170,7 +217,22 @@ internal fun TasksScreen(
                 FileState.UNKNOWN,
             )
             val isPreviewExpanded = expandedTaskId == task.id
-            val canRedownload = isTaskRedownloadEligible(task)
+            val isQuestionArchive = task.questionArchiveId.isNotBlank() && !task.questionChild
+            val questionArchive = questionArchives[task.id]
+            val canContinueQuestion = questionArchive?.let { archive ->
+                archive.status !in setOf(
+                    ZhihuQuestionStatus.QUEUED,
+                    ZhihuQuestionStatus.RUNNING,
+                ) && canContinueQuestionArchive(
+                    archive,
+                    archive.nextOffset.coerceAtLeast(0),
+                )
+            } == true
+            val canResumeQuestion = isQuestionArchive && task.status in setOf(
+                TaskStatus.FAILED,
+                TaskStatus.CANCELLED,
+            )
+            val canRedownload = !isQuestionArchive && isTaskRedownloadEligible(task)
             OutlinedCard(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -301,12 +363,36 @@ internal fun TasksScreen(
                     if (task.error.isNotBlank()) {
                         Text(task.error, color = MaterialTheme.colorScheme.error)
                     }
-                    if (!selectionMode && (filesAvailable || canRedownload)) {
+                    if (!selectionMode && (
+                            filesAvailable || canRedownload || isQuestionArchive ||
+                                canContinueQuestion || canResumeQuestion
+                            )
+                    ) {
                         FlowRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
+                            if (isQuestionArchive) {
+                                OutlinedButton(onClick = { onOpenQuestionArchive(task.id) }) {
+                                    Text("查看回答")
+                                    Spacer(Modifier.size(4.dp))
+                                    Icon(Icons.Default.ChevronRight, contentDescription = null)
+                                }
+                            }
+                            if (canContinueQuestion || canResumeQuestion) {
+                                OutlinedButton(onClick = {
+                                    if (canContinueQuestion) {
+                                        viewModel.continueQuestionArchive(task)
+                                    } else {
+                                        viewModel.retryTask(task)
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Download, contentDescription = null)
+                                    Spacer(Modifier.size(8.dp))
+                                    Text(if (canContinueQuestion) "继续下载" else "继续归档")
+                                }
+                            }
                             if (canRedownload) {
                                 OutlinedButton(onClick = {
                                     if (task.fileState == FileState.STORAGE_UNAVAILABLE) {
@@ -765,8 +851,13 @@ private fun VideoPreview(
     val isCurrent = state.taskId == taskId && state.source.samePlaybackSource(media)
     val player = state.player.takeIf { isCurrent }
     val hasPlayer = player != null
-    val videoAspectRatio = if (isCurrent) state.videoAspectRatio else DEFAULT_VIDEO_ASPECT_RATIO
     var inlineSurfaceReady by remember(player) { mutableStateOf(!isFullscreen) }
+    var centerControlVisible by remember(player) { mutableStateOf(true) }
+    var visibilityTimerVersion by remember(player) { mutableIntStateOf(0) }
+    val revealCenterControl: () -> Unit = {
+        centerControlVisible = true
+        visibilityTimerVersion++
+    }
     LaunchedEffect(isFullscreen, player) {
         if (isFullscreen) {
             inlineSurfaceReady = false
@@ -774,6 +865,18 @@ private fun VideoPreview(
             // Let the fullscreen dialog dispose its video Surface before the card attaches a new one.
             withFrameNanos { }
             inlineSurfaceReady = true
+        }
+    }
+    LaunchedEffect(state.status, centerControlVisible, visibilityTimerVersion, isFullscreen) {
+        when {
+            isFullscreen -> Unit
+            state.status in setOf(MediaPreviewStatus.ENDED, MediaPreviewStatus.PREPARING) -> {
+                centerControlVisible = true
+            }
+            centerControlVisible -> {
+                delay(VIDEO_CONTROLS_TIMEOUT_MS)
+                centerControlVisible = false
+            }
         }
     }
     Text(
@@ -788,7 +891,7 @@ private fun VideoPreview(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(compactVideoAspectRatio(videoAspectRatio))
+            .aspectRatio(DEFAULT_VIDEO_ASPECT_RATIO)
             .clip(MaterialTheme.shapes.medium)
             .background(Color.Black),
         contentAlignment = Alignment.Center,
@@ -796,24 +899,52 @@ private fun VideoPreview(
         when {
             hasPlayer && !isFullscreen && inlineSurfaceReady -> {
                 VideoPlayerSurface(player!!)
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .pointerInput(state.status, centerControlVisible) {
+                            detectTapGestures {
+                                when {
+                                    state.status == MediaPreviewStatus.PREPARING -> Unit
+                                    state.status == MediaPreviewStatus.ENDED -> revealCenterControl()
+                                    centerControlVisible -> centerControlVisible = false
+                                    else -> revealCenterControl()
+                                }
+                            }
+                        },
+                )
                 if (state.status == MediaPreviewStatus.PREPARING) {
                     CircularProgressIndicator(color = Color.White)
                 }
-                IconButton(
-                    onClick = onToggle,
-                    enabled = state.status != MediaPreviewStatus.PREPARING,
-                    modifier = Modifier
-                        .size(64.dp)
-                        .background(Color.Black.copy(alpha = 0.46f), MaterialTheme.shapes.extraLarge),
+                AnimatedVisibility(
+                    visible = centerControlVisible &&
+                        state.status != MediaPreviewStatus.PREPARING,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
                 ) {
-                    Icon(
-                        if (state.status == MediaPreviewStatus.PLAYING) Icons.Default.Pause
-                        else if (state.status == MediaPreviewStatus.ENDED) Icons.Default.Replay
-                        else Icons.Default.PlayArrow,
-                        contentDescription = if (state.status == MediaPreviewStatus.PLAYING) "暂停" else "播放",
-                        tint = Color.White,
-                        modifier = Modifier.size(38.dp),
-                    )
+                    IconButton(
+                        onClick = {
+                            revealCenterControl()
+                            onToggle()
+                        },
+                        modifier = Modifier
+                            .size(64.dp)
+                            .background(
+                                Color.Black.copy(alpha = 0.46f),
+                                MaterialTheme.shapes.extraLarge,
+                            ),
+                    ) {
+                        Icon(
+                            if (state.status == MediaPreviewStatus.PLAYING) Icons.Default.Pause
+                            else if (state.status == MediaPreviewStatus.ENDED) Icons.Default.Replay
+                            else Icons.Default.PlayArrow,
+                            contentDescription = if (
+                                state.status == MediaPreviewStatus.PLAYING
+                            ) "暂停" else "播放",
+                            tint = Color.White,
+                            modifier = Modifier.size(38.dp),
+                        )
+                    }
                 }
             }
             !hasPlayer -> VideoThumbnail(media, imageLoader, onToggle)
@@ -878,6 +1009,7 @@ private fun VideoPlayerSurface(player: Player) {
     ContentFrame(
         player = player,
         modifier = Modifier.fillMaxSize(),
+        surfaceType = SURFACE_TYPE_TEXTURE_VIEW,
         contentScale = ContentScale.Fit,
     )
 }
@@ -1044,9 +1176,11 @@ private fun FullscreenVideoPreview(
     }
     LaunchedEffect(state.status, controlsVisible, visibilityTimerVersion) {
         when {
-            state.status != MediaPreviewStatus.PLAYING -> controlsVisible = true
+            state.status in setOf(MediaPreviewStatus.ENDED, MediaPreviewStatus.PREPARING) -> {
+                controlsVisible = true
+            }
             controlsVisible -> {
-                delay(FULLSCREEN_CONTROLS_TIMEOUT_MS)
+                delay(VIDEO_CONTROLS_TIMEOUT_MS)
                 controlsVisible = false
             }
         }
@@ -1063,6 +1197,7 @@ private fun FullscreenVideoPreview(
                 ContentFrame(
                     player = player,
                     modifier = Modifier.fillMaxSize(),
+                    surfaceType = SURFACE_TYPE_TEXTURE_VIEW,
                     contentScale = ContentScale.Fit,
                 )
                 Box(
@@ -1070,14 +1205,11 @@ private fun FullscreenVideoPreview(
                         .fillMaxSize()
                         .pointerInput(state.status, controlsVisible) {
                             detectTapGestures {
-                                if (state.status == MediaPreviewStatus.PLAYING) {
-                                    if (controlsVisible) {
-                                        controlsVisible = false
-                                    } else {
-                                        revealControls()
-                                    }
-                                } else {
-                                    revealControls()
+                                when {
+                                    state.status == MediaPreviewStatus.PREPARING -> Unit
+                                    state.status == MediaPreviewStatus.ENDED -> revealControls()
+                                    controlsVisible -> controlsVisible = false
+                                    else -> revealControls()
                                 }
                             }
                         },
@@ -1157,16 +1289,8 @@ private fun FullscreenVideoPreview(
     }
 }
 
-private const val FULLSCREEN_CONTROLS_TIMEOUT_MS = 3_000L
-
-internal fun compactVideoAspectRatio(sourceRatio: Float): Float =
-    sourceRatio.takeIf { it.isFinite() && it > 0f }
-        ?.coerceIn(MIN_CARD_VIDEO_ASPECT_RATIO, MAX_CARD_VIDEO_ASPECT_RATIO)
-        ?: DEFAULT_VIDEO_ASPECT_RATIO
-
+private const val VIDEO_CONTROLS_TIMEOUT_MS = 3_000L
 private const val DEFAULT_VIDEO_ASPECT_RATIO = 16f / 9f
-private const val MIN_CARD_VIDEO_ASPECT_RATIO = 3f / 4f
-private const val MAX_CARD_VIDEO_ASPECT_RATIO = 2f
 
 private fun TaskPreviewMedia?.samePlaybackSource(other: TaskPreviewMedia): Boolean =
     this?.uri == other.uri

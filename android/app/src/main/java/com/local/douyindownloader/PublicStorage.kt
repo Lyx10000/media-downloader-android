@@ -15,7 +15,7 @@ object PublicStorage {
             val root = DocumentFile.fromTreeUri(context, Uri.parse(effectiveRoot(spec)))
                 ?.takeIf { it.exists() && it.canWrite() }
                 ?: error("自定义保存目录授权已经失效")
-            root.findFile(spec.taskFolder) ?: root.createDirectory(spec.taskFolder)
+            root.findRelativeDirectory(spec.taskFolder, create = true)
                 ?: error("无法创建任务目录 ${spec.taskFolder}")
         } else if (StorageInspector.hasAllFilesAccess()) {
             val directory = StorageInspector.defaultTaskDirectory(spec.taskFolder)
@@ -89,8 +89,7 @@ object PublicStorage {
     ): Uri {
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?: error("自定义保存目录授权已经失效")
-        val taskFolder = root.findFile(relativeFolder)
-            ?: root.createDirectory(relativeFolder)
+        val taskFolder = root.findRelativeDirectory(relativeFolder, create = true)
             ?: error("无法创建任务目录 $relativeFolder")
         val destination = relativeDirectory.split('/').filter(String::isNotBlank).fold(taskFolder) { parent, name ->
             parent.findFile(name)?.takeIf(DocumentFile::isDirectory)
@@ -120,5 +119,14 @@ object PublicStorage {
             segment.isNotBlank() && segment != "." && segment != ".." && '\u0000' !in segment
         }) { "保存子目录不合法" }
         return normalized
+    }
+}
+
+internal fun DocumentFile.findRelativeDirectory(path: String, create: Boolean): DocumentFile? {
+    val segments = path.trim('/').split('/').filter(String::isNotBlank)
+    if (segments.isEmpty() || segments.any { it == "." || it == ".." }) return null
+    return segments.fold(this as DocumentFile?) { parent, name ->
+        parent?.findFile(name)?.takeIf(DocumentFile::isDirectory)
+            ?: if (create) parent?.createDirectory(name) else null
     }
 }

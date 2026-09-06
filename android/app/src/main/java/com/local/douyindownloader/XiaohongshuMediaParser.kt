@@ -21,9 +21,15 @@ internal object XiaohongshuMediaParser {
             "[^\\s，。；：！？）】》]*",
         RegexOption.IGNORE_CASE,
     )
-    private val noteIdPattern = Regex(
-        "/(?:explore|discovery/item|note)/([0-9a-zA-Z_-]+)",
-        RegexOption.IGNORE_CASE,
+    private val noteIdPatterns = listOf(
+        Regex(
+            "/(?:explore|discovery/item|note)/([0-9a-zA-Z_-]+)",
+            RegexOption.IGNORE_CASE,
+        ),
+        Regex(
+            "/user/profile/[0-9a-zA-Z_-]+/([0-9a-zA-Z_-]+)",
+            RegexOption.IGNORE_CASE,
+        ),
     )
     private val imageCdns = listOf(
         "https://sns-img-bd.xhscdn.com",
@@ -46,7 +52,9 @@ internal object XiaohongshuMediaParser {
         return target.takeIf(::isXiaohongshuPage).orEmpty()
     }
 
-    fun noteIdFromUrl(url: String): String = noteIdPattern.find(url)?.groupValues?.get(1).orEmpty()
+    fun noteIdFromUrl(url: String): String = noteIdPatterns.firstNotNullOfOrNull { pattern ->
+        pattern.find(url)?.groupValues?.get(1)
+    }.orEmpty()
 
     fun extractInitialState(pageHtml: String): JSONObject? {
         val text = decodeHtmlEntities(pageHtml)
@@ -132,6 +140,25 @@ internal object XiaohongshuMediaParser {
             }.orEmpty()
         }
         return stableDistinct(explicitOriginals + traceCandidates + restored + defaults + previews)
+    }
+
+    /**
+     * Covers and avatars should prefer the URL the page actually rendered. Reconstructed
+     * origin candidates are valuable for downloads, but are not guaranteed to be valid for
+     * every thumbnail path returned by sns-webpic.
+     */
+    fun previewCandidates(value: Any?): List<String> {
+        val image = when (value) {
+            is String -> JSONObject().put("url", value)
+            is JSONObject -> value
+            else -> return emptyList()
+        }
+        val rendered = listOf(
+            "urlDefault", "url_default", "url", "urlPre", "url_pre", "preview",
+            "original", "originalUrl", "original_url", "urlOriginal", "url_original",
+            "urlList", "url_list", "infoList",
+        ).flatMap { asUrls(image.opt(it)) }
+        return stableDistinct(rendered + imageCandidates(image))
     }
 
     fun extractImageCandidates(note: JSONObject): List<List<String>> {
@@ -220,9 +247,13 @@ internal object XiaohongshuMediaParser {
         if (isVideo && variants.isEmpty()) {
             throw PlatformParseException("MEDIA_EMPTY", "当前笔记没有可直接下载的视频档位，可能只提供了 HLS 流")
         }
-        val cover = images.firstOrNull()?.firstOrNull().orEmpty().ifBlank {
-            imageCandidates(note.firstObject("cover")).firstOrNull().orEmpty()
-        }
+        val cover = imageObjects.firstOrNull()
+            ?.let(::previewCandidates)
+            ?.firstOrNull()
+            .orEmpty()
+            .ifBlank {
+                previewCandidates(note.firstObject("cover")).firstOrNull().orEmpty()
+            }
         return ParseResult(
             ok = true,
             platform = SourcePlatform.XIAOHONGSHU,
@@ -232,6 +263,11 @@ internal object XiaohongshuMediaParser {
             kind = if (isVideo) MediaKind.VIDEO else MediaKind.IMAGE,
             author = user.firstString("nickname", "nickName", "nick_name", "name"),
             authorAccountId = user.firstString("redId", "red_id"),
+            authorStableId = user.firstString("userId", "user_id", "id"),
+            authorProfileUrl = authorProfileUrl(note, canonicalUrl),
+            authorAvatarUrl = previewCandidates(
+                user.firstValue("avatar", "image", "avatarUrl", "avatar_url", "imageb", "images"),
+            ).firstOrNull().orEmpty(),
             description = note.firstString("title", "displayTitle", "display_title")
                 .ifBlank { note.firstString("desc", "description") },
             coverUrl = cover,
@@ -535,4 +571,8 @@ internal object XiaohongshuMediaParser {
     )
 }
 
-internal class PlatformParseException(val code: String, message: String) : Exception(message)
+internal class PlatformParseException(
+    val code: String,
+    message: String,
+    val statusCode: Int = 0,
+) : Exception(message)

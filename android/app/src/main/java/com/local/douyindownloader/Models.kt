@@ -155,6 +155,9 @@ data class ParseResult(
     val kind: MediaKind = MediaKind.VIDEO,
     val author: String = "",
     val authorAccountId: String = "",
+    val authorStableId: String = "",
+    val authorProfileUrl: String = "",
+    val authorAvatarUrl: String = "",
     val description: String = "",
     val coverUrl: String = "",
     val variants: List<MediaVariant> = emptyList(),
@@ -164,6 +167,7 @@ data class ParseResult(
     val musicUrls: List<String> = emptyList(),
     val livePhotos: List<LivePhotoPair> = emptyList(),
     val document: DocumentContent? = null,
+    val question: ZhihuQuestionInfo? = null,
     val responseShape: String = "{}",
     val errorCode: String = "",
     val message: String = "",
@@ -183,6 +187,9 @@ data class ParseResult(
                 put("kind", kind.wireValue)
                 put("author", author)
                 put("author_account_id", authorAccountId)
+                put("author_stable_id", authorStableId)
+                put("author_profile_url", authorProfileUrl)
+                put("author_avatar_url", authorAvatarUrl)
                 put("description", description)
                 put("cover_url", coverUrl)
                 put("variants", JSONArray().apply { variants.forEach { put(it.toJson()) } })
@@ -197,6 +204,7 @@ data class ParseResult(
                 put("music_urls", JSONArray(musicUrls))
                 put("live_photos", JSONArray().apply { livePhotos.forEach { put(it.toJson()) } })
                 document?.let { put("document", it.toJson()) }
+                question?.let { put("question_archive", it.toJson()) }
                 put(
                     "response_shape",
                     runCatching { JSONObject(responseShape) }.getOrElse { JSONObject() },
@@ -235,6 +243,9 @@ data class ParseResult(
                 kind = MediaKind.fromWire(root.optString("kind", MediaKind.VIDEO.wireValue)),
                 author = root.optString("author"),
                 authorAccountId = root.optString("author_account_id"),
+                authorStableId = root.optString("author_stable_id"),
+                authorProfileUrl = root.optString("author_profile_url"),
+                authorAvatarUrl = root.optString("author_avatar_url"),
                 description = root.optString("description"),
                 coverUrl = root.optString("cover_url"),
                 variants = variants,
@@ -248,6 +259,7 @@ data class ParseResult(
                     }
                 },
                 document = root.optJSONObject("document")?.let(DocumentContent::fromJson),
+                question = root.optJSONObject("question_archive")?.let(ZhihuQuestionInfo::fromJson),
                 responseShape = root.optJSONObject("response_shape")?.toString(2) ?: "{}",
                 rawJson = text,
             )
@@ -265,6 +277,12 @@ data class TaskSpec(
     val storageMode: StorageMode = StorageMode.LEGACY,
     val storageRoot: String = "",
     val taskFolder: String = taskFolderName(createdAt, taskId),
+    val authorKey: String = "",
+    val batchId: String = "",
+    val creatorChild: Boolean = false,
+    val questionArchiveId: String = "",
+    val questionChild: Boolean = false,
+    val zhihuCommentRequest: ZhihuCommentRequest? = null,
     val pendingRedownload: PendingRedownload? = null,
 ) {
     fun toJson(): String = JSONObject().apply {
@@ -277,6 +295,12 @@ data class TaskSpec(
         put("storage_mode", storageMode.wireValue)
         put("storage_root", storageRoot)
         put("task_folder", taskFolder)
+        put("author_key", authorKey)
+        put("batch_id", batchId)
+        put("creator_child", creatorChild)
+        put("question_archive_id", questionArchiveId)
+        put("question_child", questionChild)
+        zhihuCommentRequest?.let { put("zhihu_comment_request", it.toJson()) }
         pendingRedownload?.let { put("pending_redownload", it.toJson()) }
     }.toString()
 
@@ -300,6 +324,13 @@ data class TaskSpec(
                 taskFolder = root.optString("task_folder").ifBlank {
                     legacyTaskFolderName(createdAt)
                 },
+                authorKey = root.optString("author_key"),
+                batchId = root.optString("batch_id"),
+                creatorChild = root.optBoolean("creator_child"),
+                questionArchiveId = root.optString("question_archive_id"),
+                questionChild = root.optBoolean("question_child"),
+                zhihuCommentRequest = root.optJSONObject("zhihu_comment_request")
+                    ?.let(ZhihuCommentRequest::fromJson),
                 pendingRedownload = root.optJSONObject("pending_redownload")
                     ?.let(PendingRedownload::fromJson),
             )
@@ -310,6 +341,7 @@ data class TaskSpec(
         copy(
             result = pending.result,
             variantIndex = pending.variantIndex,
+            mode = pending.mode ?: mode,
             storageMode = pending.storageMode,
             storageRoot = pending.storageRoot,
             taskFolder = pending.taskFolder,
@@ -364,6 +396,7 @@ data class PendingRedownload(
     val storageMode: StorageMode,
     val storageRoot: String,
     val taskFolder: String,
+    val mode: DownloadMode? = null,
     val previousOutputs: List<TaskOutput>,
     val previousFileState: FileState,
     val stagedOutputs: List<TaskOutput> = emptyList(),
@@ -374,6 +407,7 @@ data class PendingRedownload(
         put("storage_mode", storageMode.wireValue)
         put("storage_root", storageRoot)
         put("task_folder", taskFolder)
+        mode?.let { put("mode", it.wireValue) }
         put("previous_outputs", JSONArray().apply { previousOutputs.forEach { put(it.toJson()) } })
         put("previous_file_state", previousFileState.wireValue)
         put("staged_outputs", JSONArray().apply { stagedOutputs.forEach { put(it.toJson()) } })
@@ -388,6 +422,7 @@ data class PendingRedownload(
             ),
             storageRoot = root.optString("storage_root"),
             taskFolder = root.optString("task_folder"),
+            mode = root.optString("mode").takeIf(String::isNotBlank)?.let(DownloadMode::fromWire),
             previousOutputs = root.optJSONArray("previous_outputs").let { array ->
                 if (array == null) emptyList() else (0 until array.length()).mapNotNull { index ->
                     TaskOutput.fromJson(array.opt(index))
@@ -418,6 +453,13 @@ data class TaskRecord(
     val platform: SourcePlatform = SourcePlatform.DOUYIN,
     val author: String = "",
     val authorAccountId: String = "",
+    val contentId: String = "",
+    val authorKey: String = "",
+    val batchId: String = "",
+    val creatorChild: Boolean = false,
+    val questionArchiveId: String = "",
+    val questionChild: Boolean = false,
+    val storageMode: StorageMode = StorageMode.LEGACY,
 ) {
     val outputUris: List<String> get() = outputs.map(TaskOutput::uri)
 }
@@ -427,6 +469,12 @@ fun taskFolderName(createdAt: Long, taskId: String): String =
 
 fun redownloadTaskFolderName(createdAt: Long, taskId: String): String =
     "${taskFolderName(createdAt, taskId)}_r${(createdAt % 1000).toString().padStart(3, '0')}"
+
+fun redownloadTaskFolderName(originalFolder: String, createdAt: Long, taskId: String): String {
+    val parent = originalFolder.substringBeforeLast('/', "")
+    val replacement = redownloadTaskFolderName(createdAt, taskId)
+    return if (parent.isBlank()) replacement else "$parent/$replacement"
+}
 
 fun legacyTaskFolderName(createdAt: Long): String =
     SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).apply {

@@ -63,11 +63,13 @@ internal class TaskRedownloadCoordinator @Inject constructor(
     private val sourceValidator: RedownloadSourceValidator,
     private val scheduler: DownloadScheduler,
     private val logger: DiagnosticLogger,
+    private val creatorRepository: CreatorLibraryRepository,
 ) {
     suspend fun retry(
         task: TaskRecord,
         cookieHeader: String,
         customTreeUri: String?,
+        overrideSettings: BatchDownloadSettings? = null,
     ): TaskRedownloadResult {
         val originalSpec = repository.getSpec(task.id)
             ?: return failure("旧任务缺少作品 ID，无法自动重新解析")
@@ -107,8 +109,17 @@ internal class TaskRedownloadCoordinator @Inject constructor(
         }
 
         val previous = originalSpec.result.variants.getOrNull(originalSpec.variantIndex)
-        val match = if (refreshed.kind == MediaKind.VIDEO) {
+        val match = if (refreshed.kind == MediaKind.VIDEO && overrideSettings == null) {
             matchVariant(previous, refreshed.variants)
+        } else if (refreshed.kind == MediaKind.VIDEO) {
+            VariantMatch(
+                chooseBatchVariant(
+                    refreshed.variants,
+                    overrideSettings!!.quality,
+                    overrideSettings.preferH264,
+                ),
+                exact = true,
+            )
         } else {
             VariantMatch(0, true)
         }
@@ -125,7 +136,10 @@ internal class TaskRedownloadCoordinator @Inject constructor(
 
         val now = System.currentTimeMillis()
         val selectedVariant = match.index.coerceAtLeast(0)
-        val preflight = sourceValidator.validate(refreshed, selectedVariant, originalSpec.mode)
+        val selectedMode = overrideSettings?.mode ?: originalSpec.mode
+        val refreshedAuthorKey = creatorRepository.upsertFromParse(refreshed)
+            .ifBlank { originalSpec.authorKey }
+        val preflight = sourceValidator.validate(refreshed, selectedVariant, selectedMode)
         logger.event(task.id, "REDOWNLOAD", "SOURCE_PREFLIGHT_COMPLETE", JSONObject().apply {
             put("required_groups", preflight.requiredGroups)
             put("verified_groups", preflight.verifiedGroups)
@@ -134,17 +148,22 @@ internal class TaskRedownloadCoordinator @Inject constructor(
         val currentTask = repository.get(task.id)
             ?: return failure("任务已被删除，无法开始重新下载")
         val updatedSpec = originalSpec.copy(
+            authorKey = refreshedAuthorKey,
             pendingRedownload = PendingRedownload(
                 result = refreshed,
                 variantIndex = selectedVariant,
                 storageMode = resolvedStorage.first,
                 storageRoot = resolvedStorage.second,
-                taskFolder = redownloadTaskFolderName(now, task.id),
+                taskFolder = redownloadTaskFolderName(originalSpec.taskFolder, now, task.id),
+                mode = selectedMode,
                 previousOutputs = currentTask.outputs,
                 previousFileState = currentTask.fileState,
             ),
         )
         repository.replaceSpec(task.id, updatedSpec)
+        if (refreshedAuthorKey.isNotBlank()) {
+            repository.updateAuthorKey(task.id, refreshedAuthorKey)
+        }
         repository.update(task.id, TaskStatus.QUEUED, "等待重新下载", 0)
         logger.event(task.id, "REDOWNLOAD", "REPARSE_COMPLETE", JSONObject().apply {
             put("variant", match.index)
@@ -250,6 +269,9 @@ internal class TaskRedownloadCoordinator @Inject constructor(
     private fun mergeStableMetadata(fresh: ParseResult, stored: ParseResult): ParseResult = fresh.copy(
         author = fresh.author.ifBlank { stored.author },
         authorAccountId = fresh.authorAccountId.ifBlank { stored.authorAccountId },
+        authorStableId = fresh.authorStableId.ifBlank { stored.authorStableId },
+        authorProfileUrl = fresh.authorProfileUrl.ifBlank { stored.authorProfileUrl },
+        authorAvatarUrl = fresh.authorAvatarUrl.ifBlank { stored.authorAvatarUrl },
         description = fresh.description.ifBlank { stored.description },
         coverUrl = fresh.coverUrl.ifBlank { stored.coverUrl },
     )

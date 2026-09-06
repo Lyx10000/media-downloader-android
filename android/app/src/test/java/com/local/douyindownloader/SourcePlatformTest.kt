@@ -55,7 +55,30 @@ class SourcePlatformTest {
             SourcePlatform.ZHIHU.loginUrl,
         )
         assertEquals(SourcePlatform.DOUYIN.homeUrl, SourcePlatform.DOUYIN.loginUrl)
-        assertEquals(SourcePlatform.XIAOHONGSHU.homeUrl, SourcePlatform.XIAOHONGSHU.loginUrl)
+        assertEquals("https://www.xiaohongshu.com/login", SourcePlatform.XIAOHONGSHU.loginUrl)
+    }
+
+    @Test
+    fun upgradesOnlyPlatformOwnedCleartextNavigation() {
+        assertEquals(
+            "https://www.xiaohongshu.com/login?from=home",
+            upgradePlatformCleartextUrl(
+                "http://www.xiaohongshu.com:80/login?from=home",
+                SourcePlatform.XIAOHONGSHU,
+            ),
+        )
+        assertNull(
+            upgradePlatformCleartextUrl(
+                "http://xiaohongshu.com.example.org/login",
+                SourcePlatform.XIAOHONGSHU,
+            ),
+        )
+        assertNull(
+            upgradePlatformCleartextUrl(
+                "https://www.xiaohongshu.com/login",
+                SourcePlatform.XIAOHONGSHU,
+            ),
+        )
     }
 
     @Test
