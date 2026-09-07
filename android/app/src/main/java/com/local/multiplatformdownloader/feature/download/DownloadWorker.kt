@@ -188,8 +188,13 @@ class DownloadWorker internal constructor(
                 taskFolder?.deleteRecursively()
                 return@withContext Result.success()
             }
+            val paused = runCatching {
+                repository.get(taskId)?.status == TaskStatus.PAUSED
+            }.getOrDefault(false)
             val pending = originalSpec?.pendingRedownload
-            if (pending != null && executionSpec != null) {
+            if (paused) {
+                safeEvent(taskId, "DOWNLOAD", "TASK_PAUSED")
+            } else if (pending != null && executionSpec != null) {
                 rollbackReplacement(
                     taskId,
                     originalSpec!!,
@@ -201,7 +206,7 @@ class DownloadWorker internal constructor(
             } else {
                 runCatching { repository.update(taskId, TaskStatus.CANCELLED, "已取消", 0) }
             }
-            safeEvent(taskId, "DOWNLOAD", "TASK_CANCELLED")
+            if (!paused) safeEvent(taskId, "DOWNLOAD", "TASK_CANCELLED")
             taskFolder?.deleteRecursively()
             throw cancelled
         } catch (error: Throwable) {

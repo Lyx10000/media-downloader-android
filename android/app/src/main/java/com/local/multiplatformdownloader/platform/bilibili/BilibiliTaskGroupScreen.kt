@@ -27,6 +27,7 @@ internal fun BilibiliTaskGroupCard(tasks: List<TaskRecord>, selected: Boolean = 
     trackProgress: Map<String, TaskTrackDownloadProgress> = emptyMap(),
     onOpen: () -> Unit,
     onToggle: () -> Unit = {},
+    showProgress: Boolean = true,
 ) {
     if (tasks.isEmpty()) return
     val completed = tasks.count { it.status == TaskStatus.COMPLETE && it.fileState == FileState.AVAILABLE }
@@ -40,8 +41,12 @@ internal fun BilibiliTaskGroupCard(tasks: List<TaskRecord>, selected: Boolean = 
                 PlatformBrandBadge(SourcePlatform.BILIBILI)
             }
             Text("${tasks.first().author} · ${tasks.size} 个分P任务", style = MaterialTheme.typography.bodySmall)
-            Text("$completed 个已完成 · $failed 个失败或取消 · 点击管理分P", style = MaterialTheme.typography.bodySmall)
-            if (active != null) {
+            Text(
+                if (showProgress) "$completed 个已完成 · $failed 个失败或取消 · 点击管理分P"
+                else "${tasks.size} 个分P · 点击查看本地内容",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (showProgress && active != null) {
                 Text(active.stage, style = MaterialTheme.typography.bodySmall)
                 trackProgress[active.id]?.let { TrackDownloadProgressBars(it) }
                     ?: LinearProgressIndicator(progress = { active.progress / 100f }, modifier = Modifier.fillMaxWidth())

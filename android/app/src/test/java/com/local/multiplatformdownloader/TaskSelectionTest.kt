@@ -8,7 +8,9 @@ import com.local.multiplatformdownloader.core.model.SourcePlatform
 import com.local.multiplatformdownloader.core.model.TaskRecord
 import com.local.multiplatformdownloader.core.model.TaskStatus
 import com.local.multiplatformdownloader.feature.tasks.batchRedownloadSummary
+import com.local.multiplatformdownloader.feature.tasks.isLocalContentTask
 import com.local.multiplatformdownloader.feature.tasks.isTaskRedownloadEligible
+import com.local.multiplatformdownloader.feature.tasks.isTaskQueueVisible
 import com.local.multiplatformdownloader.feature.tasks.reconcileTaskSelection
 import com.local.multiplatformdownloader.feature.tasks.toggleTaskSelection
 
@@ -88,6 +90,34 @@ class TaskSelectionTest {
         )
 
         assertEquals("第一行 第二行", taskDisplayTitle("作者", result))
+    }
+
+    @Test
+    fun completedTasksLeaveQueueButRemainInLocalLibrary() {
+        val completed = task(TaskStatus.COMPLETE).copy(
+            outputs = listOf(com.local.multiplatformdownloader.core.model.TaskOutput("content://file")),
+        )
+
+        assertEquals(false, isTaskQueueVisible(completed))
+        assertEquals(true, isLocalContentTask(completed))
+    }
+
+    @Test
+    fun partialFailedTaskRemainsInQueueAndLocalLibrary() {
+        val partial = task(TaskStatus.FAILED, FileState.PARTIAL).copy(
+            outputs = listOf(com.local.multiplatformdownloader.core.model.TaskOutput("content://partial")),
+        )
+
+        assertEquals(true, isTaskQueueVisible(partial))
+        assertEquals(true, isLocalContentTask(partial))
+    }
+
+    @Test
+    fun cancelledTaskWithoutFilesIsNotShownAnywhere() {
+        val cancelled = task(TaskStatus.CANCELLED, FileState.UNKNOWN)
+
+        assertEquals(false, isTaskQueueVisible(cancelled))
+        assertEquals(false, isLocalContentTask(cancelled))
     }
 
     private fun task(

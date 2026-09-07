@@ -97,7 +97,7 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun TaskHubScreen(
+internal fun LocalDownloadsScreen(
     uiState: MainUiState,
     viewModel: MainViewModel,
     creatorState: CreatorLibraryUiState,
@@ -107,6 +107,7 @@ internal fun TaskHubScreen(
     chooseFolder: () -> Unit,
     requestAllFilesAccess: () -> Unit,
     onManageTask: (String) -> Unit,
+    onOpenLocalTask: (String) -> Unit,
     selectionMode: Boolean,
     selectedTaskIds: Set<String>,
     taskPlatformFilter: SourcePlatform?,
@@ -117,7 +118,11 @@ internal fun TaskHubScreen(
     onOpenQuestionArchive: (String) -> Unit,
 ) {
     val creator = creatorState.selectedCreator
-    val adaptiveDownloadState by viewModel.adaptiveDownloadState.collectAsStateWithLifecycle()
+    val authorKeys = creatorState.creators.mapTo(hashSetOf(), CreatorProfile::key)
+    val localIndependentTasks = uiState.allTasks.filter { task ->
+        (task.outputs.isNotEmpty() || task.status == TaskStatus.COMPLETE) &&
+            taskCreatorKey(task) !in authorKeys
+    }
     DisposableEffect(Unit) {
         viewModel.onTasksVisible()
         onDispose(viewModel::onTasksHidden)
@@ -128,7 +133,7 @@ internal fun TaskHubScreen(
                 Tab(
                     selected = selectedSection == 0,
                     onClick = { onSelectedSection(0) },
-                    text = { Text("独立任务") },
+                    text = { Text("独立作品") },
                 )
                 Tab(
                     selected = selectedSection == 1,
@@ -143,10 +148,11 @@ internal fun TaskHubScreen(
                 creatorViewModel,
                 viewModel,
                 onManageTask,
+                onOpenLocalTask,
                 requestAllFilesAccess,
             )
             selectedSection == 0 -> TasksScreen(
-                tasks = uiState.tasks,
+                tasks = localIndependentTasks,
                 questionArchives = uiState.questionArchives,
                 viewModel = viewModel,
                 chooseFolder = chooseFolder,
@@ -160,11 +166,14 @@ internal fun TaskHubScreen(
                 focusedTaskId = focusedTaskId,
                 onTaskFocused = onTaskFocused,
                 onOpenQuestionArchive = onOpenQuestionArchive,
+                showAdaptiveStatus = false,
+                allowPreview = true,
+                showTransferControls = false,
+                emptyText = "还没有独立作品",
             )
             else -> CreatorLibraryScreen(
                 state = creatorState,
                 viewModel = creatorViewModel,
-                taskBytesPerSecond = adaptiveDownloadState.taskBytesPerSecond,
                 requestAllFilesAccess = requestAllFilesAccess,
             )
         }
@@ -173,10 +182,9 @@ internal fun TaskHubScreen(
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun CreatorLibraryScreen(
+internal fun CreatorLibraryScreen(
     state: CreatorLibraryUiState,
     viewModel: CreatorLibraryViewModel,
-    taskBytesPerSecond: Map<String, Long>,
     requestAllFilesAccess: () -> Unit,
 ) {
     val visibleCreators = filterCreatorsByPlatform(state.creators, state.platformFilter)
@@ -203,7 +211,7 @@ private fun CreatorLibraryScreen(
             showDeleteDialog = false
         }
     }
-    if (state.creators.none { it.platform in CREATOR_BATCH_PLATFORMS }) {
+    if (state.creators.none { it.platform in CREATOR_LIBRARY_PLATFORMS }) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("还没有关注的作者")
         }
@@ -227,7 +235,7 @@ private fun CreatorLibraryScreen(
                         onClick = { viewModel.setPlatformFilter(null) },
                         label = { Text("全部") },
                     )
-                    CREATOR_BATCH_PLATFORMS.forEach { platform ->
+                    CREATOR_LIBRARY_PLATFORMS.forEach { platform ->
                         FilterChip(
                             selected = state.platformFilter == platform,
                             onClick = { viewModel.setPlatformFilter(platform) },
@@ -306,8 +314,7 @@ private fun CreatorLibraryScreen(
         items(active, key = CreatorProfile::key) { profile ->
             CreatorCard(
                 profile = profile,
-                batchSummary = state.batchSummaries[profile.key],
-                taskBytesPerSecond = taskBytesPerSecond,
+                taskSummary = state.taskSummaries[profile.key],
                 onClick = {
                     if (selectionMode) {
                         selectedCreatorKeys = toggleTaskSelection(selectedCreatorKeys, profile.key)
@@ -334,8 +341,7 @@ private fun CreatorLibraryScreen(
             items(archived, key = CreatorProfile::key) { profile ->
                 CreatorCard(
                     profile = profile,
-                    batchSummary = state.batchSummaries[profile.key],
-                    taskBytesPerSecond = taskBytesPerSecond,
+                    taskSummary = state.taskSummaries[profile.key],
                     onClick = {
                         if (selectionMode) {
                             selectedCreatorKeys = toggleTaskSelection(selectedCreatorKeys, profile.key)
@@ -400,8 +406,7 @@ private fun CreatorLibraryScreen(
 @Composable
 private fun CreatorCard(
     profile: CreatorProfile,
-    batchSummary: CreatorBatchSummary?,
-    taskBytesPerSecond: Map<String, Long>,
+    taskSummary: CreatorTaskSummary?,
     onClick: () -> Unit,
     archived: Boolean = false,
     selectionMode: Boolean = false,
@@ -454,30 +459,13 @@ private fun CreatorCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                batchSummary?.takeIf(CreatorBatchSummary::visible)?.let { summary ->
-                    val totalSpeed = summary.activeTaskIds.sumOf { taskBytesPerSecond[it] ?: 0L }
+                taskSummary?.takeIf { it.localCount > 0 }?.let { summary ->
                     Text(
-                        when {
-                            summary.paused > 0 ->
-                                "批量进度 ${summary.processed}/${summary.selected} · 已暂停，可进入继续"
-                            summary.foregroundRequired > 0 ->
-                                "批量进度 ${summary.processed}/${summary.selected} · 需要前台准备"
-                            else -> buildString {
-                                append("批量进度 ${summary.processed}/${summary.selected}")
-                                if (summary.activeTaskIds.isNotEmpty()) {
-                                    append(" · 总速度 ")
-                                    append(if (totalSpeed > 0L) "${formatByteSize(totalSpeed)}/s" else "正在统计")
-                                }
-                            }
-                        },
+                        "本地 ${summary.localCount} 个作品" +
+                            summary.downloadedBytes.takeIf { it > 0L }
+                                ?.let { " · ${formatByteSize(it)}" }.orEmpty(),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (summary.paused > 0 || summary.foregroundRequired > 0) {
-                            MaterialTheme.colorScheme.tertiary
-                        } else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    LinearProgressIndicator(
-                        progress = { summary.progressFraction },
-                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -495,6 +483,7 @@ private fun CreatorDetailScreen(
     viewModel: CreatorLibraryViewModel,
     mainViewModel: MainViewModel,
     onManageTask: (String) -> Unit,
+    onOpenLocalTask: (String) -> Unit,
     requestAllFilesAccess: () -> Unit,
 ) {
     val profile = state.selectedCreator ?: return
@@ -502,17 +491,18 @@ private fun CreatorDetailScreen(
     var showBatchSettings by remember { mutableStateOf(false) }
     var openBilibiliGroup by remember(profile.key) { mutableStateOf<String?>(null) }
     var showStopDialog by remember { mutableStateOf(false) }
-    var deleteArchivedFiles by remember { mutableStateOf(false) }
     var recordSelectionMode by remember(profile.key) { mutableStateOf(false) }
     var selectedLocalWorkKeys by remember(profile.key) { mutableStateOf<Set<String>>(emptySet()) }
     var showRecordDeleteDialog by remember(profile.key) { mutableStateOf(false) }
     var showRecordRedownloadDialog by remember(profile.key) { mutableStateOf(false) }
     var deleteRecordFiles by remember(profile.key) { mutableStateOf(false) }
     val displayedWorks = if (detailTab == 0) state.pageWorks else {
-        state.allWorks.filter { it.hasLocalRecord }.sortedByDescending { maxOf(it.task?.createdAt ?: 0L, it.preparationCreatedAt) }
+        state.allWorks.filter(CreatorWork::hasLocalContent)
+            .sortedByDescending { it.task?.createdAt ?: 0L }
     }
     val selectableLocalWorkKeys = state.allWorks
-        .filter { it.task?.let { task -> task.status != TaskStatus.DELETING } == true || it.preparationActionable }
+        .filter(CreatorWork::hasLocalContent)
+        .filter { it.task?.status != TaskStatus.DELETING }
         .mapTo(linkedSetOf(), CreatorWork::key)
     val selectedLocalWorks = state.allWorks.filter { it.key in selectedLocalWorkKeys }
     val selectedPreparations = selectedLocalWorks.filter { it.preparationActionable }.mapTo(linkedSetOf(), CreatorWork::key)
@@ -527,7 +517,6 @@ private fun CreatorDetailScreen(
     val preparation = state.batchPreparations[profile.key]
     val localDownloadBytes = state.taskSummaries[profile.key]?.downloadedBytes ?: 0L
     val lifecycleOwner = LocalLifecycleOwner.current
-    val trackDownloadProgress by mainViewModel.trackDownloadProgress.collectAsStateWithLifecycle()
     BackHandler {
         if (recordSelectionMode) {
             recordSelectionMode = false
@@ -669,6 +658,7 @@ private fun CreatorDetailScreen(
                     profile,
                     onStop = { showStopDialog = true },
                     onFollow = { viewModel.followCreator(profile) },
+                    actionsEnabled = state.organizingCreatorKey != profile.key,
                 )
             }
             state.batchSummaries[profile.key]?.takeIf { it.paused > 0 }?.let { summary ->
@@ -750,9 +740,11 @@ private fun CreatorDetailScreen(
                         work.relatedTasks,
                         work.key in selectedLocalWorkKeys,
                         recordSelectionMode,
-                        trackDownloadProgress,
+                        emptyMap(),
                         onOpen = { openBilibiliGroup = work.contentId.substringBefore(':') },
-                        onToggle = { selectedLocalWorkKeys = toggleTaskSelection(selectedLocalWorkKeys, work.key) })
+                        onToggle = { selectedLocalWorkKeys = toggleTaskSelection(selectedLocalWorkKeys, work.key) },
+                        showProgress = false,
+                    )
                     return@items
                 }
                 CreatorWorkCard(
@@ -782,6 +774,8 @@ private fun CreatorDetailScreen(
                             onManageTask(task.id)
                         }
                     },
+                    onOpen = work.task?.takeIf { detailTab == 1 && !recordSelectionMode }
+                        ?.let { task -> { onOpenLocalTask(task.id) } },
                     onRetry = work.task?.takeIf {
                         !recordSelectionMode &&
                             it.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED)
@@ -789,8 +783,8 @@ private fun CreatorDetailScreen(
                         ?: if (!recordSelectionMode && work.preparationActionable && !state.isStartingBatch) {
                             { viewModel.retryLocalPreparations(setOf(work.key)) }
                         } else null,
-                    showLocalProgress = detailTab == 1,
-                    trackProgress = work.task?.id?.let(trackDownloadProgress::get),
+                    showLocalProgress = false,
+                    trackProgress = null,
                 )
             }
             if (detailTab == 0) {
@@ -799,7 +793,7 @@ private fun CreatorDetailScreen(
                 }
             }
         }
-        if (detailTab == 0) {
+        if (detailTab == 0 && profile.platform in CREATOR_BATCH_PLATFORMS) {
             CreatorSelectionBar(state, viewModel, onDownload = { showBatchSettings = true })
         }
     }
@@ -915,28 +909,15 @@ private fun CreatorDetailScreen(
             text = {
                 Column {
                     Text(
-                        if (profile.archived) "删除作者及其任务记录。"
+                        if (profile.archived) "仅删除作者归档记录，本地作品会转入独立作品。"
                         else "已有下载记录时会转入本地归档，文件和历史不会被删除。",
                     )
-                    if (profile.archived) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = deleteArchivedFiles,
-                                onCheckedChange = { deleteArchivedFiles = it },
-                            )
-                            Text("同时删除该作者的全部下载文件和目录")
-                        }
-                    }
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    if (profile.archived && deleteArchivedFiles &&
-                        viewModel.deleteRequiresAllFilesAccess(profile)
-                    ) {
-                        requestAllFilesAccess()
-                    } else if (profile.archived) {
-                        viewModel.deleteArchived(profile, deleteArchivedFiles)
+                    if (profile.archived) {
+                        viewModel.deleteArchived(profile)
                     } else {
                         viewModel.stopFollowing(profile)
                     }
@@ -954,6 +935,7 @@ private fun CreatorProfileHeader(
     profile: CreatorProfile,
     onStop: () -> Unit,
     onFollow: () -> Unit,
+    actionsEnabled: Boolean,
 ) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -996,9 +978,9 @@ private fun CreatorProfileHeader(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (profile.archived) {
-                    Button(onClick = onFollow) { Text("重新关注") }
+                    Button(onClick = onFollow, enabled = actionsEnabled) { Text("重新关注") }
                 }
-                TextButton(onClick = onStop) {
+                TextButton(onClick = onStop, enabled = actionsEnabled) {
                     Text(if (profile.archived) "删除归档" else "停止关注")
                 }
             }
@@ -1013,6 +995,7 @@ private fun CreatorWorkCard(
     selectionEnabled: Boolean,
     onToggle: () -> Unit,
     onManage: (() -> Unit)? = null,
+    onOpen: (() -> Unit)? = null,
     onRetry: (() -> Unit)? = null,
     showLocalProgress: Boolean = false,
     trackProgress: TaskTrackDownloadProgress? = null,
@@ -1078,8 +1061,11 @@ private fun CreatorWorkCard(
                             style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                if (onManage != null || onRetry != null) {
+                if (onOpen != null || onManage != null || onRetry != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        onOpen?.let { action ->
+                            TextButton(onClick = action) { Text("预览") }
+                        }
                         onManage?.let { action ->
                             TextButton(onClick = action) { Text("管理文件") }
                         }

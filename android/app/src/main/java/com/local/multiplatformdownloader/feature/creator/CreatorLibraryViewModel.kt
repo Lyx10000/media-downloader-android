@@ -79,6 +79,7 @@ data class CreatorLibraryUiState(
     val webResolveRequest: CreatorWebResolveRequest? = null,
     val pageWebRefreshRequest: CreatorPageWebRefreshRequest? = null,
     val isDeletingCreators: Boolean = false,
+    val organizingCreatorKey: String = "",
 )
 
 data class CreatorTaskSummary(
@@ -86,6 +87,7 @@ data class CreatorTaskSummary(
     val running: Int,
     val complete: Int,
     val failed: Int,
+    val localCount: Int = 0,
     val downloadedBytes: Long = 0L,
 )
 
@@ -105,6 +107,7 @@ class CreatorLibraryViewModel @Inject internal constructor(
     private val deletionCoordinator: TaskDeletionCoordinator,
     private val taskFolderPruner: TaskFolderPruner,
     private val logger: DiagnosticLogger,
+    private val fileOrganizer: CreatorFileOrganizer,
 ) : ViewModel() {
     private val _state = MutableStateFlow(CreatorLibraryUiState())
     val state: StateFlow<CreatorLibraryUiState> = _state.asStateFlow()
@@ -144,8 +147,8 @@ class CreatorLibraryViewModel @Inject internal constructor(
                 observedTasks = tasks
                 _state.update { current ->
                     current.copy(
-                        taskSummaries = tasks.filter { it.authorKey.isNotBlank() }
-                            .groupBy(TaskRecord::authorKey)
+                        taskSummaries = tasks.filter { taskCreatorKey(it).isNotBlank() }
+                            .groupBy(::taskCreatorKey)
                             .mapValues { (_, authorTasks) ->
                                 CreatorTaskSummary(
                                     total = authorTasks.size,
@@ -155,6 +158,9 @@ class CreatorLibraryViewModel @Inject internal constructor(
                                     complete = authorTasks.count { it.status == TaskStatus.COMPLETE },
                                     failed = authorTasks.count {
                                         it.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED)
+                                    },
+                                    localCount = authorTasks.count {
+                                        it.outputs.isNotEmpty() || it.status == TaskStatus.COMPLETE
                                     },
                                     downloadedBytes = creatorLocalDownloadBytes(authorTasks),
                                 )
@@ -364,11 +370,27 @@ class CreatorLibraryViewModel @Inject internal constructor(
 
     fun confirmCreator(onConfirmed: () -> Unit = {}) {
         val candidate = _state.value.candidate ?: return
+        if (hasActiveDownloads(candidate.key)) {
+            notify("该作者有任务正在下载，完成或取消后才能收藏")
+            return
+        }
         viewModelScope.launch {
-            creatorRepository.upsert(candidate.copy(followed = true, archived = false))
-            _state.update { it.copy(candidate = null, query = "") }
-            openCreator(candidate.key)
-            onConfirmed()
+            _state.update { it.copy(organizingCreatorKey = candidate.key) }
+            try {
+                val followed = candidate.copy(followed = true, archived = false)
+                creatorRepository.upsert(followed)
+                val result = fileOrganizer.organize(followed)
+                notify(result.message)
+                _state.update { it.copy(candidate = null, query = "") }
+                openCreator(candidate.key)
+                onConfirmed()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                notify("收藏作者失败：${Redactor.sanitize(error.message ?: error.javaClass.simpleName)}")
+            } finally {
+                _state.update { it.copy(organizingCreatorKey = "") }
+            }
         }
     }
 
@@ -379,11 +401,9 @@ class CreatorLibraryViewModel @Inject internal constructor(
         nextCursor = ""
         viewModelScope.launch {
             val profile = creatorRepository.getCreator(key) ?: return@launch
-            if (profile.platform !in CREATOR_BATCH_PLATFORMS) {
-                notify("小红书作者批量下载已停止支持")
-                return@launch
+            if (profile.platform in CREATOR_BATCH_PLATFORMS) {
+                creatorBatchCoordinator.recoverInterruptedPreparation(key)
             }
-            creatorBatchCoordinator.recoverInterruptedPreparation(key)
             _state.update {
                 it.copy(
                     selectedCreator = profile,
@@ -425,7 +445,9 @@ class CreatorLibraryViewModel @Inject internal constructor(
             val stale = System.currentTimeMillis() - profile.refreshedAt >= CACHE_MAX_AGE_MS
             val legacyOversizedPage = profile.platform == SourcePlatform.ZHIHU &&
                 cached.size > CREATOR_PAGE_SIZE
-            if (profile.followed && (cached.isEmpty() || stale || legacyOversizedPage)) {
+            if (profile.followed && profile.platform in CREATOR_BATCH_PLATFORMS &&
+                (cached.isEmpty() || stale || legacyOversizedPage)
+            ) {
                 loadPage(1, "", force = true)
             }
         }
@@ -791,8 +813,12 @@ class CreatorLibraryViewModel @Inject internal constructor(
     }
 
     fun stopFollowing(profile: CreatorProfile) {
+        if (hasActiveDownloads(profile.key)) {
+            notify("该作者有任务正在下载，完成或取消后才能取消收藏")
+            return
+        }
         viewModelScope.launch {
-            val hasDownloads = taskRepository.listForAuthor(profile.key).isNotEmpty() ||
+            val hasDownloads = tasksForCreator(profile.key).isNotEmpty() ||
                 (_state.value.batchSummaries[profile.key]?.selected ?: 0) > 0
             creatorRepository.setFollowed(profile, followed = false, hasDownloads = hasDownloads)
             if (_state.value.selectedCreator?.key == profile.key) closeCreator()
@@ -800,34 +826,48 @@ class CreatorLibraryViewModel @Inject internal constructor(
     }
 
     fun followCreator(profile: CreatorProfile) {
+        if (hasActiveDownloads(profile.key)) {
+            notify("该作者有任务正在下载，完成或取消后才能收藏")
+            return
+        }
         viewModelScope.launch {
-            creatorRepository.setFollowed(profile, followed = true, hasDownloads = true)
-            val refreshed = creatorRepository.getCreator(profile.key)
-            if (refreshed != null) {
-                _state.update { it.copy(selectedCreator = refreshed) }
-                loadPage(1, "", force = true)
+            _state.update { it.copy(organizingCreatorKey = profile.key) }
+            try {
+                creatorRepository.setFollowed(profile, followed = true, hasDownloads = true)
+                val followed = creatorRepository.getCreator(profile.key)
+                if (followed != null) {
+                    val result = fileOrganizer.organize(followed)
+                    notify(result.message)
+                    _state.update { it.copy(selectedCreator = followed) }
+                    if (followed.platform in CREATOR_BATCH_PLATFORMS) loadPage(1, "", force = true)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                notify("收藏作者失败：${Redactor.sanitize(error.message ?: error.javaClass.simpleName)}")
+            } finally {
+                _state.update { it.copy(organizingCreatorKey = "") }
             }
         }
     }
 
-    fun deleteArchived(profile: CreatorProfile, deleteFiles: Boolean) {
+    private fun hasActiveDownloads(creatorKey: String): Boolean = observedTasks.any { task ->
+        taskCreatorKey(task) == creatorKey && task.status !in setOf(
+            TaskStatus.COMPLETE,
+            TaskStatus.CANCELLED,
+        )
+    }
+
+    private suspend fun tasksForCreator(creatorKey: String): List<TaskRecord> =
+        taskRepository.listAll().filter { taskCreatorKey(it) == creatorKey }
+
+    fun deleteArchived(profile: CreatorProfile) {
         viewModelScope.launch {
             try {
                 creatorBatchCoordinator.cancelForCreator(profile.key)
-                val authorTasks = taskRepository.listForAuthor(profile.key)
-                val specs = authorTasks.mapNotNull { taskRepository.getSpec(it.id) }
-                var failures = 0
-                authorTasks.forEach { task ->
-                    if (!deletionCoordinator.deleteTask(task.id, deleteFiles).success) failures += 1
-                }
-                if (failures == 0) {
-                    if (deleteFiles) specs.forEach(taskFolderPruner::pruneCreatorParents)
-                    creatorRepository.deleteCreatorRecords(profile)
-                    closeCreator()
-                    notify(if (deleteFiles) "作者记录和下载目录已删除" else "作者记录已删除，本地文件已保留")
-                } else {
-                    notify("$failures 个任务未能删除，作者归档已保留")
-                }
+                creatorRepository.deleteCreatorRecords(profile)
+                closeCreator()
+                notify("作者归档已删除，本地作品已转入独立作品")
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -836,17 +876,12 @@ class CreatorLibraryViewModel @Inject internal constructor(
         }
     }
 
-    fun deleteRequiresAllFilesAccess(profile: CreatorProfile): Boolean =
-        observedTasks.any { task ->
-            task.authorKey == profile.key && task.storageMode != StorageMode.SAF
-        } && !StorageInspector.hasAllFilesAccess()
-
     fun bulkDeleteRequiresAllFilesAccess(creatorKeys: Set<String>): Boolean {
         val activeKeys = _state.value.creators.asSequence()
             .filter { it.key in creatorKeys && !it.archived }
             .mapTo(hashSetOf(), CreatorProfile::key)
         return activeKeys.isNotEmpty() &&
-            observedTasks.any { it.authorKey in activeKeys && it.storageMode != StorageMode.SAF } &&
+            observedTasks.any { taskCreatorKey(it) in activeKeys && it.storageMode != StorageMode.SAF } &&
             !StorageInspector.hasAllFilesAccess()
     }
 
@@ -883,7 +918,7 @@ class CreatorLibraryViewModel @Inject internal constructor(
                     creatorRepository.deleteCreatorRecords(profile)
                     deletedArchives += 1
                 } else {
-                    val authorTasks = taskRepository.listForAuthor(profile.key)
+                    val authorTasks = tasksForCreator(profile.key)
                     if (
                         authorTasks.any { it.storageMode != StorageMode.SAF } &&
                         !StorageInspector.hasAllFilesAccess()

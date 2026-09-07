@@ -133,6 +133,7 @@ interface TaskDao {
         """
         UPDATE tasks SET status = :status, stage = :stage, progress = :progress, error = :error
         WHERE id = :taskId AND status != 'DELETING'
+            AND (status != 'PAUSED' OR :status IN ('PAUSED', 'QUEUED', 'CANCELLED'))
         """,
     )
     suspend fun updateUnlessDeleting(

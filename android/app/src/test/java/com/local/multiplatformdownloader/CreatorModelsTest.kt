@@ -50,8 +50,8 @@ class CreatorModelsTest {
         val xhs = profile("xhs", SourcePlatform.XIAOHONGSHU)
         val zhihu = profile("zhihu", SourcePlatform.ZHIHU)
 
-        assertEquals(listOf(douyin, zhihu), filterCreatorsByPlatform(listOf(douyin, xhs, zhihu), null))
-        assertEquals(emptyList<CreatorProfile>(), filterCreatorsByPlatform(listOf(douyin, xhs, zhihu), SourcePlatform.XIAOHONGSHU))
+        assertEquals(listOf(douyin, xhs, zhihu), filterCreatorsByPlatform(listOf(douyin, xhs, zhihu), null))
+        assertEquals(listOf(xhs), filterCreatorsByPlatform(listOf(douyin, xhs, zhihu), SourcePlatform.XIAOHONGSHU))
     }
 
     @Test
@@ -143,7 +143,7 @@ class CreatorModelsTest {
         )
         val folder = creatorWorkFolder(profile, work("123"), 1_700_000_000_000L)
 
-        assertTrue(folder.startsWith("抖音/name_bad_account_one_12345678/"))
+        assertTrue(folder.startsWith("作者/抖音/name_bad_account_one_12345678/"))
         assertFalse(':' in folder)
     }
 

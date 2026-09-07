@@ -126,9 +126,9 @@ import kotlinx.coroutines.launch
 
 
 @Composable
-internal fun EmptyTasksStatus() {
+internal fun EmptyTasksStatus(text: String = "暂无进行中的任务") {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("还没有下载任务")
+        Text(text)
     }
 }
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -149,6 +149,15 @@ internal fun TasksScreen(
     onTaskFocused: () -> Unit,
     onOpenQuestionArchive: (String) -> Unit,
     groupBilibili: Boolean = true,
+    modifier: Modifier = Modifier,
+    showPlatformFilter: Boolean = groupBilibili,
+    showAdaptiveStatus: Boolean = groupBilibili,
+    allowPreview: Boolean = true,
+    allowFileActions: Boolean = true,
+    showTransferControls: Boolean = true,
+    emptyText: String = "暂无进行中的任务",
+    creatorGroups: List<ActiveCreatorTaskGroup> = emptyList(),
+    onOpenCreatorGroup: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
@@ -170,11 +179,12 @@ internal fun TasksScreen(
     DisposableEffect(previewImageLoader) {
         onDispose(previewImageLoader::shutdown)
     }
-    if (tasks.isEmpty()) {
-        EmptyTasksStatus()
+    if (tasks.isEmpty() && creatorGroups.isEmpty()) {
+        EmptyTasksStatus(emptyText)
         return
     }
     var openBilibiliGroup by remember { mutableStateOf<String?>(null) }
+    var openCreatorGroup by remember { mutableStateOf<String?>(null) }
     val bilibiliGroups = if (groupBilibili) tasks.filter { bilibiliGroupKey(it) != null }.groupBy { bilibiliGroupKey(it)!! } else emptyMap()
     val ungroupedTasks = tasks.filter { task -> bilibiliGroupKey(task)?.let { bilibiliGroups[it]?.firstOrNull()?.id?.let { id -> id == task.id } } ?: true }
     val visibleTasks = if (platformFilter == null) ungroupedTasks else {
@@ -196,11 +206,12 @@ internal fun TasksScreen(
         }
     }
     LazyColumn(
+        modifier = modifier,
         state = listState,
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (groupBilibili) item(key = "platform-filter") {
+        if (showPlatformFilter) item(key = "platform-filter") {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = platformFilter == null,
@@ -216,12 +227,12 @@ internal fun TasksScreen(
                 }
             }
         }
-        if (groupBilibili && adaptiveDownloadState.shouldDisplay()) {
+        if (showAdaptiveStatus && adaptiveDownloadState.shouldDisplay()) {
             item(key = "adaptive-concurrency") {
                 AdaptiveConcurrencyStatusCard(adaptiveDownloadState)
             }
         }
-        if (visibleTasks.isEmpty()) {
+        if (creatorGroups.isEmpty() && visibleTasks.isEmpty()) {
             item(key = "empty-platform") {
                 Text(
                     "当前平台还没有下载任务",
@@ -229,6 +240,24 @@ internal fun TasksScreen(
                     modifier = Modifier.padding(vertical = 24.dp),
                 )
             }
+        }
+        items(creatorGroups, key = { "creator-group:${it.profile.key}" }) { group ->
+            ActiveCreatorTaskGroupCard(
+                group = group,
+                platformRiskUntil = adaptiveDownloadState.platformRiskUntil,
+                onOpen = {
+                    if (group.tasks.isEmpty()) onOpenCreatorGroup(group.profile.key)
+                    else openCreatorGroup = group.profile.key
+                },
+                selectionMode = selectionMode,
+                selected = group.tasks.all { it.id in selectedTaskIds },
+                onToggle = {
+                    val remove = group.tasks.all { it.id in selectedTaskIds }
+                    group.tasks
+                        .filter { it.status != TaskStatus.DELETING && ((it.id in selectedTaskIds) == remove) }
+                        .forEach { onToggleTaskSelection(it.id) }
+                },
+            )
         }
         items(visibleTasks, key = TaskRecord::id) { task ->
             val group = bilibiliGroupKey(task)?.let { bilibiliGroups[it] }
@@ -307,6 +336,18 @@ internal fun TasksScreen(
                                 checked = task.id in selectedTaskIds,
                                 onCheckedChange = { onToggleTaskSelection(task.id) },
                                 enabled = task.status != TaskStatus.DELETING,
+                            )
+                        }
+                        if (task.coverUrl.isNotBlank()) {
+                            SubcomposeAsyncImage(
+                                model = task.coverUrl,
+                                imageLoader = previewImageLoader,
+                                contentDescription = "${task.title}缩略图",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .padding(end = 12.dp)
+                                    .size(58.dp)
+                                    .clip(MaterialTheme.shapes.medium),
                             )
                         }
                         Column(modifier = Modifier.weight(1f)) {
@@ -403,12 +444,17 @@ internal fun TasksScreen(
                         )
                     }
                     Text(
-                        when (task.fileState) {
-                            FileState.PARTIAL -> "部分文件已删除"
-                            FileState.MISSING -> "文件已被删除"
-                            FileState.STORAGE_UNAVAILABLE -> "保存目录已失效"
-                            FileState.DELETE_FAILED -> "部分内容删除失败"
-                            else -> task.stage
+                        when {
+                            task.status == TaskStatus.QUEUED &&
+                                (adaptiveDownloadState.platformRiskUntil[task.platform] ?: 0L) >
+                                System.currentTimeMillis() -> "等待风控冷却"
+                            else -> when (task.fileState) {
+                                FileState.PARTIAL -> "部分文件已删除"
+                                FileState.MISSING -> "文件已被删除"
+                                FileState.STORAGE_UNAVAILABLE -> "保存目录已失效"
+                                FileState.DELETE_FAILED -> "部分内容删除失败"
+                                else -> task.stage
+                            }
                         },
                     )
                     if (task.status == TaskStatus.COMPLETE) {
@@ -421,9 +467,10 @@ internal fun TasksScreen(
                         }
                     }
                     val taskTrackProgress = trackDownloadProgress[task.id]
-                    if (taskTrackProgress != null && task.status == TaskStatus.RUNNING) {
+                    if (showTransferControls && taskTrackProgress != null && task.status == TaskStatus.RUNNING) {
                         TrackDownloadProgressBars(taskTrackProgress)
                     } else if (
+                        showTransferControls &&
                         task.status == TaskStatus.RUNNING &&
                         shouldShowDownloadProgress(task.stage)
                     ) {
@@ -432,8 +479,18 @@ internal fun TasksScreen(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    if (!selectionMode && task.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)) {
-                        OutlinedButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
+                    if (showTransferControls && !selectionMode &&
+                        task.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)
+                    ) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { viewModel.pauseTask(task) }) { Text("暂停") }
+                            OutlinedButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
+                        }
+                    } else if (showTransferControls && !selectionMode && task.status == TaskStatus.PAUSED) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { viewModel.resumeTask(task) }) { Text("继续") }
+                            OutlinedButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
+                        }
                     }
                     if (task.error.isNotBlank()) {
                         Text(task.error, color = MaterialTheme.colorScheme.error)
@@ -481,7 +538,8 @@ internal fun TasksScreen(
                                     Text("重新下载")
                                 }
                             }
-                            if (filesAvailable) {
+                            if (filesAvailable && allowFileActions) {
+                                if (allowPreview) {
                                 OutlinedButton(onClick = { viewModel.toggleTaskPreview(task.id) }) {
                                     Icon(
                                         if (isPreviewExpanded) Icons.Default.VisibilityOff
@@ -490,6 +548,7 @@ internal fun TasksScreen(
                                     )
                                     Spacer(Modifier.size(8.dp))
                                     Text(if (isPreviewExpanded) "收起" else "预览")
+                                }
                                 }
                                 OutlinedButton(onClick = { onManageTask(task.id) }) {
                                     Icon(Icons.Default.FolderOpen, contentDescription = null)
@@ -514,7 +573,7 @@ internal fun TasksScreen(
                             }
                         }
                     }
-                    if (!selectionMode && isPreviewExpanded && filesAvailable) {
+                    if (allowPreview && !selectionMode && isPreviewExpanded && filesAvailable) {
                         TaskPreviewPanel(
                             task = task,
                             mediaState = mediaPreviewState,
@@ -527,7 +586,9 @@ internal fun TasksScreen(
             }
         }
     }
-    if (openBilibiliGroup == null && fullscreenTaskId != null && mediaPreviewState.taskId == fullscreenTaskId) {
+    if (allowPreview && openBilibiliGroup == null && openCreatorGroup == null &&
+        fullscreenTaskId != null && mediaPreviewState.taskId == fullscreenTaskId
+    ) {
         val source = mediaPreviewState.source
         if (source?.kind == TaskPreviewKind.VIDEO && mediaPreviewState.player != null) {
             FullscreenVideoPreview(
@@ -537,6 +598,20 @@ internal fun TasksScreen(
                 onToggleMute = { viewModel.toggleMediaMute(fullscreenTaskId!!) },
                 onDismiss = viewModel::exitFullscreen,
             )
+        }
+    }
+    openCreatorGroup?.let { creatorKey ->
+        val group = creatorGroups.firstOrNull { it.profile.key == creatorKey }
+        if (group != null) {
+            ActiveCreatorTaskGroupDialog(
+                group = group,
+                viewModel = viewModel,
+                requestAllFilesAccess = requestAllFilesAccess,
+                onManageTask = onManageTask,
+                onDismiss = { openCreatorGroup = null },
+            )
+        } else {
+            LaunchedEffect(creatorKey) { openCreatorGroup = null }
         }
     }
     pendingShare?.takeIf { it.files.isNotEmpty() }?.let { share ->

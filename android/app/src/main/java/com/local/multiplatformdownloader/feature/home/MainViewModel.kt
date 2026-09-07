@@ -33,6 +33,7 @@ import com.local.multiplatformdownloader.feature.creator.CreatorWork
 import com.local.multiplatformdownloader.feature.creator.creatorKey
 import com.local.multiplatformdownloader.feature.creator.creatorWorkFolder
 import com.local.multiplatformdownloader.feature.creator.creatorWorkKey
+import com.local.multiplatformdownloader.feature.creator.taskCreatorKey
 import com.local.multiplatformdownloader.feature.document.DocumentReaderData
 import com.local.multiplatformdownloader.feature.document.resolveDocumentAssetOutputs
 import com.local.multiplatformdownloader.feature.preview.MediaPreviewCoordinator
@@ -54,6 +55,7 @@ import com.local.multiplatformdownloader.feature.tasks.TaskRedownloadCoordinator
 import com.local.multiplatformdownloader.feature.tasks.TaskRedownloadResult
 import com.local.multiplatformdownloader.feature.tasks.batchRedownloadSummary
 import com.local.multiplatformdownloader.feature.tasks.isTaskRedownloadEligible
+import com.local.multiplatformdownloader.feature.tasks.isTaskQueueVisible
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionArchive
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionArchiveCoordinator
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionDownloadScope
@@ -242,12 +244,17 @@ class MainViewModel @Inject internal constructor(
     internal val fullscreenTaskId: StateFlow<String?> = _fullscreenTaskId.asStateFlow()
     internal val trackDownloadProgress = trackDownloadProgressRegistry.state
     internal val adaptiveDownloadState = adaptiveDownloadController.state
+    private val _authorTaskPeakBytesPerSecond = MutableStateFlow<Map<String, Long>>(emptyMap())
+    internal val authorTaskPeakBytesPerSecond: StateFlow<Map<String, Long>> =
+        _authorTaskPeakBytesPerSecond.asStateFlow()
     private val _fileOperationTaskId = MutableStateFlow<String?>(null)
     internal val fileOperationTaskId: StateFlow<String?> = _fileOperationTaskId.asStateFlow()
     private val diagnosticExportChannel = Channel<DiagnosticExportResult>(Channel.BUFFERED)
     internal val diagnosticExports = diagnosticExportChannel.receiveAsFlow()
     private val updateLaunchChannel = Channel<UpdateLaunchRequest>(Channel.BUFFERED)
     internal val updateLaunchRequests = updateLaunchChannel.receiveAsFlow()
+    private val completedTaskChannel = Channel<String>(Channel.BUFFERED)
+    internal val completedTasks = completedTaskChannel.receiveAsFlow()
     private var updateDownloadJob: Job? = null
 
     var inputText: String
@@ -293,6 +300,7 @@ class MainViewModel @Inject internal constructor(
     private val refreshMutex = Mutex()
     private var taskCapabilities = emptyMap<String, TaskCapabilities>()
     private var tasksVisible = false
+    private var observedTaskStatuses: Map<String, TaskStatus>? = null
 
     init {
         refreshPlatformCredentialStates()
@@ -322,12 +330,20 @@ class MainViewModel @Inject internal constructor(
                         "请求受限，已暂停该平台的新任务；正在下载的内容会继续完成"
                 }
                 previouslyBlocked = blocked
+                updateAuthorTaskPeaks(state.taskBytesPerSecond)
             }
         }
         viewModelScope.launch {
             store.observeAll().collectLatest { records ->
+                observedTaskStatuses?.let { previous ->
+                    records.filter { task ->
+                        task.status == TaskStatus.COMPLETE && previous[task.id] != TaskStatus.COMPLETE
+                    }.forEach { completedTaskChannel.trySend(it.id) }
+                }
+                observedTaskStatuses = records.associate { it.id to it.status }
                 tasks = records.filterNot(TaskRecord::creatorChild)
                 _uiState.update { state -> state.copy(allTasks = records) }
+                updateAuthorTaskPeaks(adaptiveDownloadController.state.value.taskBytesPerSecond)
                 val expanded = _expandedTaskId.value
                 if (expanded != null && records.none { it.id == expanded }) {
                     mediaPreviewCoordinator.stopIfTask(expanded, "TASK_REMOVED")
@@ -348,6 +364,17 @@ class MainViewModel @Inject internal constructor(
             while (isActive) {
                 delay(15_000)
                 if (tasksVisible && _uiState.value.allTasks.isNotEmpty()) refreshTasks()
+            }
+        }
+    }
+
+    private fun updateAuthorTaskPeaks(taskSpeeds: Map<String, Long>) {
+        val activeByAuthor = _uiState.value.allTasks.asSequence()
+            .filter { taskCreatorKey(it).isNotBlank() && isTaskQueueVisible(it) }
+            .groupBy(::taskCreatorKey)
+        _authorTaskPeakBytesPerSecond.update { previous ->
+            activeByAuthor.mapValues { (authorKey, tasks) ->
+                maxOf(previous[authorKey] ?: 0L, tasks.sumOf { taskSpeeds[it.id] ?: 0L })
             }
         }
     }
@@ -575,14 +602,23 @@ class MainViewModel @Inject internal constructor(
         val createdAt = System.currentTimeMillis()
         val storageMode = if (customTreeUri.isNullOrBlank()) StorageMode.DEFAULT else StorageMode.SAF
         val requestedCids = _uiState.value.selectedBilibiliCids.toSet()
+        val requestedAuthorKey = result.authorStableId.takeIf(String::isNotBlank)
+            ?.let { creatorKey(result.platform, it) }.orEmpty()
+        val authorBusy = requestedAuthorKey.isNotBlank() && _uiState.value.allTasks.any { task ->
+            taskCreatorKey(task) == requestedAuthorKey && isTaskQueueVisible(task)
+        }
+        val shouldArchiveAuthor = archiveAuthor && !authorBusy
+        if (archiveAuthor && authorBusy) {
+            message = "该作者有任务正在下载，本次沿用现有归类；完成或取消后才能收藏"
+        }
         viewModelScope.launch {
             try {
                 val authorKey = creatorRepository.upsertFromParse(
                     result = result,
-                    createAuthorIfMissing = archiveAuthor,
+                    createAuthorIfMissing = shouldArchiveAuthor,
                 )
                 val taskFolder = if (authorKey.isBlank()) {
-                    taskFolderName(createdAt, id)
+                    "独立作品/${result.platform.displayName}/${taskFolderName(createdAt, id)}"
                 } else {
                     creatorRepository.getCreator(authorKey)?.let { profile ->
                         creatorWorkFolder(
@@ -732,6 +768,40 @@ class MainViewModel @Inject internal constructor(
                     })
                 }
                 message = "取消失败：$safeMessage"
+            }
+        }
+    }
+
+    fun pauseTask(task: TaskRecord) {
+        if (task.status !in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)) return
+        viewModelScope.launch {
+            try {
+                runCatching { logger.event(task.id, "DOWNLOAD", "PAUSE_REQUESTED") }
+                store.update(task.id, TaskStatus.PAUSED, "已暂停", task.progress)
+                scheduler.cancel(task.id)
+                runCatching { logger.event(task.id, "DOWNLOAD", "PAUSE_ACCEPTED") }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val detail = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+                message = "暂停失败：$detail"
+            }
+        }
+    }
+
+    fun resumeTask(task: TaskRecord) {
+        if (task.status != TaskStatus.PAUSED) return
+        viewModelScope.launch {
+            try {
+                store.update(task.id, TaskStatus.QUEUED, "等待下载", task.progress)
+                scheduler.enqueue(task.id, ExistingWorkPolicy.REPLACE)
+                runCatching { logger.event(task.id, "DOWNLOAD", "RESUME_ACCEPTED") }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                val detail = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
+                store.update(task.id, TaskStatus.PAUSED, "继续失败", task.progress, detail)
+                message = "继续下载失败：$detail"
             }
         }
     }

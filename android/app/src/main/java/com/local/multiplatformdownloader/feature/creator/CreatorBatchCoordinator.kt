@@ -524,7 +524,7 @@ internal fun creatorWorkFolder(
         Date(work.publishedAt.takeIf { it > 0L } ?: createdAt),
     )
     val workFolder = "${date}_${sanitizeFolderSegment(work.contentId)}"
-    return "${sanitizeFolderSegment(profile.platform.displayName)}/$authorFolder/$workFolder"
+    return "作者/${sanitizeFolderSegment(profile.platform.displayName)}/$authorFolder/$workFolder"
 }
 
 internal fun creatorDirectoryName(profile: CreatorProfile): String {

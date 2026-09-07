@@ -229,7 +229,7 @@ class CreatorLibraryRepository @Inject internal constructor(
 
     suspend fun upsertFromParse(
         result: ParseResult,
-        createAuthorIfMissing: Boolean = true,
+        createAuthorIfMissing: Boolean = false,
     ): String {
         if (result.authorStableId.isBlank()) return ""
         val key = creatorKey(result.platform, result.authorStableId)
@@ -250,10 +250,8 @@ class CreatorLibraryRepository @Inject internal constructor(
                 location = previous?.location.orEmpty(),
                 metrics = previous?.metrics.orEmpty(),
                 accountStatus = previous?.accountStatus ?: CreatorAccountStatus.UNKNOWN,
-                followed = previous?.followed ?: false,
-                // A directly downloaded work still needs a visible author-history entry,
-                // but it must not silently opt the user into following/refreshing that author.
-                archived = previous?.archived ?: true,
+                followed = if (createAuthorIfMissing) true else previous?.followed ?: false,
+                archived = if (createAuthorIfMissing) false else previous?.archived ?: false,
                 addedAt = previous?.addedAt ?: now,
                 refreshedAt = previous?.refreshedAt ?: 0L,
                 refreshError = previous?.refreshError.orEmpty(),

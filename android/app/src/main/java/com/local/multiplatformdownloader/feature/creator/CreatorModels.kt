@@ -94,6 +94,10 @@ data class CreatorWork(
     val relatedTasks: List<TaskRecord> = emptyList(),
 ) {
     val hasLocalRecord: Boolean get() = task != null || preparation != null
+    val hasLocalContent: Boolean get() = task?.let { record ->
+        record.outputs.isNotEmpty() || record.status == TaskStatus.COMPLETE ||
+            record.fileState !in setOf(FileState.UNKNOWN, FileState.STORAGE_UNAVAILABLE)
+    } == true
     val preparationFailed: Boolean get() = task == null && preparation?.status == CreatorBatchWorkStatus.FAILED
     val preparationActionable: Boolean get() = task == null && preparation?.taskId?.isBlank() == true &&
         preparation.status in setOf(CreatorBatchWorkStatus.FAILED, CreatorBatchWorkStatus.PAUSED)
@@ -155,11 +159,17 @@ internal val CREATOR_BATCH_PLATFORMS = listOf(
     SourcePlatform.BILIBILI,
 )
 
+internal val CREATOR_LIBRARY_PLATFORMS = SourcePlatform.entries.toList()
+
 internal fun creatorKey(platform: SourcePlatform, stableId: String): String =
     "${platform.wireValue}:${stableId.trim()}"
 
 internal fun creatorWorkKey(platform: SourcePlatform, contentId: String): String =
     "${platform.wireValue}:${contentId.trim()}"
+
+internal fun taskCreatorKey(task: TaskRecord): String = task.authorKey.ifBlank {
+    task.authorStableId.takeIf(String::isNotBlank)?.let { creatorKey(task.platform, it) }.orEmpty()
+}
 
 internal fun List<CreatorMetric>.toMetricsJson(): String = JSONArray().apply {
     forEach { metric -> put(JSONObject().put("label", metric.label).put("value", metric.value)) }
@@ -186,7 +196,7 @@ internal fun filterCreatorsByPlatform(
     creators: List<CreatorProfile>,
     platform: SourcePlatform?,
 ): List<CreatorProfile> = creators
-    .filter { it.platform in CREATOR_BATCH_PLATFORMS }
+    .filter { it.platform in CREATOR_LIBRARY_PLATFORMS }
     .let { supported ->
         if (platform == null) supported else supported.filter { it.platform == platform }
     }

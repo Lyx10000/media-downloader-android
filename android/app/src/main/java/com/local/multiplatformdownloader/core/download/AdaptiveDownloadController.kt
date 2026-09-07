@@ -79,9 +79,12 @@ class AdaptiveDownloadController @Inject constructor(
     val state: StateFlow<AdaptiveDownloadState> = _state.asStateFlow()
     private val riskLoaded = CompletableDeferred<Unit>()
     private val riskMutex = Mutex()
-    private val taskGate = AdaptiveTaskGate(
+    private val taskGate = AdaptiveTaskGate<SourcePlatform>(
         initialTarget = MIN_CONCURRENCY,
-        isBlocked = ::isPlatformBlocked,
+        // This gate controls transfer concurrency only. Platform risk cooldowns protect
+        // parsing/detail requests before a task is scheduled; once CDN URLs have been
+        // resolved, blocking the transfer here leaves a valid task stuck at "准备下载".
+        isBlocked = { false },
         onCountsChanged = { active, waiting ->
             _state.update { it.copy(activeCount = active, waitingCount = waiting) }
         },
@@ -146,7 +149,6 @@ class AdaptiveDownloadController @Inject constructor(
         platform: SourcePlatform,
         block: suspend () -> T,
     ): T {
-        riskLoaded.await()
         val lease = taskGate.acquire(taskId, platform)
         return try {
             block()
@@ -215,7 +217,6 @@ class AdaptiveDownloadController @Inject constructor(
     }
 
     fun reportPlatformSuccess(platform: SourcePlatform) {
-        if (!riskUntil.containsKey(platform)) return
         scope.launch {
             riskLoaded.await()
             riskMutex.withLock {

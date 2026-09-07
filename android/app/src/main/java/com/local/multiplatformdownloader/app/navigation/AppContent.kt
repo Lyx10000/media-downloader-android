@@ -6,7 +6,8 @@ import com.local.multiplatformdownloader.core.model.TaskRecord
 import com.local.multiplatformdownloader.core.model.TaskStatus
 import com.local.multiplatformdownloader.core.update.UpdateLaunchRequest
 import com.local.multiplatformdownloader.feature.creator.CreatorLibraryViewModel
-import com.local.multiplatformdownloader.feature.creator.TaskHubScreen
+import com.local.multiplatformdownloader.feature.creator.LocalDownloadsScreen
+import com.local.multiplatformdownloader.feature.creator.taskCreatorKey
 import com.local.multiplatformdownloader.feature.document.DocumentReaderScreen
 import com.local.multiplatformdownloader.feature.home.FullScreenWebEnvironment
 import com.local.multiplatformdownloader.feature.home.HomeScreen
@@ -15,9 +16,13 @@ import com.local.multiplatformdownloader.feature.settings.DiagnosticsScreen
 import com.local.multiplatformdownloader.feature.settings.SettingsScreen
 import com.local.multiplatformdownloader.feature.tasks.ShareableFile
 import com.local.multiplatformdownloader.feature.tasks.TaskFileManagerScreen
+import com.local.multiplatformdownloader.feature.tasks.TaskQueueScreen
+import com.local.multiplatformdownloader.feature.tasks.LocalContentDetailScreen
 import com.local.multiplatformdownloader.feature.tasks.buildFileShareChooser
 import com.local.multiplatformdownloader.feature.tasks.buildFileShareIntent
 import com.local.multiplatformdownloader.feature.tasks.isTaskRedownloadEligible
+import com.local.multiplatformdownloader.feature.tasks.isLocalContentTask
+import com.local.multiplatformdownloader.feature.tasks.isTaskQueueVisible
 import com.local.multiplatformdownloader.feature.tasks.reconcileTaskSelection
 import com.local.multiplatformdownloader.feature.tasks.toggleTaskSelection
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionArchiveScreen
@@ -51,6 +56,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Settings
@@ -66,6 +72,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -99,13 +106,15 @@ internal fun DownloaderApp(
     val snackbar = remember { SnackbarHostState() }
     var destination by remember { mutableIntStateOf(0) }
     var managedTaskId by remember { mutableStateOf<String?>(null) }
+    var localContentTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var readerTaskId by remember { mutableStateOf<String?>(null) }
     var readerOutputUri by remember { mutableStateOf<String?>(null) }
     var questionArchiveTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var loginPlatform by rememberSaveable { mutableStateOf<SourcePlatform?>(null) }
     var taskSelectionMode by remember { mutableStateOf(false) }
-    var taskSection by rememberSaveable { mutableIntStateOf(0) }
+    var localSection by rememberSaveable { mutableIntStateOf(0) }
     var taskPlatformFilterWire by rememberSaveable { mutableStateOf("") }
+    var taskQueueVisibleIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var focusedTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedTaskIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
@@ -115,6 +124,7 @@ internal fun DownloaderApp(
         listOf(
             Destination("首页", Icons.Default.Home),
             Destination("任务", Icons.Default.Download),
+            Destination("本地下载", Icons.Default.Folder),
             Destination("诊断", Icons.Default.BugReport),
             Destination("设置", Icons.Default.Settings),
         )
@@ -200,15 +210,26 @@ internal fun DownloaderApp(
     val taskPlatformFilter = SourcePlatform.entries.firstOrNull {
         it.wireValue == taskPlatformFilterWire
     }
-    val visibleTasks = if (taskPlatformFilter == null) uiState.tasks else {
-        uiState.tasks.filter { it.platform == taskPlatformFilter }
+    val authorKeys = creatorState.creators.mapTo(hashSetOf()) { it.key }
+    val activeTasks = uiState.allTasks.filter(::isTaskQueueVisible)
+    val localIndependentTasks = uiState.allTasks.filter { task ->
+        isLocalContentTask(task) && taskCreatorKey(task) !in authorKeys
     }
-    val selectableTaskIds = visibleTasks
-        .filter { it.status != TaskStatus.DELETING }
-        .mapTo(linkedSetOf(), TaskRecord::id)
-    LaunchedEffect(destination, taskSection, selectableTaskIds) {
+    val selectableTaskIds = when {
+        destination == 1 -> taskQueueVisibleIds
+        destination == 2 && localSection == 0 && creatorState.selectedCreator == null ->
+            localIndependentTasks.asSequence()
+                .filter { taskPlatformFilter == null || it.platform == taskPlatformFilter }
+                .filter { it.status != TaskStatus.DELETING }
+                .map(TaskRecord::id)
+                .toCollection(linkedSetOf())
+        else -> emptySet()
+    }
+    val selectionPageVisible = destination == 1 ||
+        destination == 2 && localSection == 0 && creatorState.selectedCreator == null
+    LaunchedEffect(destination, localSection, selectableTaskIds) {
         selectedTaskIds = reconcileTaskSelection(selectedTaskIds, selectableTaskIds)
-        if (destination != 1 || taskSection != 0 || selectableTaskIds.isEmpty()) {
+        if (!selectionPageVisible || selectableTaskIds.isEmpty()) {
             taskSelectionMode = false
             selectedTaskIds = emptySet()
             showBatchDeleteDialog = false
@@ -216,17 +237,43 @@ internal fun DownloaderApp(
             batchDeleteFiles = false
         }
     }
-    val selectedTasks = uiState.tasks.filter { it.id in selectedTaskIds }
+    val selectedTasks = uiState.allTasks.filter { it.id in selectedTaskIds }
     val selectedRedownloadTasks = selectedTasks.filter(::isTaskRedownloadEligible)
 
-    val openIndependentTasks: (String?) -> Unit = { taskId ->
+    val openTaskTarget: (String?) -> Unit = { taskId ->
         creatorViewModel.closeCreator()
-        taskSection = 0
         taskPlatformFilterWire = ""
         taskSelectionMode = false
         selectedTaskIds = emptySet()
         focusedTaskId = taskId
-        destination = 1
+        val task = taskId?.let { id -> uiState.allTasks.firstOrNull { it.id == id } }
+        if (task != null && isLocalContentTask(task) && !isTaskQueueVisible(task)) {
+            val creatorKey = taskCreatorKey(task)
+            val creator = creatorState.creators.firstOrNull { it.key == creatorKey }
+            if (creator != null) {
+                creatorViewModel.saveDetailTab(creator.key, 1)
+                creatorViewModel.openCreator(creator.key)
+                localSection = 1
+            } else {
+                localSection = 0
+            }
+            destination = 2
+            localContentTaskId = task.id
+        } else if (task != null && !isTaskQueueVisible(task)) {
+            viewModel.showMessage("该任务已结束且没有可用的本地内容")
+        } else {
+            destination = 1
+        }
+    }
+
+    LaunchedEffect(viewModel) {
+        viewModel.completedTasks.collectLatest { taskId ->
+            val result = snackbar.showSnackbar(
+                message = "下载完成，已移至本地下载",
+                actionLabel = "查看",
+            )
+            if (result == SnackbarResult.ActionPerformed) openTaskTarget(taskId)
+        }
     }
 
     val openLoginEnvironment: (SourcePlatform) -> Unit = { platform ->
@@ -309,6 +356,24 @@ internal fun DownloaderApp(
         )
         return
     }
+    val localContentTask = localContentTaskId?.let { taskId ->
+        uiState.allTasks.firstOrNull { it.id == taskId }
+    }
+    if (localContentTaskId != null && localContentTask == null) {
+        LaunchedEffect(localContentTaskId) { localContentTaskId = null }
+    }
+    if (localContentTask != null) {
+        LocalContentDetailScreen(
+            task = localContentTask,
+            questionArchives = uiState.questionArchives,
+            viewModel = viewModel,
+            requestAllFilesAccess = requestAllFilesAccess,
+            onManageTask = { managedTaskId = it },
+            onOpenQuestionArchive = { questionArchiveTaskId = it },
+            onBack = { localContentTaskId = null },
+        )
+        return
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -317,7 +382,7 @@ internal fun DownloaderApp(
                 TopAppBar(
                     title = {
                         Text(
-                            if (destination == 1 && taskSelectionMode) {
+                            if (selectionPageVisible && taskSelectionMode) {
                                 "已选择 ${selectedTaskIds.size} 项"
                             } else {
                                 destinations[destination].label
@@ -325,7 +390,7 @@ internal fun DownloaderApp(
                         )
                     },
                     navigationIcon = {
-                        if (destination == 1 && taskSelectionMode) {
+                        if (selectionPageVisible && taskSelectionMode) {
                             IconButton(onClick = {
                                 taskSelectionMode = false
                                 selectedTaskIds = emptySet()
@@ -335,9 +400,7 @@ internal fun DownloaderApp(
                         }
                     },
                     actions = {
-                        if (destination == 1 && taskSection == 0 &&
-                            creatorState.selectedCreator == null
-                        ) {
+                        if (selectionPageVisible) {
                             if (taskSelectionMode) {
                                 IconButton(onClick = {
                                     selectedTaskIds = if (selectedTaskIds == selectableTaskIds) {
@@ -379,7 +442,12 @@ internal fun DownloaderApp(
                         selected = destination == index,
                         onClick = {
                             if (index == 1) {
-                                openIndependentTasks(uiState.tasks.firstOrNull()?.id)
+                                creatorViewModel.closeCreator()
+                                destination = 1
+                                taskPlatformFilterWire = ""
+                                focusedTaskId = activeTasks.firstOrNull()?.id
+                                taskSelectionMode = false
+                                selectedTaskIds = emptySet()
                             } else {
                                 destination = index
                                 taskSelectionMode = false
@@ -405,23 +473,49 @@ internal fun DownloaderApp(
                     viewModel = viewModel,
                     creatorState = creatorState,
                     creatorViewModel = creatorViewModel,
-                    onShowTasks = openIndependentTasks,
+                    onShowTasks = openTaskTarget,
                     onShowCreators = {
-                        taskSection = 1
+                        localSection = 1
                         taskSelectionMode = false
                         selectedTaskIds = emptySet()
-                        destination = 1
+                        destination = 2
                     },
                     onOpenLoginEnvironment = openLoginEnvironment,
                 )
-                1 -> TaskHubScreen(
+                1 -> TaskQueueScreen(
+                    uiState = uiState,
+                    creatorState = creatorState,
+                    viewModel = viewModel,
+                    chooseFolder = { folderPicker.launch(null) },
+                    requestAllFilesAccess = requestAllFilesAccess,
+                    onManageTask = { taskId -> managedTaskId = taskId },
+                    selectionMode = taskSelectionMode,
+                    selectedTaskIds = selectedTaskIds,
+                    platformFilter = taskPlatformFilter,
+                    onPlatformFilter = { platform ->
+                        taskPlatformFilterWire = platform?.wireValue.orEmpty()
+                    },
+                    onToggleTaskSelection = { taskId ->
+                        selectedTaskIds = toggleTaskSelection(selectedTaskIds, taskId)
+                    },
+                    focusedTaskId = focusedTaskId,
+                    onTaskFocused = { focusedTaskId = null },
+                    onOpenQuestionArchive = { taskId -> questionArchiveTaskId = taskId },
+                    onVisibleTaskIdsChanged = { taskQueueVisibleIds = it },
+                    onOpenCreator = { creatorKey ->
+                        creatorViewModel.openCreator(creatorKey)
+                        localSection = 1
+                        destination = 2
+                    },
+                )
+                2 -> LocalDownloadsScreen(
                     uiState = uiState,
                     viewModel = viewModel,
                     creatorState = creatorState,
                     creatorViewModel = creatorViewModel,
-                    selectedSection = taskSection,
+                    selectedSection = localSection,
                     onSelectedSection = { section ->
-                        taskSection = section
+                        localSection = section
                         if (section != 0) {
                             taskSelectionMode = false
                             selectedTaskIds = emptySet()
@@ -430,6 +524,7 @@ internal fun DownloaderApp(
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,
                     onManageTask = { taskId -> managedTaskId = taskId },
+                    onOpenLocalTask = { taskId -> localContentTaskId = taskId },
                     selectionMode = taskSelectionMode,
                     selectedTaskIds = selectedTaskIds,
                     taskPlatformFilter = taskPlatformFilter,
@@ -445,7 +540,7 @@ internal fun DownloaderApp(
                         questionArchiveTaskId = taskId
                     },
                 )
-                2 -> DiagnosticsScreen(
+                3 -> DiagnosticsScreen(
                     logText = uiState.logText,
                     isExporting = uiState.isExportingDiagnostics,
                     viewModel = viewModel,

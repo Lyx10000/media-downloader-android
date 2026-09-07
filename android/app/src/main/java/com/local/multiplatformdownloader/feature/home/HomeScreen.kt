@@ -16,6 +16,9 @@ import com.local.multiplatformdownloader.feature.creator.CREATOR_BATCH_PLATFORMS
 import com.local.multiplatformdownloader.feature.creator.CreatorLibraryUiState
 import com.local.multiplatformdownloader.feature.creator.CreatorLibraryViewModel
 import com.local.multiplatformdownloader.feature.creator.HomeInputMode
+import com.local.multiplatformdownloader.feature.creator.creatorKey
+import com.local.multiplatformdownloader.feature.creator.taskCreatorKey
+import com.local.multiplatformdownloader.feature.tasks.isTaskQueueVisible
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionDownloadScope
 import com.local.multiplatformdownloader.platform.common.PlatformBrandBadge
 import com.local.multiplatformdownloader.platform.common.PlatformCredentialState
@@ -238,26 +241,36 @@ internal fun HomeScreen(
         )
 
         ParseUiState.Parsing -> ParsingStatus("正在读取原始媒体和完整质量档位……")
-        is ParseUiState.Ready -> ResultScreen(
-            result = state.result,
-            selectedVariant = uiState.selectedVariant,
-            selectedAttachmentVariants = uiState.selectedAttachmentVariants,
-            selectedBilibiliCids = uiState.selectedBilibiliCids,
-            onBilibiliParts = viewModel::selectBilibiliParts,
-            selectedMode = uiState.selectedMode,
-            onVariant = viewModel::selectVariant,
-            onAttachmentVariant = viewModel::selectAttachmentVariant,
-            onMode = viewModel::selectMode,
-            onDownload = { archiveAuthor ->
-                val taskId = viewModel.queueDownload(state.result, archiveAuthor)
-                onShowTasks(taskId)
-            },
-            onDownloadQuestion = { scope, includeComments ->
-                val taskId = viewModel.queueQuestionArchive(state.result, scope, includeComments)
-                onShowTasks(taskId)
-            },
-            onBack = viewModel::resetParse,
-        )
+        is ParseUiState.Ready -> {
+            val parsedCreatorKey = state.result.authorStableId.takeIf(String::isNotBlank)
+                ?.let { creatorKey(state.result.platform, it) }.orEmpty()
+            val authorAlreadySaved = creatorState.creators.any { it.key == parsedCreatorKey }
+            val authorHasActiveTask = parsedCreatorKey.isNotBlank() && uiState.allTasks.any { task ->
+                taskCreatorKey(task) == parsedCreatorKey && isTaskQueueVisible(task)
+            }
+            ResultScreen(
+                result = state.result,
+                selectedVariant = uiState.selectedVariant,
+                selectedAttachmentVariants = uiState.selectedAttachmentVariants,
+                selectedBilibiliCids = uiState.selectedBilibiliCids,
+                onBilibiliParts = viewModel::selectBilibiliParts,
+                selectedMode = uiState.selectedMode,
+                onVariant = viewModel::selectVariant,
+                onAttachmentVariant = viewModel::selectAttachmentVariant,
+                onMode = viewModel::selectMode,
+                authorAlreadySaved = authorAlreadySaved,
+                canArchiveAuthor = !authorHasActiveTask,
+                onDownload = { archiveAuthor ->
+                    val taskId = viewModel.queueDownload(state.result, archiveAuthor)
+                    onShowTasks(taskId)
+                },
+                onDownloadQuestion = { scope, includeComments ->
+                    val taskId = viewModel.queueQuestionArchive(state.result, scope, includeComments)
+                    onShowTasks(taskId)
+                },
+                onBack = viewModel::resetParse,
+            )
+        }
         is ParseUiState.Error -> ErrorScreen(state, viewModel::retryParse, viewModel::resetParse)
     }
 }
@@ -354,9 +367,10 @@ private fun CreatorSearchContent(
                             Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    Button(onClick = {
-                        viewModel.confirmCreator(onShowTasks)
-                    }) { Text("加入") }
+                    Button(
+                        enabled = state.organizingCreatorKey.isBlank(),
+                        onClick = { viewModel.confirmCreator(onShowTasks) },
+                    ) { Text(if (state.organizingCreatorKey == profile.key) "正在整理" else "加入") }
                 }
             }
         }
@@ -726,6 +740,8 @@ private fun ResultScreen(
     onVariant: (Int) -> Unit,
     onAttachmentVariant: (String, Int) -> Unit,
     onMode: (DownloadMode) -> Unit,
+    authorAlreadySaved: Boolean,
+    canArchiveAuthor: Boolean,
     onDownload: (Boolean) -> Unit,
     onDownloadQuestion: (ZhihuQuestionDownloadScope, Boolean) -> Unit,
     onBack: () -> Unit,
@@ -735,6 +751,9 @@ private fun ResultScreen(
     }
     var includeComments by remember(result.contentId) { mutableStateOf(true) }
     var archiveAuthor by remember(result.contentId) { mutableStateOf(false) }
+    LaunchedEffect(result.contentId, authorAlreadySaved, canArchiveAuthor) {
+        if (authorAlreadySaved || !canArchiveAuthor) archiveAuthor = false
+    }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -988,23 +1007,38 @@ private fun ResultScreen(
         }
         if (result.question == null && result.authorStableId.isNotBlank()) {
             item {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { archiveAuthor = !archiveAuthor },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(
-                        checked = archiveAuthor,
-                        onCheckedChange = { archiveAuthor = it },
+                if (authorAlreadySaved) {
+                    Text(
+                        "该作者已收藏，下载完成后将归入作者本地库",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Column {
-                        Text("归档作者到作者栏")
-                        Text(
-                            "关闭时不会新建作者入口；已有作者仍会关联该任务",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                } else {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = canArchiveAuthor) {
+                                archiveAuthor = !archiveAuthor
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = archiveAuthor,
+                            enabled = canArchiveAuthor,
+                            onCheckedChange = { archiveAuthor = it },
                         )
+                        Column {
+                            Text("收藏作者并归入作者本地库")
+                            Text(
+                                if (canArchiveAuthor) {
+                                    "关闭时作为独立作品保存"
+                                } else {
+                                    "该作者已有活动任务，完成或取消后才能收藏"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

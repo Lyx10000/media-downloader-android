@@ -45,6 +45,7 @@ value class TaskStatus private constructor(val wireValue: String) {
         val RUNNING = TaskStatus("RUNNING")
         val COMPLETE = TaskStatus("COMPLETE")
         val FAILED = TaskStatus("FAILED")
+        val PAUSED = TaskStatus("PAUSED")
         val CANCELLED = TaskStatus("CANCELLED")
         val DELETING = TaskStatus("DELETING")
 
@@ -53,6 +54,7 @@ value class TaskStatus private constructor(val wireValue: String) {
             RUNNING.wireValue -> RUNNING
             COMPLETE.wireValue -> COMPLETE
             FAILED.wireValue -> FAILED
+            PAUSED.wireValue -> PAUSED
             CANCELLED.wireValue -> CANCELLED
             DELETING.wireValue -> DELETING
             else -> TaskStatus(value)
@@ -542,6 +544,7 @@ data class TaskRecord(
     val platform: SourcePlatform = SourcePlatform.DOUYIN,
     val author: String = "",
     val authorAccountId: String = "",
+    val authorStableId: String = "",
     val contentId: String = "",
     val authorKey: String = "",
     val batchId: String = "",
@@ -551,6 +554,7 @@ data class TaskRecord(
     val storageMode: StorageMode = StorageMode.LEGACY,
     val bilibiliPage: Int = 0,
     val bilibiliTitle: String = "",
+    val coverUrl: String = "",
 ) {
     val outputUris: List<String> get() = outputs.map(TaskOutput::uri)
 }

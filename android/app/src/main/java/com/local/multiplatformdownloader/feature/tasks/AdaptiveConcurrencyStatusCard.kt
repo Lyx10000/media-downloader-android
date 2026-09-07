@@ -68,29 +68,35 @@ internal fun AdaptiveConcurrencyStatusCard(state: AdaptiveDownloadState) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Text(
+                "应用 CPU ${formatPercent(state.cpuPercent)} · 系统热状态 ${thermalLabel(state.thermalStatus)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            state.platformRiskUntil
+                .filterValues { it > now }
+                .toList()
+                .sortedBy { it.second }
+                .forEach { (platform, until) ->
+                    val seconds = ((until - now + 999L) / 1_000L).coerceAtLeast(0L)
+                    Text(
+                        "${platform.displayName}风控冷却：${seconds / 60}:" +
+                            (seconds % 60).toString().padStart(2, '0'),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             if (expanded) {
                 Text(
                     "当前 ${state.activeCount} / 目标 ${state.targetConcurrency}，等待 ${state.waitingCount}",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "峰值 ${formatByteSize(state.peakBytesPerSecond)}/s · CPU ${formatPercent(state.cpuPercent)} · " +
-                        "慢帧 ${formatSlowFrames(state.slowFramePercent)} · 温度 ${thermalLabel(state.thermalStatus)}",
+                    "峰值 ${formatByteSize(state.peakBytesPerSecond)}/s · 慢帧 " +
+                        formatSlowFrames(state.slowFramePercent),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                state.platformRiskUntil
-                    .filterValues { it > now }
-                    .toList()
-                    .sortedBy { it.second }
-                    .forEach { (platform, until) ->
-                        val seconds = ((until - now + 999L) / 1_000L).coerceAtLeast(0L)
-                        Text(
-                            "${platform.displayName}风控冷却：${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
             }
         }
     }

@@ -235,6 +235,7 @@ private fun TaskIndexRow.toRecord(payload: TaskRecordPayload): TaskRecord {
         fileState = if (!payload.outputsValid) FileState.UNKNOWN else FileState.fromWire(fileStatus),
         author = spec.author,
         authorAccountId = spec.authorAccountId,
+        authorStableId = spec.authorStableId,
         authorKey = authorKey.ifBlank { spec.authorKey },
         batchId = batchId.ifBlank { spec.batchId },
         creatorChild = creatorChild || spec.creatorChild,
@@ -243,6 +244,7 @@ private fun TaskIndexRow.toRecord(payload: TaskRecordPayload): TaskRecord {
         storageMode = spec.storageMode,
         bilibiliPage = spec.bilibiliPage,
         bilibiliTitle = spec.bilibiliTitle,
+        coverUrl = spec.coverUrl,
     )
 }
 
@@ -259,6 +261,7 @@ private data class TaskRecordSpec(
     val description: String = "",
     val author: String = "",
     val authorAccountId: String = "",
+    val authorStableId: String = "",
     val authorKey: String = "",
     val batchId: String = "",
     val creatorChild: Boolean = false,
@@ -267,6 +270,7 @@ private data class TaskRecordSpec(
     val storageMode: StorageMode = StorageMode.LEGACY,
     val bilibiliPage: Int = 0,
     val bilibiliTitle: String = "",
+    val coverUrl: String = "",
 )
 
 private fun TaskSpec.toRecordSpec() = TaskRecordSpec(
@@ -276,6 +280,7 @@ private fun TaskSpec.toRecordSpec() = TaskRecordSpec(
     description = result.description.take(60),
     author = result.author,
     authorAccountId = result.authorAccountId,
+    authorStableId = result.authorStableId,
     authorKey = authorKey,
     batchId = batchId,
     creatorChild = creatorChild,
@@ -284,6 +289,7 @@ private fun TaskSpec.toRecordSpec() = TaskRecordSpec(
     storageMode = storageMode,
     bilibiliPage = result.bilibiliParts.firstOrNull { result.contentId.endsWith(":" + it.cid) }?.page ?: 0,
     bilibiliTitle = result.bilibiliTitle.take(120),
+    coverUrl = result.coverUrl,
 )
 
 private fun TaskPayloadRow.toRecordPayload(): TaskRecordPayload {
