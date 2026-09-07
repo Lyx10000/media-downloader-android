@@ -47,7 +47,7 @@ X、Instagram 支持准确的 `@用户名`，B站支持 UID 和 `b23.tv` 个人�
 项数。独立知乎视频沿用清晰度选择和音视频保存模式。
 
 “仅保存 MP4”模式会在必要时合成音视频轨，成功后仅保留成品，不保留中间分轨。
-B站普通投稿支持选择多个分P下载；任务按稿件分组，进入后查看各P。作者批量下载可选择全部分P或仅P1。
+B站普通投稿支持选择多个分P下载；任务按稿件分组，进入后查看各P。作者批量下载可选择全部分P或仅P1。分离的音视频轨会并行下载并分别显示进度。
 
 X 当前支持单帖子图片、视频和 GIF，可在同一帖子中按原顺序保存最多 4 个混合附件。每个视频
 附件独立选择清晰度，GIF 保存为无声 MP4；转帖下载原帖媒体，引用帖不会自动下载被引用帖媒体。
@@ -61,12 +61,14 @@ X 当前支持单帖子图片、视频和 GIF，可在同一帖子中按原顺�
 默认输出目录：
 
 ```text
-内部存储/Download/DouyinDownloader/
+内部存储/Download/MultiPlatformDownloader/
 ```
 
 设置中可以通过系统目录选择器改用其他目录。诊断日志默认位于应用私有目录，只有
 点击“导出 ZIP”后才会写入公共目录
-`内部存储/Download/DouyinDownloader/diagnostics/`。导出成功后会打开系统分享面板；如果
+`内部存储/Download/MultiPlatformDownloader/diagnostics/`。旧版本创建的
+`内部存储/Download/DouyinDownloader/` 会继续作为兼容目录读取和管理，无需手动移动。
+导出成功后会打开系统分享面板；如果
 设备没有可处理 ZIP 的应用，文件仍会保留在上述目录，并显示具体保存位置。
 
 任务页会检查已下载文件是否仍然存在。部分文件被外部删除时任务显示橙色，全部文件
@@ -97,6 +99,10 @@ cd android
 因此 `assembleRelease` 生成的是 `app-release-unsigned.apk`，分发前必须使用自己的密钥完成
 zipalign 和 APK 签名。GitHub Releases 中的官方 APK 使用项目维护者证书签名。
 
+源码采用 `app / core / feature / platform` 分层，Kotlin 命名空间为
+`com.local.multiplatformdownloader`。Gradle 中的 `applicationId` 仍是历史发布值
+`com.local.douyindownloader`，用于覆盖升级、保留数据库和登录状态，请勿在普通重构中修改。
+
 本项目所在的 ARM64 Termux 环境需要 ARM64 原生 AAPT2。当前构建配置指向：
 
 ```text
@@ -123,6 +129,6 @@ zipalign 和 APK 签名。GitHub Releases 中的官方 APK 使用项目维护者
 - Motion Photo 依赖相册厂商兼容 Android/Google 实况照片格式；不兼容时仍可分别查看原图片和视频。
 - 知乎支持文章、指定回答、想法和独立视频，也支持问题归档按批次继续下载回答及评论；盐选、付费、私密及
   已删除内容不支持，外部平台嵌入视频只在 Markdown 中保留链接。
-- Instagram 作者部分资料仍可能缺失；B站作者 IP 属地暂不提供。
+- Instagram 作者部分资料仍可能缺失；B站作者接口返回 IP 属地时显示，接口未返回时不显示。
 - B站仅支持普通、未加密的 H.264/AAC DASH 投稿，不包含番剧、直播、动态或付费内容；可用档位受登录权限和接口返回限制。
 - APK 中的媒体处理使用 Android MediaExtractor/MediaMuxer，只做编码轨复制，不转码。

@@ -1,0 +1,61 @@
+package com.local.multiplatformdownloader.platform.zhihu
+
+import com.local.multiplatformdownloader.core.model.SourcePlatform
+import com.local.multiplatformdownloader.core.model.WebPageSnapshot
+import com.local.multiplatformdownloader.platform.common.PlatformParseException
+import java.net.URI
+import org.json.JSONObject
+
+internal object ZhihuWebSnapshotExtractor {
+    fun extract(snapshot: WebPageSnapshot, source: ResolvedZhihuSource): JSONObject {
+        val finalUri = runCatching { URI(snapshot.finalUrl) }.getOrNull()
+        val finalHost = finalUri?.host.orEmpty().lowercase()
+        val finalPath = finalUri?.path.orEmpty().lowercase()
+        val visible = snapshot.visibleText.take(8_000)
+        if (!SourcePlatform.ZHIHU.matchesHost(finalHost) ||
+            finalPath.contains("signin") || finalPath.contains("account")) {
+            throw PlatformParseException("LOGIN_REQUIRED", "知乎页面要求登录或人机验证，请返回首页点击知乎登录状态")
+        }
+
+        snapshot.initialData.takeIf(String::isNotBlank)?.let { initialData ->
+            val entityName = when (source.type) {
+                ZhihuContentType.QUESTION -> "questions"
+                ZhihuContentType.ARTICLE -> "articles"
+                ZhihuContentType.ANSWER -> "answers"
+                ZhihuContentType.PIN -> "pins"
+                ZhihuContentType.VIDEO -> error("独立视频不使用页面快照")
+            }
+            ZhihuPageStateExtractor.findEntityFromJson(initialData, entityName, source.contentId)?.let {
+                return it
+            }
+        }
+
+        if (source.type == ZhihuContentType.QUESTION && snapshot.title.isNotBlank()) {
+            return JSONObject().apply {
+                put("id", source.contentId)
+                put("title", snapshot.title.substringBefore(" - 知乎").trim())
+            }
+        }
+
+        if (source.contentId !in finalPath) {
+            throw PlatformParseException("DETAIL_EMPTY", "知乎页面跳转后没有停留在目标内容")
+        }
+        if (snapshot.contentHtml.isBlank() && BLOCKED_PAGE.containsMatchIn(visible)) {
+            throw PlatformParseException("LOGIN_REQUIRED", "知乎页面要求登录或人机验证，请返回首页点击知乎登录状态")
+        }
+        if (snapshot.contentHtml.isBlank()) {
+            throw PlatformParseException("DETAIL_EMPTY", "知乎页面已打开，但没有提取到目标正文")
+        }
+        return JSONObject().apply {
+            put("id", source.contentId)
+            put("title", snapshot.title)
+            put("author", JSONObject().put("name", snapshot.author))
+            put("content", snapshot.contentHtml)
+        }
+    }
+
+    private val BLOCKED_PAGE = Regex(
+        "登录知乎|注册知乎|安全验证|验证码|异常请求|访问受限|请求存在异常|请完成验证",
+        RegexOption.IGNORE_CASE,
+    )
+}

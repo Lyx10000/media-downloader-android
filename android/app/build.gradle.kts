@@ -12,15 +12,18 @@ val releaseMinifyEnabled = providers.gradleProperty("releaseMinifyEnabled")
     ?: true
 
 android {
-    namespace = "com.local.douyindownloader"
+    namespace = "com.local.multiplatformdownloader"
     compileSdk = 35
 
     defaultConfig {
+        // Published compatibility identity: changing this value makes Android install a
+        // separate app and strands existing Room data, settings, WebView cookies and updates.
+        // The current source namespace is com.local.multiplatformdownloader.
         applicationId = "com.local.douyindownloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 43
-        versionName = "1.7.0"
+        versionCode = 44
+        versionName = "1.7.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

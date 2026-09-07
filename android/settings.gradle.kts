@@ -17,5 +17,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "DouyinDownloader"
+rootProject.name = "MultiPlatformDownloader"
 include(":app")
