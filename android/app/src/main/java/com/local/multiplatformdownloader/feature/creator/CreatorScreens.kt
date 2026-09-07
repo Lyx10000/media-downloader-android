@@ -498,7 +498,9 @@ private fun CreatorDetailScreen(
     var deleteRecordFiles by remember(profile.key) { mutableStateOf(false) }
     val displayedWorks = if (detailTab == 0) state.pageWorks else {
         state.allWorks.filter(CreatorWork::hasLocalContent)
-            .sortedByDescending { it.task?.createdAt ?: 0L }
+            .sortedByDescending { work ->
+                work.relatedTasks.maxOfOrNull(TaskRecord::createdAt) ?: work.task?.createdAt ?: 0L
+            }
     }
     val selectableLocalWorkKeys = state.allWorks
         .filter(CreatorWork::hasLocalContent)

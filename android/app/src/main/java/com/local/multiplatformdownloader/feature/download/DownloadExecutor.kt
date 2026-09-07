@@ -914,7 +914,13 @@ class DownloadExecutor @Inject internal constructor(
         transferProgress: (suspend (downloadedBytes: Long, totalBytes: Long, bytesPerSecond: Long) -> Unit)? = null,
     ) {
         suspend fun report(downloaded: Long, total: Long, speed: Long) {
-            adaptiveDownloadController.recordTransfer(taskId, target.name, speed)
+            adaptiveDownloadController.recordTransfer(
+                taskId = taskId,
+                channel = target.name,
+                downloadedBytes = downloaded,
+                totalBytes = total,
+                bytesPerSecond = speed,
+            )
             progress(
                 formatDownloadStatus(label, downloaded, total, speed),
                 downloadFileProgress(downloaded, total),
@@ -922,6 +928,7 @@ class DownloadExecutor @Inject internal constructor(
             )
             transferProgress?.invoke(downloaded, total, speed)
         }
+        try {
         var lastError: Throwable? = null
         val securedUrls = urls.mapIndexed { addressIndex, originalAddress ->
             secureDownloadUrl(originalAddress).also { address ->
@@ -1060,6 +1067,9 @@ class DownloadExecutor @Inject internal constructor(
             }
         }
         throw lastError ?: IllegalStateException("没有可用的下载地址")
+        } finally {
+            adaptiveDownloadController.finishTransfer(taskId, target.name)
+        }
     }
 
     private fun extensionFromUrl(url: String, fallback: String): String {

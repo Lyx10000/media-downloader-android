@@ -7,6 +7,7 @@ import com.local.multiplatformdownloader.core.model.StorageMode
 import com.local.multiplatformdownloader.core.model.TaskSpec
 import com.local.multiplatformdownloader.core.model.TaskStatus
 import com.local.multiplatformdownloader.core.storage.StorageInspector
+import com.local.multiplatformdownloader.core.storage.TaskFolderPruner
 import com.local.multiplatformdownloader.core.storage.findRelativeDirectory
 import com.local.multiplatformdownloader.core.storage.pruneEmptyDirectoryTree
 
@@ -36,6 +37,7 @@ class TaskDeletionCoordinator @Inject constructor(
     private val inspector: StorageInspector,
     private val logger: DiagnosticLogger,
     private val workManager: WorkManager,
+    private val taskFolderPruner: TaskFolderPruner,
 ) {
 
     suspend fun deleteTask(taskId: String, deleteFiles: Boolean): TaskDeleteResult =
@@ -68,6 +70,9 @@ class TaskDeletionCoordinator @Inject constructor(
                 if (!deleted) failures += output.displayName.ifBlank { "未命名文件" }
             }
             val folderResult = deleteEmptyTaskFolder(spec)
+            if (folderResult.success && !folderResult.retained && spec != null) {
+                taskFolderPruner.pruneManagedParents(spec)
+            }
             logger.event(taskId, "DELETE", "FOLDER_DELETE_RESULT", JSONObject().apply {
                 put("success", folderResult.success)
                 put("retained", folderResult.retained)
@@ -114,6 +119,9 @@ class TaskDeletionCoordinator @Inject constructor(
                 deleted
             }
             val folderResult = deleteEmptyTaskFolder(spec)
+            if (folderResult.success && !folderResult.retained && spec != null) {
+                taskFolderPruner.pruneManagedParents(spec)
+            }
             if (failures.isEmpty() && folderResult.success) {
                 store.clearOutputs(taskId)
                 TaskDeleteResult(true, "残留内容已清理")

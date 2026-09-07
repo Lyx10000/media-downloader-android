@@ -38,6 +38,7 @@ data class AdaptiveDownloadState(
     val waitingCount: Int = 0,
     val aggregateBytesPerSecond: Long = 0L,
     val taskBytesPerSecond: Map<String, Long> = emptyMap(),
+    val taskProgressFraction: Map<String, Float> = emptyMap(),
     val peakBytesPerSecond: Long = 0L,
     val cpuPercent: Float = 0f,
     val slowFramePercent: Float = -1f,
@@ -65,6 +66,8 @@ class AdaptiveDownloadController @Inject constructor(
     private data class TransferSample(
         val taskId: String,
         val bytesPerSecond: Long,
+        val downloadedBytes: Long,
+        val totalBytes: Long,
         val recordedAtMs: Long,
     )
 
@@ -154,18 +157,37 @@ class AdaptiveDownloadController @Inject constructor(
             block()
         } finally {
             transferSamples.keys.removeIf { it.startsWith("${lease.token}:") }
-            _state.update { it.copy(taskBytesPerSecond = it.taskBytesPerSecond - taskId) }
+            _state.update {
+                it.copy(
+                    taskBytesPerSecond = it.taskBytesPerSecond - taskId,
+                    taskProgressFraction = it.taskProgressFraction - taskId,
+                )
+            }
             taskGate.release(lease)
         }
     }
 
-    fun recordTransfer(taskId: String, channel: String, bytesPerSecond: Long) {
+    fun recordTransfer(
+        taskId: String,
+        channel: String,
+        downloadedBytes: Long,
+        totalBytes: Long,
+        bytesPerSecond: Long,
+    ) {
         val token = taskGate.tokenForTask(taskId) ?: return
         transferSamples["$token:$channel"] = TransferSample(
             taskId = taskId,
             bytesPerSecond = bytesPerSecond.coerceAtLeast(0L),
+            downloadedBytes = downloadedBytes.coerceAtLeast(0L),
+            totalBytes = totalBytes.coerceAtLeast(0L),
             recordedAtMs = SystemClock.elapsedRealtime(),
         )
+    }
+
+    fun finishTransfer(taskId: String, channel: String) {
+        val token = taskGate.tokenForTask(taskId) ?: return
+        transferSamples.remove("$token:$channel")
+        publishLiveTransfers()
     }
 
     fun recordFrame(totalDurationNanos: Long) {
@@ -243,6 +265,15 @@ class AdaptiveDownloadController @Inject constructor(
         val instantaneousSpeed = freshSamples.sumOf { it.value.bytesPerSecond }
         val taskSpeeds = freshSamples.groupBy { it.value.taskId }
             .mapValues { (_, samples) -> samples.sumOf { it.value.bytesPerSecond } }
+        val taskProgress = freshSamples.groupBy { it.value.taskId }
+            .mapValues { (_, samples) ->
+                val known = samples.map { it.value }.filter { it.totalBytes > 0L }
+                if (known.isEmpty()) 0f else {
+                    val downloaded = known.sumOf { it.downloadedBytes.coerceAtMost(it.totalBytes) }
+                    val total = known.sumOf { it.totalBytes }
+                    (downloaded.toDouble() / total).coerceIn(0.0, 1.0).toFloat()
+                }
+            }
         ewmaSpeed = if (ewmaSpeed == 0.0) instantaneousSpeed.toDouble() else {
             EWMA_ALPHA * instantaneousSpeed + (1.0 - EWMA_ALPHA) * ewmaSpeed
         }
@@ -318,8 +349,11 @@ class AdaptiveDownloadController @Inject constructor(
         _state.update {
             it.copy(
                 targetConcurrency = targetConcurrency,
-                aggregateBytesPerSecond = ewmaSpeed.toLong(),
+                // Display the same instantaneous sample that task cards use. The EWMA
+                // remains an internal scheduler input and must not be presented as live speed.
+                aggregateBytesPerSecond = instantaneousSpeed,
                 taskBytesPerSecond = taskSpeeds,
+                taskProgressFraction = taskProgress,
                 peakBytesPerSecond = policyState.peakBytesPerSecond,
                 cpuPercent = cpuPercent,
                 slowFramePercent = slowFramePercent,
@@ -328,6 +362,28 @@ class AdaptiveDownloadController @Inject constructor(
                     "${platform.displayName}触发风控，已暂停该平台新任务"
                 } ?: policyState.reason,
                 platformRiskUntil = riskUntil,
+            )
+        }
+    }
+
+    private fun publishLiveTransfers() {
+        val now = SystemClock.elapsedRealtime()
+        val fresh = transferSamples.values.filter { now - it.recordedAtMs <= SAMPLE_STALE_MS }
+        val speeds = fresh.groupBy(TransferSample::taskId)
+            .mapValues { (_, samples) -> samples.sumOf(TransferSample::bytesPerSecond) }
+        val progress = fresh.groupBy(TransferSample::taskId).mapValues { (_, samples) ->
+            val known = samples.filter { it.totalBytes > 0L }
+            if (known.isEmpty()) 0f else {
+                val downloaded = known.sumOf { it.downloadedBytes.coerceAtMost(it.totalBytes) }
+                val total = known.sumOf(TransferSample::totalBytes)
+                (downloaded.toDouble() / total).coerceIn(0.0, 1.0).toFloat()
+            }
+        }
+        _state.update {
+            it.copy(
+                aggregateBytesPerSecond = speeds.values.sum(),
+                taskBytesPerSecond = speeds,
+                taskProgressFraction = progress,
             )
         }
     }

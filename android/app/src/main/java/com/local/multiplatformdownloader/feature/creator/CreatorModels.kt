@@ -94,10 +94,10 @@ data class CreatorWork(
     val relatedTasks: List<TaskRecord> = emptyList(),
 ) {
     val hasLocalRecord: Boolean get() = task != null || preparation != null
-    val hasLocalContent: Boolean get() = task?.let { record ->
+    val hasLocalContent: Boolean get() = relatedTasks.ifEmpty { listOfNotNull(task) }.any { record ->
         record.outputs.isNotEmpty() || record.status == TaskStatus.COMPLETE ||
             record.fileState !in setOf(FileState.UNKNOWN, FileState.STORAGE_UNAVAILABLE)
-    } == true
+    }
     val preparationFailed: Boolean get() = task == null && preparation?.status == CreatorBatchWorkStatus.FAILED
     val preparationActionable: Boolean get() = task == null && preparation?.taskId?.isBlank() == true &&
         preparation.status in setOf(CreatorBatchWorkStatus.FAILED, CreatorBatchWorkStatus.PAUSED)

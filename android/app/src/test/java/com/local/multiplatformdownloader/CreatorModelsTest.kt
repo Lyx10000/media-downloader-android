@@ -240,6 +240,38 @@ class CreatorModelsTest {
     }
 
     @Test
+    fun `running bilibili part does not hide a completed local part`() {
+        val running = TaskRecord(
+            id = "running",
+            createdAt = 2L,
+            status = TaskStatus.RUNNING,
+            stage = "正在下载",
+            progress = 10,
+            title = "P2",
+            outputs = emptyList(),
+            error = "",
+            fileState = FileState.UNKNOWN,
+        )
+        val completed = running.copy(
+            id = "completed",
+            createdAt = 1L,
+            status = TaskStatus.COMPLETE,
+            stage = "已完成",
+            progress = 100,
+            title = "P1",
+            outputs = listOf(TaskOutput("content://bilibili/p1", sizeBytes = 1024L)),
+            fileState = FileState.AVAILABLE,
+        )
+        val multiPart = work("BV12V4X6tE56").copy(
+            platform = SourcePlatform.BILIBILI,
+            task = running,
+            relatedTasks = listOf(running, completed),
+        )
+
+        assertTrue(multiPart.hasLocalContent)
+    }
+
+    @Test
     fun `web fallback is limited to supported platform and media combinations`() {
         assertTrue(
             shouldUseCreatorWebFallback(

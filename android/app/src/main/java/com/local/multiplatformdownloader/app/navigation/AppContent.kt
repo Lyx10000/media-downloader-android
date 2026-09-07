@@ -269,7 +269,7 @@ internal fun DownloaderApp(
     LaunchedEffect(viewModel) {
         viewModel.completedTasks.collectLatest { taskId ->
             val result = snackbar.showSnackbar(
-                message = "下载完成，已移至本地下载",
+                message = "下载完成",
                 actionLabel = "查看",
             )
             if (result == SnackbarResult.ActionPerformed) openTaskTarget(taskId)

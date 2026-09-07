@@ -55,7 +55,12 @@ internal fun AdaptiveConcurrencyStatusCard(state: AdaptiveDownloadState) {
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    "自动并发 · ${state.activeCount} 个任务 · ${formatByteSize(state.aggregateBytesPerSecond)}/s",
+                    if (state.activeCount == 0 && state.waitingCount == 0) {
+                        "当前无下载任务"
+                    } else {
+                        "自动并发 · ${state.activeCount} 个任务 · " +
+                            "${formatByteSize(state.aggregateBytesPerSecond)}/s"
+                    },
                     style = MaterialTheme.typography.titleSmall,
                 )
                 Icon(
@@ -63,11 +68,13 @@ internal fun AdaptiveConcurrencyStatusCard(state: AdaptiveDownloadState) {
                     contentDescription = if (expanded) "收起调度详情" else "展开调度详情",
                 )
             }
-            Text(
-                state.reason,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (state.activeCount > 0 || state.waitingCount > 0 || state.hasActiveCircuit(now)) {
+                Text(
+                    state.reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
                 "应用 CPU ${formatPercent(state.cpuPercent)} · 系统热状态 ${thermalLabel(state.thermalStatus)}",
                 style = MaterialTheme.typography.bodySmall,

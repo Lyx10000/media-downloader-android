@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -39,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -68,6 +70,7 @@ internal data class ActiveCreatorTaskGroup(
     val tasks: List<TaskRecord>,
     val currentBytesPerSecond: Long,
     val peakBytesPerSecond: Long,
+    val progressFraction: Float,
     val batchSummary: CreatorBatchSummary? = null,
 )
 
@@ -92,7 +95,7 @@ internal fun isTaskQueueVisible(task: TaskRecord): Boolean = task.status !in set
 internal fun isLocalContentTask(task: TaskRecord): Boolean =
     task.outputs.isNotEmpty() || task.status == TaskStatus.COMPLETE
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 internal fun TaskQueueScreen(
     uiState: MainUiState,
@@ -116,6 +119,7 @@ internal fun TaskQueueScreen(
     val peakByAuthor by viewModel.authorTaskPeakBytesPerSecond.collectAsStateWithLifecycle()
     var kindFilter by rememberSaveable { mutableStateOf(QueueKindFilter.ALL) }
     var statusFilter by rememberSaveable { mutableStateOf(QueueStatusFilter.ALL) }
+    var showFilters by rememberSaveable { mutableStateOf(false) }
     val creatorByKey = creatorState.creators
         .filter { it.followed || it.archived }
         .associateBy(CreatorProfile::key)
@@ -149,6 +153,9 @@ internal fun TaskQueueScreen(
                     tasks = tasks.sortedByDescending(TaskRecord::createdAt),
                     currentBytesPerSecond = tasks.sumOf { adaptive.taskBytesPerSecond[it.id] ?: 0L },
                     peakBytesPerSecond = peakByAuthor[creatorKey] ?: 0L,
+                    progressFraction = tasks.map { task ->
+                        adaptive.taskProgressFraction[task.id] ?: task.progress.coerceIn(0, 100) / 100f
+                    }.average().takeUnless(Double::isNaN)?.toFloat() ?: 0f,
                     batchSummary = creatorState.batchSummaries[creatorKey]
                         ?.takeIf(CreatorBatchSummary::visible),
                 )
@@ -166,55 +173,32 @@ internal fun TaskQueueScreen(
     LaunchedEffect(displayedTaskIds) { onVisibleTaskIdsChanged(displayedTaskIds) }
 
     Column(Modifier.fillMaxSize()) {
-        if (adaptive.shouldDisplay()) {
-            androidx.compose.foundation.layout.Box(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        androidx.compose.foundation.layout.Box(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            AdaptiveConcurrencyStatusCard(adaptive)
+        }
+        OutlinedCard(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+                .clickable { showFilters = true },
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                AdaptiveConcurrencyStatusCard(adaptive)
-            }
-        }
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            QueueKindFilter.entries.forEach { filter ->
-                FilterChip(
-                    selected = kindFilter == filter,
-                    onClick = { kindFilter = filter },
-                    label = { Text(filter.label) },
-                )
-            }
-        }
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            FilterChip(
-                selected = platformFilter == null,
-                onClick = { onPlatformFilter(null) },
-                label = { Text("全部平台") },
-            )
-            SourcePlatform.entries.forEach { platform ->
-                FilterChip(
-                    selected = platformFilter == platform,
-                    onClick = { onPlatformFilter(platform) },
-                    label = { Text(platform.displayName) },
-                )
-            }
-        }
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            QueueStatusFilter.entries.forEach { filter ->
-                FilterChip(
-                    selected = statusFilter == filter,
-                    onClick = { statusFilter = filter },
-                    label = { Text(filter.label) },
-                )
+                Icon(Icons.Default.Tune, contentDescription = null)
+                Column(Modifier.weight(1f)) {
+                    Text("筛选", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "${kindFilter.label} · ${platformFilter?.displayName ?: "全部平台"} · " +
+                            statusFilter.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         TasksScreen(
@@ -242,6 +226,70 @@ internal fun TaskQueueScreen(
             onOpenCreatorGroup = onOpenCreator,
         )
     }
+    if (showFilters) {
+        ModalBottomSheet(onDismissRequest = { showFilters = false }) {
+            Column(
+                Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("筛选任务", style = MaterialTheme.typography.titleLarge)
+                Text("任务类型", style = MaterialTheme.typography.labelLarge)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    QueueKindFilter.entries.forEach { filter ->
+                        FilterChip(
+                            selected = kindFilter == filter,
+                            onClick = { kindFilter = filter },
+                            label = { Text(filter.label) },
+                        )
+                    }
+                }
+                HorizontalDivider()
+                Text("平台", style = MaterialTheme.typography.labelLarge)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    FilterChip(
+                        selected = platformFilter == null,
+                        onClick = { onPlatformFilter(null) },
+                        label = { Text("全部平台") },
+                    )
+                    SourcePlatform.entries.forEach { platform ->
+                        FilterChip(
+                            selected = platformFilter == platform,
+                            onClick = { onPlatformFilter(platform) },
+                            label = { Text(platform.displayName) },
+                        )
+                    }
+                }
+                HorizontalDivider()
+                Text("任务状态", style = MaterialTheme.typography.labelLarge)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    QueueStatusFilter.entries.forEach { filter ->
+                        FilterChip(
+                            selected = statusFilter == filter,
+                            onClick = { statusFilter = filter },
+                            label = { Text(filter.label) },
+                        )
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = {
+                        kindFilter = QueueKindFilter.ALL
+                        statusFilter = QueueStatusFilter.ALL
+                        onPlatformFilter(null)
+                    }) { Text("重置") }
+                    Button(onClick = { showFilters = false }) { Text("完成") }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -253,8 +301,8 @@ internal fun ActiveCreatorTaskGroupCard(
     selected: Boolean = false,
     onToggle: () -> Unit = {},
 ) {
-    val progress = group.batchSummary?.progressFraction ?: group.tasks.map(TaskRecord::progress).average()
-        .takeUnless(Double::isNaN)?.toFloat()?.div(100f)?.coerceIn(0f, 1f) ?: 0f
+    val progress = group.batchSummary?.progressFraction?.takeIf { group.tasks.isEmpty() }
+        ?: group.progressFraction.coerceIn(0f, 1f)
     val workCount = maxOf(group.tasks.size, group.batchSummary?.selected ?: 0)
     val waitingForRisk = (platformRiskUntil[group.profile.platform] ?: 0L) >
         System.currentTimeMillis() && group.tasks.any { it.status == TaskStatus.QUEUED }
