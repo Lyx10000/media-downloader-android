@@ -212,20 +212,7 @@ internal fun TasksScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (showPlatformFilter) item(key = "platform-filter") {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = platformFilter == null,
-                    onClick = { onPlatformFilter(null) },
-                    label = { Text("全部") },
-                )
-                SourcePlatform.entries.forEach { platform ->
-                    FilterChip(
-                        selected = platformFilter == platform,
-                        onClick = { onPlatformFilter(platform) },
-                        label = { Text(platform.displayName) },
-                    )
-                }
-            }
+            PlatformFilterBar(selected = platformFilter, onSelected = onPlatformFilter)
         }
         if (showAdaptiveStatus && adaptiveDownloadState.shouldDisplay()) {
             item(key = "adaptive-concurrency") {

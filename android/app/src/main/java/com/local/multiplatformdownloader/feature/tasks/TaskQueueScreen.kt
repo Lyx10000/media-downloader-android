@@ -248,23 +248,7 @@ internal fun TaskQueueScreen(
                 }
                 HorizontalDivider()
                 Text("平台", style = MaterialTheme.typography.labelLarge)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    FilterChip(
-                        selected = platformFilter == null,
-                        onClick = { onPlatformFilter(null) },
-                        label = { Text("全部平台") },
-                    )
-                    SourcePlatform.entries.forEach { platform ->
-                        FilterChip(
-                            selected = platformFilter == platform,
-                            onClick = { onPlatformFilter(platform) },
-                            label = { Text(platform.displayName) },
-                        )
-                    }
-                }
+                PlatformFilterOptions(selected = platformFilter, onSelected = onPlatformFilter)
                 HorizontalDivider()
                 Text("任务状态", style = MaterialTheme.typography.labelLarge)
                 FlowRow(

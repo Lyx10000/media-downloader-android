@@ -15,6 +15,7 @@ import com.local.multiplatformdownloader.feature.home.MainUiState
 import com.local.multiplatformdownloader.feature.home.MainViewModel
 import com.local.multiplatformdownloader.feature.home.WebEnvironment
 import com.local.multiplatformdownloader.feature.tasks.TasksScreen
+import com.local.multiplatformdownloader.feature.tasks.PlatformFilterBar
 import com.local.multiplatformdownloader.feature.tasks.TrackDownloadProgressBars
 import com.local.multiplatformdownloader.feature.tasks.isTaskRedownloadEligible
 import com.local.multiplatformdownloader.feature.tasks.reconcileTaskSelection
@@ -226,23 +227,11 @@ internal fun CreatorLibraryScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Top,
             ) {
-                FlowRow(
+                PlatformFilterBar(
+                    selected = state.platformFilter,
+                    onSelected = viewModel::setPlatformFilter,
                     modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = state.platformFilter == null,
-                        onClick = { viewModel.setPlatformFilter(null) },
-                        label = { Text("全部") },
-                    )
-                    CREATOR_LIBRARY_PLATFORMS.forEach { platform ->
-                        FilterChip(
-                            selected = state.platformFilter == platform,
-                            onClick = { viewModel.setPlatformFilter(platform) },
-                            label = { Text(platform.displayName) },
-                        )
-                    }
-                }
+                )
                 IconButton(
                     enabled = visibleCreators.isNotEmpty() && !state.isDeletingCreators,
                     onClick = {
