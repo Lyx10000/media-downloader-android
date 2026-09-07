@@ -7,6 +7,7 @@ import com.local.multiplatformdownloader.core.model.TaskStatus
 import com.local.multiplatformdownloader.core.update.UpdateLaunchRequest
 import com.local.multiplatformdownloader.feature.creator.CreatorLibraryViewModel
 import com.local.multiplatformdownloader.feature.creator.LocalDownloadsScreen
+import com.local.multiplatformdownloader.feature.creator.filterCreatorsByPlatform
 import com.local.multiplatformdownloader.feature.creator.taskCreatorKey
 import com.local.multiplatformdownloader.feature.document.DocumentReaderScreen
 import com.local.multiplatformdownloader.feature.home.FullScreenWebEnvironment
@@ -17,6 +18,7 @@ import com.local.multiplatformdownloader.feature.settings.SettingsScreen
 import com.local.multiplatformdownloader.feature.tasks.ShareableFile
 import com.local.multiplatformdownloader.feature.tasks.TaskFileManagerScreen
 import com.local.multiplatformdownloader.feature.tasks.TaskQueueScreen
+import com.local.multiplatformdownloader.feature.tasks.TaskHealthStatus
 import com.local.multiplatformdownloader.feature.tasks.LocalContentDetailScreen
 import com.local.multiplatformdownloader.feature.tasks.buildFileShareChooser
 import com.local.multiplatformdownloader.feature.tasks.buildFileShareIntent
@@ -87,6 +89,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.collectLatest
@@ -102,6 +105,7 @@ internal fun DownloaderApp(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val creatorState by creatorViewModel.state.collectAsStateWithLifecycle()
+    val adaptiveDownloadState by viewModel.adaptiveDownloadState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     var destination by remember { mutableIntStateOf(0) }
@@ -112,6 +116,9 @@ internal fun DownloaderApp(
     var questionArchiveTaskId by rememberSaveable { mutableStateOf<String?>(null) }
     var loginPlatform by rememberSaveable { mutableStateOf<SourcePlatform?>(null) }
     var taskSelectionMode by remember { mutableStateOf(false) }
+    var authorSelectionMode by remember { mutableStateOf(false) }
+    var selectedCreatorKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showCreatorDeleteDialog by remember { mutableStateOf(false) }
     var localSection by rememberSaveable { mutableIntStateOf(0) }
     var taskPlatformFilterWire by rememberSaveable { mutableStateOf("") }
     var taskQueueVisibleIds by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -227,6 +234,12 @@ internal fun DownloaderApp(
     }
     val selectionPageVisible = destination == 1 ||
         destination == 2 && localSection == 0 && creatorState.selectedCreator == null
+    val authorSelectionPageVisible = destination == 2 && localSection == 1 &&
+        creatorState.selectedCreator == null
+    val selectableCreatorKeys = filterCreatorsByPlatform(
+        creatorState.creators,
+        creatorState.platformFilter,
+    ).mapTo(linkedSetOf()) { it.key }
     LaunchedEffect(destination, localSection, selectableTaskIds) {
         selectedTaskIds = reconcileTaskSelection(selectedTaskIds, selectableTaskIds)
         if (!selectionPageVisible || selectableTaskIds.isEmpty()) {
@@ -235,6 +248,14 @@ internal fun DownloaderApp(
             showBatchDeleteDialog = false
             showBatchRedownloadDialog = false
             batchDeleteFiles = false
+        }
+    }
+    LaunchedEffect(destination, localSection, creatorState.selectedCreator, selectableCreatorKeys) {
+        selectedCreatorKeys = reconcileTaskSelection(selectedCreatorKeys, selectableCreatorKeys)
+        if (!authorSelectionPageVisible || selectableCreatorKeys.isEmpty()) {
+            authorSelectionMode = false
+            selectedCreatorKeys = emptySet()
+            showCreatorDeleteDialog = false
         }
     }
     val selectedTasks = uiState.allTasks.filter { it.id in selectedTaskIds }
@@ -381,19 +402,31 @@ internal fun DownloaderApp(
             Column {
                 TopAppBar(
                     title = {
-                        Text(
-                            if (selectionPageVisible && taskSelectionMode) {
-                                "已选择 ${selectedTaskIds.size} 项"
-                            } else {
-                                destinations[destination].label
-                            },
-                        )
+                        when {
+                            selectionPageVisible && taskSelectionMode ->
+                                Text("已选择 ${selectedTaskIds.size} 项")
+                            authorSelectionPageVisible && authorSelectionMode ->
+                                Text("已选择 ${selectedCreatorKeys.size} 位")
+                            destination == 1 -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("任务")
+                                TaskHealthStatus(
+                                    state = adaptiveDownloadState,
+                                    modifier = Modifier.padding(start = 12.dp),
+                                )
+                            }
+                            else -> Text(destinations[destination].label)
+                        }
                     },
                     navigationIcon = {
-                        if (selectionPageVisible && taskSelectionMode) {
+                        if (selectionPageVisible && taskSelectionMode ||
+                            authorSelectionPageVisible && authorSelectionMode
+                        ) {
                             IconButton(onClick = {
                                 taskSelectionMode = false
                                 selectedTaskIds = emptySet()
+                                authorSelectionMode = false
+                                selectedCreatorKeys = emptySet()
+                                showCreatorDeleteDialog = false
                             }) {
                                 Icon(Icons.Default.Close, contentDescription = "退出多选")
                             }
@@ -428,6 +461,32 @@ internal fun DownloaderApp(
                                     Icon(Icons.Default.DeleteSweep, contentDescription = "批量删除任务")
                                 }
                             }
+                        } else if (authorSelectionPageVisible) {
+                            if (authorSelectionMode) {
+                                IconButton(onClick = {
+                                    selectedCreatorKeys = if (selectedCreatorKeys == selectableCreatorKeys) {
+                                        emptySet()
+                                    } else {
+                                        selectableCreatorKeys
+                                    }
+                                }) {
+                                    Icon(Icons.Default.SelectAll, contentDescription = "全选当前平台作者")
+                                }
+                                IconButton(
+                                    onClick = { showCreatorDeleteDialog = true },
+                                    enabled = selectedCreatorKeys.isNotEmpty() &&
+                                        !creatorState.isDeletingCreators,
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "删除选中作者")
+                                }
+                            } else if (selectableCreatorKeys.isNotEmpty()) {
+                                IconButton(
+                                    enabled = !creatorState.isDeletingCreators,
+                                    onClick = { authorSelectionMode = true },
+                                ) {
+                                    Icon(Icons.Default.DeleteSweep, contentDescription = "批量删除作者")
+                                }
+                            }
                         }
                     },
                 )
@@ -452,6 +511,9 @@ internal fun DownloaderApp(
                                 destination = index
                                 taskSelectionMode = false
                                 selectedTaskIds = emptySet()
+                                authorSelectionMode = false
+                                selectedCreatorKeys = emptySet()
+                                showCreatorDeleteDialog = false
                             }
                         },
                         icon = { Icon(item.icon, contentDescription = item.label) },
@@ -520,6 +582,11 @@ internal fun DownloaderApp(
                             taskSelectionMode = false
                             selectedTaskIds = emptySet()
                         }
+                        if (section != 1) {
+                            authorSelectionMode = false
+                            selectedCreatorKeys = emptySet()
+                            showCreatorDeleteDialog = false
+                        }
                     },
                     chooseFolder = { folderPicker.launch(null) },
                     requestAllFilesAccess = requestAllFilesAccess,
@@ -539,6 +606,12 @@ internal fun DownloaderApp(
                     onOpenQuestionArchive = { taskId ->
                         questionArchiveTaskId = taskId
                     },
+                    authorSelectionMode = authorSelectionMode,
+                    selectedCreatorKeys = selectedCreatorKeys,
+                    showCreatorDeleteDialog = showCreatorDeleteDialog,
+                    onAuthorSelectionMode = { authorSelectionMode = it },
+                    onSelectedCreatorKeys = { selectedCreatorKeys = it },
+                    onShowCreatorDeleteDialog = { showCreatorDeleteDialog = it },
                 )
                 3 -> DiagnosticsScreen(
                     logText = uiState.logText,

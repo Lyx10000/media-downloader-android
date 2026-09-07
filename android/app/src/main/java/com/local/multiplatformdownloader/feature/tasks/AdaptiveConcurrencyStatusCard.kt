@@ -5,11 +5,15 @@ import com.local.multiplatformdownloader.core.download.formatByteSize
 
 import android.os.PowerManager
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -26,9 +30,38 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlinx.coroutines.delay
+
+@Composable
+internal fun TaskHealthStatus(
+    state: AdaptiveDownloadState,
+    modifier: Modifier = Modifier,
+) {
+    val statusLabel = thermalLabel(state.thermalStatus)
+    Row(
+        modifier = modifier.semantics {
+            contentDescription = "CPU ${formatPercent(state.cpuPercent)}，核心温度$statusLabel"
+        },
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "CPU ${formatPercent(state.cpuPercent)} · 核心温度",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+        Box(
+            Modifier.size(8.dp).clip(CircleShape).background(thermalIndicatorColor(state.thermalStatus)),
+        )
+    }
+}
 
 @Composable
 internal fun AdaptiveConcurrencyStatusCard(state: AdaptiveDownloadState) {
@@ -126,4 +159,18 @@ private fun thermalLabel(status: Int): String = when (status) {
     PowerManager.THERMAL_STATUS_EMERGENCY -> "紧急"
     PowerManager.THERMAL_STATUS_SHUTDOWN -> "即将关机"
     else -> "未知"
+}
+
+@Composable
+private fun thermalIndicatorColor(status: Int): Color = when (status) {
+    PowerManager.THERMAL_STATUS_NONE,
+    PowerManager.THERMAL_STATUS_LIGHT,
+    -> Color(0xFF2E7D32)
+    PowerManager.THERMAL_STATUS_MODERATE -> Color(0xFFF9A825)
+    PowerManager.THERMAL_STATUS_SEVERE -> Color(0xFFEF6C00)
+    PowerManager.THERMAL_STATUS_CRITICAL,
+    PowerManager.THERMAL_STATUS_EMERGENCY,
+    PowerManager.THERMAL_STATUS_SHUTDOWN,
+    -> MaterialTheme.colorScheme.error
+    else -> MaterialTheme.colorScheme.outline
 }

@@ -117,6 +117,12 @@ internal fun LocalDownloadsScreen(
     focusedTaskId: String?,
     onTaskFocused: () -> Unit,
     onOpenQuestionArchive: (String) -> Unit,
+    authorSelectionMode: Boolean,
+    selectedCreatorKeys: Set<String>,
+    showCreatorDeleteDialog: Boolean,
+    onAuthorSelectionMode: (Boolean) -> Unit,
+    onSelectedCreatorKeys: (Set<String>) -> Unit,
+    onShowCreatorDeleteDialog: (Boolean) -> Unit,
 ) {
     val creator = creatorState.selectedCreator
     val authorKeys = creatorState.creators.mapTo(hashSetOf(), CreatorProfile::key)
@@ -176,6 +182,12 @@ internal fun LocalDownloadsScreen(
                 state = creatorState,
                 viewModel = creatorViewModel,
                 requestAllFilesAccess = requestAllFilesAccess,
+                selectionMode = authorSelectionMode,
+                selectedCreatorKeys = selectedCreatorKeys,
+                showDeleteDialog = showCreatorDeleteDialog,
+                onSelectionMode = onAuthorSelectionMode,
+                onSelectedCreatorKeys = onSelectedCreatorKeys,
+                onShowDeleteDialog = onShowCreatorDeleteDialog,
             )
         }
     }
@@ -187,13 +199,16 @@ internal fun CreatorLibraryScreen(
     state: CreatorLibraryUiState,
     viewModel: CreatorLibraryViewModel,
     requestAllFilesAccess: () -> Unit,
+    selectionMode: Boolean,
+    selectedCreatorKeys: Set<String>,
+    showDeleteDialog: Boolean,
+    onSelectionMode: (Boolean) -> Unit,
+    onSelectedCreatorKeys: (Set<String>) -> Unit,
+    onShowDeleteDialog: (Boolean) -> Unit,
 ) {
     val visibleCreators = filterCreatorsByPlatform(state.creators, state.platformFilter)
     val active = visibleCreators.filterNot(CreatorProfile::archived)
     val archived = visibleCreators.filter(CreatorProfile::archived)
-    var selectionMode by remember { mutableStateOf(false) }
-    var selectedCreatorKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var showDeleteDialog by remember { mutableStateOf(false) }
     val selectableKeys = visibleCreators.mapTo(linkedSetOf(), CreatorProfile::key)
     val selectedProfiles = visibleCreators.filter { it.key in selectedCreatorKeys }
     val selectedActive = selectedProfiles.filterNot(CreatorProfile::archived)
@@ -201,15 +216,15 @@ internal fun CreatorLibraryScreen(
     val selectedTaskCount = selectedActive.sumOf { state.taskSummaries[it.key]?.total ?: 0 }
 
     BackHandler(enabled = selectionMode) {
-        selectionMode = false
-        selectedCreatorKeys = emptySet()
-        showDeleteDialog = false
+        onSelectionMode(false)
+        onSelectedCreatorKeys(emptySet())
+        onShowDeleteDialog(false)
     }
     LaunchedEffect(selectableKeys) {
-        selectedCreatorKeys = reconcileTaskSelection(selectedCreatorKeys, selectableKeys)
+        onSelectedCreatorKeys(reconcileTaskSelection(selectedCreatorKeys, selectableKeys))
         if (selectableKeys.isEmpty()) {
-            selectionMode = false
-            showDeleteDialog = false
+            onSelectionMode(false)
+            onShowDeleteDialog(false)
         }
     }
     if (state.creators.none { it.platform in CREATOR_LIBRARY_PLATFORMS }) {
@@ -223,61 +238,10 @@ internal fun CreatorLibraryScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Top,
-            ) {
-                PlatformFilterBar(
-                    selected = state.platformFilter,
-                    onSelected = viewModel::setPlatformFilter,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(
-                    enabled = visibleCreators.isNotEmpty() && !state.isDeletingCreators,
-                    onClick = {
-                        selectionMode = !selectionMode
-                        selectedCreatorKeys = emptySet()
-                        showDeleteDialog = false
-                    },
-                ) {
-                    Icon(
-                        if (selectionMode) Icons.Default.Close else Icons.Default.DeleteSweep,
-                        contentDescription = if (selectionMode) "退出作者批量管理" else "批量删除作者",
-                    )
-                }
-            }
-        }
-        if (selectionMode) {
-            item {
-                Surface(
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("已选择 ${selectedCreatorKeys.size} 位", modifier = Modifier.weight(1f))
-                        IconButton(
-                            onClick = {
-                                selectedCreatorKeys = if (selectedCreatorKeys.size == selectableKeys.size) {
-                                    emptySet()
-                                } else {
-                                    selectableKeys
-                                }
-                            },
-                        ) {
-                            Icon(Icons.Default.SelectAll, contentDescription = "全选当前平台作者")
-                        }
-                        IconButton(
-                            enabled = selectedCreatorKeys.isNotEmpty(),
-                            onClick = { showDeleteDialog = true },
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = "删除选中作者")
-                        }
-                    }
-                }
-            }
+            PlatformFilterBar(
+                selected = state.platformFilter,
+                onSelected = viewModel::setPlatformFilter,
+            )
         }
         if (state.isDeletingCreators) {
             item {
@@ -306,7 +270,7 @@ internal fun CreatorLibraryScreen(
                 taskSummary = state.taskSummaries[profile.key],
                 onClick = {
                     if (selectionMode) {
-                        selectedCreatorKeys = toggleTaskSelection(selectedCreatorKeys, profile.key)
+                        onSelectedCreatorKeys(toggleTaskSelection(selectedCreatorKeys, profile.key))
                     } else {
                         viewModel.openCreator(profile.key)
                     }
@@ -314,7 +278,7 @@ internal fun CreatorLibraryScreen(
                 selectionMode = selectionMode,
                 selected = profile.key in selectedCreatorKeys,
                 onSelectedChange = {
-                    selectedCreatorKeys = toggleTaskSelection(selectedCreatorKeys, profile.key)
+                    onSelectedCreatorKeys(toggleTaskSelection(selectedCreatorKeys, profile.key))
                 },
             )
         }
@@ -333,7 +297,7 @@ internal fun CreatorLibraryScreen(
                     taskSummary = state.taskSummaries[profile.key],
                     onClick = {
                         if (selectionMode) {
-                            selectedCreatorKeys = toggleTaskSelection(selectedCreatorKeys, profile.key)
+                            onSelectedCreatorKeys(toggleTaskSelection(selectedCreatorKeys, profile.key))
                         } else {
                             viewModel.openCreator(profile.key)
                         }
@@ -342,7 +306,7 @@ internal fun CreatorLibraryScreen(
                     selectionMode = selectionMode,
                     selected = profile.key in selectedCreatorKeys,
                     onSelectedChange = {
-                        selectedCreatorKeys = toggleTaskSelection(selectedCreatorKeys, profile.key)
+                        onSelectedCreatorKeys(toggleTaskSelection(selectedCreatorKeys, profile.key))
                     },
                 )
             }
@@ -350,7 +314,7 @@ internal fun CreatorLibraryScreen(
     }
     if (showDeleteDialog) {
         AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
+            onDismissRequest = { onShowDeleteDialog(false) },
             title = { Text("删除选中的作者？") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -378,15 +342,15 @@ internal fun CreatorLibraryScreen(
                             requestAllFilesAccess()
                         } else {
                             viewModel.deleteCreators(selectedCreatorKeys)
-                            showDeleteDialog = false
-                            selectionMode = false
-                            selectedCreatorKeys = emptySet()
+                            onShowDeleteDialog(false)
+                            onSelectionMode(false)
+                            onSelectedCreatorKeys(emptySet())
                         }
                     },
                 ) { Text("删除") }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
+                TextButton(onClick = { onShowDeleteDialog(false) }) { Text("取消") }
             },
         )
     }

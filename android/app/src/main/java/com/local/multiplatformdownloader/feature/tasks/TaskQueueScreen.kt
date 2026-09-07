@@ -173,11 +173,6 @@ internal fun TaskQueueScreen(
     LaunchedEffect(displayedTaskIds) { onVisibleTaskIdsChanged(displayedTaskIds) }
 
     Column(Modifier.fillMaxSize()) {
-        androidx.compose.foundation.layout.Box(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        ) {
-            AdaptiveConcurrencyStatusCard(adaptive)
-        }
         OutlinedCard(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
                 .clickable { showFilters = true },
