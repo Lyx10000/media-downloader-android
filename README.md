@@ -1,4 +1,4 @@
-# 聚合下载器
+# 多平台下载器
 
 面向 Android 的多平台图片、视频和音频下载工具。应用会从平台当前返回的媒体候选中优先
 选择质量更高的版本，也允许手动选择视频清晰度；平台未公开作者母版时，无法保证取得上传前
@@ -6,9 +6,10 @@
 
 ## 下载与安装
 
-[前往 GitHub Releases 下载最新版 APK](https://github.com/Lyx10000/media-downloader-android/releases/latest)
+[前往 GitHub Releases 下载最新版 APK](https://github.com/Lyx10000/multi-platform-downloader-android/releases/latest)
 
-当前发布版为 **v1.7.0**，新增 X、Instagram 和 B站支持。应用支持 Android 10 及以上系统，
+当前发布版为 **v1.8.0**。本版本将应用正式更名为“多平台下载器”，并重新整理任务队列与
+本地内容管理。应用支持 Android 10 及以上系统，
 仅提供 `arm64-v8a` 安装包。下载
 Release 中的 ARM64 APK 后可直接侧载；使用官方 Release 中相同签名的旧版本时，可以覆盖安装并
 保留任务、设置和 WebView 登录状态。

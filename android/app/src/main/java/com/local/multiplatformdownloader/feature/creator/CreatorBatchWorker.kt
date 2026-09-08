@@ -65,7 +65,7 @@ internal class CreatorBatchWorker(
         )
         val notification = NotificationCompat.Builder(applicationContext, DownloadWorker.CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("聚合下载器")
+            .setContentTitle(applicationContext.getString(R.string.app_name))
             .setContentText("正在准备作者批量下载")
             .setContentIntent(pendingIntent)
             .setOnlyAlertOnce(true)

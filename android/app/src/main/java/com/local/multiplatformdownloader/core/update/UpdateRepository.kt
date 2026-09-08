@@ -97,7 +97,7 @@ internal class UpdateRepository @Inject constructor(
                 parserHttpClient.get(
                     LATEST_RELEASE_API,
                     headers = mapOf(
-                        "User-Agent" to "MediaDownloader/${BuildConfig.VERSION_NAME}",
+                        "User-Agent" to "MultiPlatformDownloader/${BuildConfig.VERSION_NAME}",
                         "Accept" to "application/vnd.github+json",
                         "X-GitHub-Api-Version" to "2022-11-28",
                     ),
@@ -254,7 +254,7 @@ internal class UpdateRepository @Inject constructor(
 
     fun releasePageRequest(): UpdateLaunchRequest.OpenReleasePage {
         val url = _state.value.release?.pageUrl
-            ?: "https://github.com/Lyx10000/media-downloader-android/releases/latest"
+            ?: "https://github.com/Lyx10000/multi-platform-downloader-android/releases/latest"
         return UpdateLaunchRequest.OpenReleasePage(
             Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
@@ -270,7 +270,7 @@ internal class UpdateRepository @Inject constructor(
                 val call = client.newCall(
                     Request.Builder()
                         .url(currentUrl)
-                        .header("User-Agent", "MediaDownloader/${BuildConfig.VERSION_NAME}")
+                        .header("User-Agent", "MultiPlatformDownloader/${BuildConfig.VERSION_NAME}")
                         .header("Accept", "application/vnd.android.package-archive, application/octet-stream")
                         .build(),
                 )
@@ -413,6 +413,6 @@ internal class UpdateRepository @Inject constructor(
         private const val UPDATE_LOG_ID = "app-update"
         private const val MAX_REDIRECTS = 5
         private const val LATEST_RELEASE_API =
-            "https://api.github.com/repos/Lyx10000/media-downloader-android/releases/latest"
+            "https://api.github.com/repos/Lyx10000/multi-platform-downloader-android/releases/latest"
     }
 }

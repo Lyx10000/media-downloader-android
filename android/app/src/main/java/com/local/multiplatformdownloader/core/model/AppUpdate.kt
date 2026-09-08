@@ -84,7 +84,7 @@ internal object UpdateReleaseParser {
     }
 
     private const val RELEASES_PAGE =
-        "https://github.com/Lyx10000/media-downloader-android/releases"
+        "https://github.com/Lyx10000/multi-platform-downloader-android/releases"
 }
 
 internal fun compareReleaseVersions(first: String, second: String): Int {
@@ -112,9 +112,15 @@ internal fun shouldCheckForUpdate(
 
 internal fun isOfficialUpdateAsset(url: String): Boolean {
     val uri = runCatching { URI(url) }.getOrNull() ?: return false
+    val officialReleasePrefixes = listOf(
+        "/Lyx10000/multi-platform-downloader-android/releases/download/",
+        // Keep accepting assets created before the repository rename. This is a
+        // compatibility identity, like the published Android application ID.
+        "/Lyx10000/media-downloader-android/releases/download/",
+    )
     return uri.scheme.equals("https", ignoreCase = true) &&
         uri.host.equals("github.com", ignoreCase = true) &&
-        uri.path.startsWith("/Lyx10000/media-downloader-android/releases/download/")
+        officialReleasePrefixes.any(uri.path::startsWith)
 }
 
 internal fun updateDownloadUrl(originalUrl: String, source: UpdateSource): String {

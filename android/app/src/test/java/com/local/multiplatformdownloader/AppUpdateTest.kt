@@ -29,17 +29,17 @@ class AppUpdateTest {
         val release = UpdateReleaseParser.parse(
             JSONObject(
                 """
-                {"tag_name":"v1.6.0","name":"聚合下载器 1.6.0","body":"更新说明","html_url":"https://github.com/Lyx10000/media-downloader-android/releases/tag/v1.6.0","draft":false,"prerelease":false,
+                {"tag_name":"v1.8.0","name":"多平台下载器 1.8.0","body":"更新说明","html_url":"https://github.com/Lyx10000/multi-platform-downloader-android/releases/tag/v1.8.0","draft":false,"prerelease":false,
                  "assets":[
-                   {"name":"universal.apk","browser_download_url":"https://github.com/Lyx10000/media-downloader-android/releases/download/v1.6.0/universal.apk","size":9000000},
-                   {"name":"MediaDownloader-1.6.0-arm64.apk","browser_download_url":"https://github.com/Lyx10000/media-downloader-android/releases/download/v1.6.0/MediaDownloader-1.6.0-arm64.apk","size":6000000,"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+                   {"name":"universal.apk","browser_download_url":"https://github.com/Lyx10000/multi-platform-downloader-android/releases/download/v1.8.0/universal.apk","size":9000000},
+                   {"name":"MultiPlatformDownloader-1.8.0-arm64.apk","browser_download_url":"https://github.com/Lyx10000/multi-platform-downloader-android/releases/download/v1.8.0/MultiPlatformDownloader-1.8.0-arm64.apk","size":6000000,"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
                  ]}
                 """.trimIndent(),
             ),
         )
 
-        assertEquals("1.6.0", release?.versionName)
-        assertEquals("MediaDownloader-1.6.0-arm64.apk", release?.asset?.name)
+        assertEquals("1.8.0", release?.versionName)
+        assertEquals("MultiPlatformDownloader-1.8.0-arm64.apk", release?.asset?.name)
         assertEquals("a".repeat(64), release?.asset?.sha256)
         assertEquals(6_000_000L, release?.asset?.sizeBytes)
     }
@@ -52,10 +52,12 @@ class AppUpdateTest {
 
     @Test
     fun `mirror URL only accepts official release assets`() {
-        val official = "https://github.com/Lyx10000/media-downloader-android/releases/download/v1.6.0/app.apk"
+        val official = "https://github.com/Lyx10000/multi-platform-downloader-android/releases/download/v1.8.0/app.apk"
+        val legacy = "https://github.com/Lyx10000/media-downloader-android/releases/download/v1.7.1/app.apk"
 
         assertEquals("https://gh-proxy.org/$official", updateDownloadUrl(official, UpdateSource.MIRROR))
         assertEquals(official, updateDownloadUrl(official, UpdateSource.GITHUB))
+        assertTrue(isOfficialUpdateAsset(legacy))
         assertFalse(isOfficialUpdateAsset("https://evil.example/app.apk"))
     }
 

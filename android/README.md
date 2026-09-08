@@ -1,9 +1,9 @@
-# Android 聚合下载器
+# Android 多平台下载器
 
 面向 Android 手机侧载使用，最低 Android 10，
 APK 只包含 `arm64-v8a`。
 
-[从 GitHub Releases 下载最新版 APK](https://github.com/Lyx10000/media-downloader-android/releases/latest)
+[从 GitHub Releases 下载最新版 APK](https://github.com/Lyx10000/multi-platform-downloader-android/releases/latest)
 
 ## 安装
 
@@ -20,9 +20,10 @@ APK 只包含 `arm64-v8a`。
 
 首页也可切换到“查找作者”，使用作者主页链接加入抖音、知乎、X、Instagram 或 B站作者库。
 X、Instagram 支持准确的 `@用户名`，B站支持 UID 和 `b23.tv` 个人空间分享短链。
-小红书仅支持单作品下载，不提供作者批量下载。任务页的“作者”页签可查看资料、公开作品和
-本地下载，支持跨页选择、当前页全选以及统一设置后批量下载；本地下载包含失败记录，支持批量重试和
-删除。完整下载过的作品会显示本地状态并在当前页全选时自动跳过，仍可手动勾选以重新下载。
+小红书仅支持单作品下载，不提供作者批量下载。“任务”只显示仍需处理的活动下载；完成内容会
+进入“本地下载”，并按独立作品或作者归类。作者详情可查看资料、公开作品和本地下载，支持
+跨页选择、当前页全选以及统一设置后批量下载。完整下载过的作品会显示本地状态，并在当前页
+全选时自动跳过，仍可手动勾选以重新下载。
 
 抖音会复用已有 Cookie；小红书、知乎和 X 会先尝试匿名解析。Cookie 缺失、过期或接口触发风控时，
 应用才会在后台刷新对应平台的 WebView 环境。知乎图文的普通请求被拒绝时，隐藏 WebView 会
