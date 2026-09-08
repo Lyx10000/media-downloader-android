@@ -41,6 +41,8 @@ data class AdaptiveDownloadState(
     val taskProgressFraction: Map<String, Float> = emptyMap(),
     val peakBytesPerSecond: Long = 0L,
     val cpuPercent: Float = 0f,
+    val cpuTemperatureCelsius: Float? = null,
+    val batteryTemperatureCelsius: Float? = null,
     val slowFramePercent: Float = -1f,
     val thermalStatus: Int = PowerManager.THERMAL_STATUS_NONE,
     val reason: String = "从单任务开始评估",
@@ -78,6 +80,7 @@ class AdaptiveDownloadController @Inject constructor(
     private val slowFrameCount = AtomicLong(0L)
     private val connectivityManager = applicationContext.getSystemService(ConnectivityManager::class.java)
     private val powerManager = applicationContext.getSystemService(PowerManager::class.java)
+    private val deviceHealthSampler = DeviceHealthSampler(applicationContext)
     private val _state = MutableStateFlow(AdaptiveDownloadState())
     val state: StateFlow<AdaptiveDownloadState> = _state.asStateFlow()
     private val riskLoaded = CompletableDeferred<Unit>()
@@ -289,6 +292,7 @@ class AdaptiveDownloadController @Inject constructor(
         val slowFrames = slowFrameCount.getAndSet(0L)
         val slowFramePercent = if (frames > 0L) slowFrames * 100f / frames else -1f
         val thermalStatus = powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE
+        val temperatures = deviceHealthSampler.sampleTemperatures()
         decisionCpuSum += cpuPercent
         decisionCpuSamples += 1
         decisionFrameCount += frames
@@ -356,6 +360,8 @@ class AdaptiveDownloadController @Inject constructor(
                 taskProgressFraction = taskProgress,
                 peakBytesPerSecond = policyState.peakBytesPerSecond,
                 cpuPercent = cpuPercent,
+                cpuTemperatureCelsius = temperatures.cpuCelsius,
+                batteryTemperatureCelsius = temperatures.batteryCelsius,
                 slowFramePercent = slowFramePercent,
                 thermalStatus = thermalStatus,
                 reason = activeCircuit?.let { (platform, _) ->

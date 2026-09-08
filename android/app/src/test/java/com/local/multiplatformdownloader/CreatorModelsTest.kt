@@ -16,6 +16,7 @@ import com.local.multiplatformdownloader.feature.creator.CreatorBatchPreparation
 import com.local.multiplatformdownloader.feature.creator.CreatorBatchStatus
 import com.local.multiplatformdownloader.feature.creator.CreatorBatchWorkStatus
 import com.local.multiplatformdownloader.feature.creator.CreatorProfile
+import com.local.multiplatformdownloader.feature.creator.CreatorLocalSort
 import com.local.multiplatformdownloader.feature.creator.CreatorWork
 import com.local.multiplatformdownloader.feature.creator.CreatorWorkLocalStatus
 import com.local.multiplatformdownloader.feature.creator.CreatorWorkRemoteStatus
@@ -28,6 +29,8 @@ import com.local.multiplatformdownloader.feature.creator.estimateBatchSize
 import com.local.multiplatformdownloader.feature.creator.filterCreatorsByPlatform
 import com.local.multiplatformdownloader.feature.creator.hasXsecToken
 import com.local.multiplatformdownloader.feature.creator.selectCurrentCreatorPage
+import com.local.multiplatformdownloader.feature.creator.sortCreatorLocalWorks
+import com.local.multiplatformdownloader.feature.creator.toggleCurrentCreatorPage
 import com.local.multiplatformdownloader.feature.creator.shouldUseCreatorWebFallback
 import com.local.multiplatformdownloader.feature.creator.visibleCreatorPage
 
@@ -102,6 +105,40 @@ class CreatorModelsTest {
         val selected = selectCurrentCreatorPage(setOf("douyin:older"), listOf(work("newer")))
 
         assertEquals(setOf("douyin:older", "douyin:newer"), selected)
+    }
+
+    @Test
+    fun `current page selection button toggles between adding the page and clearing all`() {
+        val page = listOf(work("first"), work("second"))
+        val selected = toggleCurrentCreatorPage(setOf("douyin:older"), page)
+
+        assertEquals(setOf("douyin:older", "douyin:first", "douyin:second"), selected)
+        assertTrue(toggleCurrentCreatorPage(selected, page).isEmpty())
+    }
+
+    @Test
+    fun `selection can still be cleared from a page with no selectable works`() {
+        val downloaded = work("downloaded", completedTask("downloaded", 1L, 100L, 1L))
+
+        assertTrue(toggleCurrentCreatorPage(setOf("douyin:older"), listOf(downloaded)).isEmpty())
+    }
+
+    @Test
+    fun `local works sort by aggregate size and keep unknown values last`() {
+        val small = work("small", completedTask("small", 200L, 1_000L, 20L)).copy(publishedAt = 20L)
+        val large = work("large", completedTask("large", 100L, 4_000L, 10L)).copy(publishedAt = 10L)
+        val unknown = work("unknown", completedTask("unknown", 300L, 0L, 0L))
+
+        assertEquals(
+            listOf("large", "small", "unknown"),
+            sortCreatorLocalWorks(listOf(small, unknown, large), CreatorLocalSort.SIZE_LARGEST)
+                .map(CreatorWork::contentId),
+        )
+        assertEquals(
+            listOf("small", "large", "unknown"),
+            sortCreatorLocalWorks(listOf(unknown, large, small), CreatorLocalSort.PUBLISHED_NEWEST)
+                .map(CreatorWork::contentId),
+        )
     }
 
     @Test
@@ -367,6 +404,19 @@ class CreatorModelsTest {
         kind = MediaKind.VIDEO,
         title = id,
         task = task,
+    )
+
+    private fun completedTask(id: String, createdAt: Long, size: Long, publishedAt: Long) = TaskRecord(
+        id = id,
+        createdAt = createdAt,
+        status = TaskStatus.COMPLETE,
+        stage = "已完成",
+        progress = 100,
+        title = id,
+        outputs = if (size > 0L) listOf(TaskOutput("content://$id", sizeBytes = size)) else emptyList(),
+        error = "",
+        fileState = FileState.AVAILABLE,
+        publishedAt = publishedAt,
     )
 
     private fun profile(id: String, platform: SourcePlatform) = CreatorProfile(

@@ -121,12 +121,64 @@ data class CreatorWork(
         get() = localStatus == CreatorWorkLocalStatus.AVAILABLE
 }
 
+enum class CreatorLocalSort(val label: String) {
+    DOWNLOAD_NEWEST("下载时间：从新到旧"),
+    DOWNLOAD_OLDEST("下载时间：从旧到新"),
+    PUBLISHED_NEWEST("发布时间：从新到旧"),
+    PUBLISHED_OLDEST("发布时间：从旧到新"),
+    SIZE_LARGEST("文件大小：从大到小"),
+    SIZE_SMALLEST("文件大小：从小到大"),
+}
+
 internal fun creatorLocalDownloadBytes(tasks: List<TaskRecord>): Long = tasks.asSequence()
     .filterNot { it.status == TaskStatus.DELETING }
     .filterNot { it.fileState in setOf(FileState.MISSING, FileState.STORAGE_UNAVAILABLE) }
     .flatMap { it.outputs.asSequence() }
     .distinctBy { it.uri }
     .sumOf { it.sizeBytes.coerceAtLeast(0L) }
+
+internal fun sortCreatorLocalWorks(
+    works: List<CreatorWork>,
+    sort: CreatorLocalSort,
+): List<CreatorWork> = works.sortedWith(knownValueComparator(
+    descending = sort in setOf(
+        CreatorLocalSort.DOWNLOAD_NEWEST,
+        CreatorLocalSort.PUBLISHED_NEWEST,
+        CreatorLocalSort.SIZE_LARGEST,
+    ),
+    selector = when (sort) {
+        CreatorLocalSort.DOWNLOAD_NEWEST,
+        CreatorLocalSort.DOWNLOAD_OLDEST,
+        -> { work -> work.localTasks().maxOfOrNull(TaskRecord::createdAt) ?: 0L }
+        CreatorLocalSort.PUBLISHED_NEWEST,
+        CreatorLocalSort.PUBLISHED_OLDEST,
+        -> { work ->
+            work.publishedAt.takeIf { it > 0L }
+                ?: work.localTasks().maxOfOrNull(TaskRecord::publishedAt)
+                ?: 0L
+        }
+        CreatorLocalSort.SIZE_LARGEST,
+        CreatorLocalSort.SIZE_SMALLEST,
+        -> { work -> creatorLocalDownloadBytes(work.localTasks()) }
+    },
+))
+
+private fun CreatorWork.localTasks(): List<TaskRecord> = relatedTasks.ifEmpty { listOfNotNull(task) }
+
+private fun knownValueComparator(
+    descending: Boolean,
+    selector: (CreatorWork) -> Long,
+): Comparator<CreatorWork> = Comparator { left, right ->
+    val leftValue = selector(left)
+    val rightValue = selector(right)
+    when {
+        leftValue <= 0L && rightValue <= 0L -> left.key.compareTo(right.key)
+        leftValue <= 0L -> 1
+        rightValue <= 0L -> -1
+        descending -> rightValue.compareTo(leftValue).takeUnless { it == 0 } ?: left.key.compareTo(right.key)
+        else -> leftValue.compareTo(rightValue).takeUnless { it == 0 } ?: left.key.compareTo(right.key)
+    }
+}
 
 data class CreatorPage(
     val profile: CreatorProfile,
@@ -191,6 +243,26 @@ internal fun selectCurrentCreatorPage(
     .filterNot(CreatorWork::shouldSkipInSelectAll)
     .map(CreatorWork::key)
     .toSet()
+
+internal fun currentCreatorPageSelected(
+    selected: Set<String>,
+    currentPage: List<CreatorWork>,
+): Boolean {
+    val selectable = currentPage.asSequence()
+        .filterNot(CreatorWork::shouldSkipInSelectAll)
+        .map(CreatorWork::key)
+        .toSet()
+    return selected.isNotEmpty() && (selectable.isEmpty() || selected.containsAll(selectable))
+}
+
+internal fun toggleCurrentCreatorPage(
+    selected: Set<String>,
+    currentPage: List<CreatorWork>,
+): Set<String> = if (currentCreatorPageSelected(selected, currentPage)) {
+    emptySet()
+} else {
+    selectCurrentCreatorPage(selected, currentPage)
+}
 
 internal fun filterCreatorsByPlatform(
     creators: List<CreatorProfile>,

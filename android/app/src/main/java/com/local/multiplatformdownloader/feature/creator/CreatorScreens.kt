@@ -45,16 +45,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -450,11 +454,9 @@ private fun CreatorDetailScreen(
     var showRecordDeleteDialog by remember(profile.key) { mutableStateOf(false) }
     var showRecordRedownloadDialog by remember(profile.key) { mutableStateOf(false) }
     var deleteRecordFiles by remember(profile.key) { mutableStateOf(false) }
+    var showLocalSortMenu by remember { mutableStateOf(false) }
     val displayedWorks = if (detailTab == 0) state.pageWorks else {
-        state.allWorks.filter(CreatorWork::hasLocalContent)
-            .sortedByDescending { work ->
-                work.relatedTasks.maxOfOrNull(TaskRecord::createdAt) ?: work.task?.createdAt ?: 0L
-            }
+        sortCreatorLocalWorks(state.allWorks.filter(CreatorWork::hasLocalContent), state.localSort)
     }
     val selectableLocalWorkKeys = state.allWorks
         .filter(CreatorWork::hasLocalContent)
@@ -592,9 +594,33 @@ private fun CreatorDetailScreen(
                 ) {
                     Icon(Icons.Default.Delete, contentDescription = "删除所选记录")
                 }
-            } else if (detailTab == 1 && selectableLocalWorkKeys.isNotEmpty()) {
-                IconButton(onClick = { recordSelectionMode = true }) {
-                    Icon(Icons.Default.DeleteSweep, contentDescription = "批量操作作者本地下载")
+            } else if (detailTab == 1) {
+                Box {
+                    IconButton(onClick = { showLocalSortMenu = true }) {
+                        Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "排序作者本地下载")
+                    }
+                    DropdownMenu(
+                        expanded = showLocalSortMenu,
+                        onDismissRequest = { showLocalSortMenu = false },
+                    ) {
+                        CreatorLocalSort.entries.forEach { sort ->
+                            DropdownMenuItem(
+                                text = { Text(sort.label) },
+                                onClick = {
+                                    viewModel.updateLocalSort(sort)
+                                    showLocalSortMenu = false
+                                },
+                                leadingIcon = if (sort == state.localSort) {
+                                    { Icon(Icons.Default.Check, contentDescription = null) }
+                                } else null,
+                            )
+                        }
+                    }
+                }
+                if (selectableLocalWorkKeys.isNotEmpty()) {
+                    IconButton(onClick = { recordSelectionMode = true }) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = "批量操作作者本地下载")
+                    }
                 }
             } else if (detailTab == 0) {
                 IconButton(onClick = viewModel::refreshCreator, enabled = !state.isLoading) {
@@ -1049,6 +1075,7 @@ private fun CreatorPageControls(
     viewModel: CreatorLibraryViewModel,
 ) {
     val skipped = state.pageWorks.count(CreatorWork::shouldSkipInSelectAll)
+    val pageSelected = currentCreatorPageSelected(state.selectedWorkKeys, state.pageWorks)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             Modifier.fillMaxWidth(),
@@ -1063,8 +1090,11 @@ private fun CreatorPageControls(
                 Text("下一页")
             }
         }
-        Button(onClick = viewModel::selectCurrentPage, enabled = state.pageWorks.isNotEmpty()) {
-            Text("全选当前页")
+        Button(
+            onClick = viewModel::toggleCurrentPageSelection,
+            enabled = state.selectedWorkKeys.isNotEmpty() || state.pageWorks.any { !it.shouldSkipInSelectAll },
+        ) {
+            Text(if (pageSelected) "取消全选" else "全选当前页")
         }
         Text(
             "本页 ${state.pageWorks.size} 个，已下载会跳过 $skipped 个",
@@ -1122,9 +1152,6 @@ private fun CreatorSelectionBar(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-            }
-            TextButton(onClick = viewModel::clearSelection, enabled = state.selectedWorkKeys.isNotEmpty()) {
-                Text("清空")
             }
             Button(
                 onClick = onDownload,

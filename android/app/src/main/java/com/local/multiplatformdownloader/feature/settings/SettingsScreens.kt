@@ -1,7 +1,6 @@
 package com.local.multiplatformdownloader.feature.settings
 
 import com.local.multiplatformdownloader.core.download.formatByteSize
-import com.local.multiplatformdownloader.core.logging.PARSER_VERSION
 import com.local.multiplatformdownloader.core.model.UpdateSource
 import com.local.multiplatformdownloader.core.model.UpdateStatus
 import com.local.multiplatformdownloader.core.model.UpdateUiState
@@ -190,11 +189,6 @@ internal fun SettingsScreen(
                 openRelease = viewModel::openUpdateReleasePage,
                 useGithub = { showGithubWarning = true },
             )
-        }
-        item { HorizontalDivider() }
-        item {
-            Text("版本", style = MaterialTheme.typography.titleMedium)
-            Text("应用 ${BuildConfig.VERSION_NAME} · 解析器 $PARSER_VERSION")
         }
     }
     if (showSourceDialog) {

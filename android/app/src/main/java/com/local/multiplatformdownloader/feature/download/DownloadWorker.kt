@@ -179,7 +179,6 @@ class DownloadWorker internal constructor(
                     put("warnings", execution.warningCount)
                 },
             )
-            setForeground(createForeground(taskId, completionStage, 100))
             activeTaskFolder.deleteRecursively()
             Result.success()
         } catch (cancelled: CancellationException) {
@@ -333,14 +332,13 @@ class DownloadWorker internal constructor(
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val showProgress = shouldShowDownloadProgress(stage)
-        val complete = stage == "已完成" || stage.startsWith("已完成（")
         val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(applicationContext.getString(R.string.app_name))
             .setContentText(stage)
             .setContentIntent(pending)
             .setOnlyAlertOnce(true)
-            .setOngoing(!complete)
+            .setOngoing(true)
         if (showProgress) {
             builder.setProgress(100, progress.coerceIn(0, 100), false)
         } else {

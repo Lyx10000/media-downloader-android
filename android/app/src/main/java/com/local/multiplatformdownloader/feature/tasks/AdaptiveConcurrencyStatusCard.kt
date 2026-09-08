@@ -1,19 +1,17 @@
 package com.local.multiplatformdownloader.feature.tasks
 
 import com.local.multiplatformdownloader.core.download.AdaptiveDownloadState
+import com.local.multiplatformdownloader.core.download.TemperatureKind
+import com.local.multiplatformdownloader.core.download.TemperatureLevel
 import com.local.multiplatformdownloader.core.download.formatByteSize
+import com.local.multiplatformdownloader.core.download.temperatureLevel
 
-import android.os.PowerManager
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -30,7 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -43,22 +40,35 @@ internal fun TaskHealthStatus(
     state: AdaptiveDownloadState,
     modifier: Modifier = Modifier,
 ) {
-    val statusLabel = thermalLabel(state.thermalStatus)
     Row(
         modifier = modifier.semantics {
-            contentDescription = "CPU ${formatPercent(state.cpuPercent)}，核心温度$statusLabel"
+            contentDescription = "CPU占用率${formatPercent(state.cpuPercent)}，" +
+                "CPU温度${formatTemperature(state.cpuTemperatureCelsius)}，" +
+                "电池温度${formatTemperature(state.batteryTemperatureCelsius)}"
         },
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "CPU ${formatPercent(state.cpuPercent)} · 核心温度",
+            "CPU ${formatPercent(state.cpuPercent)} ·",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
         )
-        Box(
-            Modifier.size(8.dp).clip(CircleShape).background(thermalIndicatorColor(state.thermalStatus)),
+        TemperatureText(
+            label = "CPU温度",
+            value = state.cpuTemperatureCelsius,
+            kind = TemperatureKind.CPU,
+        )
+        Text(
+            "·",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TemperatureText(
+            label = "电池温度",
+            value = state.batteryTemperatureCelsius,
+            kind = TemperatureKind.BATTERY,
         )
     }
 }
@@ -108,11 +118,29 @@ internal fun AdaptiveConcurrencyStatusCard(state: AdaptiveDownloadState) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text(
-                "应用 CPU ${formatPercent(state.cpuPercent)} · 系统热状态 ${thermalLabel(state.thermalStatus)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "应用 CPU ${formatPercent(state.cpuPercent)} ·",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TemperatureText(
+                    label = "CPU温度",
+                    value = state.cpuTemperatureCelsius,
+                    kind = TemperatureKind.CPU,
+                    bodyStyle = true,
+                )
+                Text("·", style = MaterialTheme.typography.bodySmall)
+                TemperatureText(
+                    label = "电池温度",
+                    value = state.batteryTemperatureCelsius,
+                    kind = TemperatureKind.BATTERY,
+                    bodyStyle = true,
+                )
+            }
             state.platformRiskUntil
                 .filterValues { it > now }
                 .toList()
@@ -144,33 +172,36 @@ internal fun AdaptiveConcurrencyStatusCard(state: AdaptiveDownloadState) {
 
 private fun formatPercent(value: Float): String = String.format(Locale.CHINA, "%.0f%%", value)
 
+private fun formatTemperature(value: Float?): String = value?.let {
+    String.format(Locale.CHINA, "%.1f℃", it)
+} ?: "--"
+
 private fun formatSlowFrames(value: Float): String = if (value < 0f) {
     "暂无"
 } else {
     String.format(Locale.CHINA, "%.0f%%", value)
 }
 
-private fun thermalLabel(status: Int): String = when (status) {
-    PowerManager.THERMAL_STATUS_NONE -> "正常"
-    PowerManager.THERMAL_STATUS_LIGHT -> "轻微"
-    PowerManager.THERMAL_STATUS_MODERATE -> "偏高"
-    PowerManager.THERMAL_STATUS_SEVERE -> "较高"
-    PowerManager.THERMAL_STATUS_CRITICAL -> "严重"
-    PowerManager.THERMAL_STATUS_EMERGENCY -> "紧急"
-    PowerManager.THERMAL_STATUS_SHUTDOWN -> "即将关机"
-    else -> "未知"
+@Composable
+private fun TemperatureText(
+    label: String,
+    value: Float?,
+    kind: TemperatureKind,
+    bodyStyle: Boolean = false,
+) {
+    Text(
+        "$label ${formatTemperature(value)}",
+        style = if (bodyStyle) MaterialTheme.typography.bodySmall else MaterialTheme.typography.labelSmall,
+        color = temperatureColor(temperatureLevel(value, kind)),
+        maxLines = 1,
+    )
 }
 
 @Composable
-private fun thermalIndicatorColor(status: Int): Color = when (status) {
-    PowerManager.THERMAL_STATUS_NONE,
-    PowerManager.THERMAL_STATUS_LIGHT,
-    -> Color(0xFF2E7D32)
-    PowerManager.THERMAL_STATUS_MODERATE -> Color(0xFFF9A825)
-    PowerManager.THERMAL_STATUS_SEVERE -> Color(0xFFEF6C00)
-    PowerManager.THERMAL_STATUS_CRITICAL,
-    PowerManager.THERMAL_STATUS_EMERGENCY,
-    PowerManager.THERMAL_STATUS_SHUTDOWN,
-    -> MaterialTheme.colorScheme.error
-    else -> MaterialTheme.colorScheme.outline
+private fun temperatureColor(level: TemperatureLevel): Color = when (level) {
+    TemperatureLevel.NORMAL -> Color(0xFF2E7D32)
+    TemperatureLevel.WARM -> Color(0xFFF9A825)
+    TemperatureLevel.HOT -> Color(0xFFEF6C00)
+    TemperatureLevel.CRITICAL -> MaterialTheme.colorScheme.error
+    TemperatureLevel.UNKNOWN -> MaterialTheme.colorScheme.outline
 }

@@ -64,6 +64,7 @@ data class CreatorLibraryUiState(
     val hasPrevious: Boolean = false,
     val hasMore: Boolean = false,
     val selectedWorkKeys: Set<String> = emptySet(),
+    val localSort: CreatorLocalSort = CreatorLocalSort.DOWNLOAD_NEWEST,
     val isLoading: Boolean = false,
     val isStartingBatch: Boolean = false,
     val error: String = "",
@@ -711,16 +712,21 @@ class CreatorLibraryViewModel @Inject internal constructor(
         refreshEstimate()
     }
 
-    fun selectCurrentPage() {
+    fun toggleCurrentPageSelection() {
         val current = _state.value
-        val selected = selectCurrentCreatorPage(current.selectedWorkKeys, current.pageWorks)
+        val selected = toggleCurrentCreatorPage(current.selectedWorkKeys, current.pageWorks)
         _state.update {
             it.copy(
                 selectedWorkKeys = selected,
-                showRiskWarning = current.pageNumber > 1 || selected.size >= RISK_SELECTION_THRESHOLD,
+                showRiskWarning = selected.isNotEmpty() &&
+                    (current.pageNumber > 1 || selected.size >= RISK_SELECTION_THRESHOLD),
             )
         }
         refreshEstimate()
+    }
+
+    fun updateLocalSort(sort: CreatorLocalSort) {
+        _state.update { it.copy(localSort = sort) }
     }
 
     fun clearSelection() {
