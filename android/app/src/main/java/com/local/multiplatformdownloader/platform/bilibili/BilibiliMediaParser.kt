@@ -12,6 +12,7 @@ import com.local.multiplatformdownloader.platform.common.PlatformCredentialState
 import com.local.multiplatformdownloader.platform.common.PlatformParser
 import com.local.multiplatformdownloader.platform.common.detectPlatformCredential
 import com.local.multiplatformdownloader.core.network.firstString
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.platform.common.parseFailure
 import com.local.multiplatformdownloader.core.network.responseShape
 import com.local.multiplatformdownloader.core.network.values
@@ -152,7 +153,9 @@ internal object BilibiliMediaParser {
             author = owner.optString("name"), authorStableId = mid, authorAccountId = mid,
             authorProfileUrl = if (mid.isBlank()) "" else "https://space.bilibili.com/$mid",
             authorAvatarUrl = mediaUrl(owner.optString("face")).orEmpty(),
-            description = part.title, coverUrl = mediaUrl(part.metadata.optString("pic")).orEmpty(),
+            description = part.title,
+            publishedAt = part.metadata.opt("pubdate").jsonEpochMillis(),
+            coverUrl = mediaUrl(part.metadata.optString("pic")).orEmpty(),
             bilibiliTitle = part.metadata.optString("title"),
             bilibiliParts = objects(part.metadata.optJSONArray("pages")).mapNotNull {
                 BilibiliPartInfo.fromJson(JSONObject().put("cid", it.optString("cid"))

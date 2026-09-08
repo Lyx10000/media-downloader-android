@@ -258,13 +258,12 @@ class CreatorLibraryRepository @Inject internal constructor(
             )
         creatorDao.upsert(profile.withStableDirectory().toEntity())
         if (result.ok && result.contentId.isNotBlank()) {
-            val indexedBili = if (result.platform == SourcePlatform.BILIBILI) workDao.listByKeys(
-                listOf(creatorWorkKey(result.platform, bilibiliWorkId(result.platform, result.contentId)))
-            ).firstOrNull() else null
+            val workKey = creatorWorkKey(result.platform, bilibiliWorkId(result.platform, result.contentId))
+            val indexedWork = workDao.listByKeys(listOf(workKey)).firstOrNull()
             workDao.upsertAll(
                 listOf(
                     CreatorWork(
-                        key = creatorWorkKey(result.platform, bilibiliWorkId(result.platform, result.contentId)),
+                        key = workKey,
                         creatorKey = key,
                         platform = result.platform,
                         contentId = bilibiliWorkId(result.platform, result.contentId),
@@ -274,9 +273,12 @@ class CreatorLibraryRepository @Inject internal constructor(
                             .ifBlank { result.description }
                             .ifBlank { "${result.platform.displayName}作品 ${result.contentId}" },
                         coverUrl = result.coverUrl,
+                        publishedAt = result.publishedAt.takeIf { it > 0L }
+                            ?: indexedWork?.publishedAt
+                            ?: 0L,
                         approximateBytes = result.variants.maxOfOrNull(MediaVariant::size) ?: 0L,
                         lastSeenAt = now,
-                        pageNumber = indexedBili?.pageNumber ?: HISTORY_ONLY_PAGE,
+                        pageNumber = indexedWork?.pageNumber ?: HISTORY_ONLY_PAGE,
                     ).toEntity(),
                 ),
             )
@@ -304,13 +306,18 @@ class CreatorLibraryRepository @Inject internal constructor(
         val indexed = workDao.listByKeys(seen).associateBy(CreatorWorkEntity::workKey)
         if (page.works.isNotEmpty()) workDao.upsertAll(page.works.map { work ->
             val existing = indexed[work.key]
+            val normalizedWork = work.copy(
+                publishedAt = work.publishedAt.takeIf { it > 0L }
+                    ?: existing?.publishedAt
+                    ?: 0L,
+            )
             // A Reel/pinned media may appear again on a later page. Update metadata without
             // moving its already-visible card out of the earlier cached page.
             if (page.profile.platform in setOf(SourcePlatform.X, SourcePlatform.INSTAGRAM) &&
                 existing != null && existing.pageNumber < page.pageNumber &&
                 existing.remoteStatus == CreatorWorkRemoteStatus.PUBLIC.wireValue) {
-                work.copy(pageNumber = existing.pageNumber).toEntity()
-            } else work.toEntity()
+                normalizedWork.copy(pageNumber = existing.pageNumber).toEntity()
+            } else normalizedWork.toEntity()
         })
         pageDao.upsert(
             CreatorPageEntity(
@@ -373,6 +380,16 @@ private fun CreatorProfile.withStableDirectory(): CreatorProfile = if (directory
     copy(directoryName = creatorDirectoryName(this))
 }
 
-private fun CreatorWorkEntity.withTasks(records: List<TaskRecord>): CreatorWork =
-    if (platform == SourcePlatform.BILIBILI.wireValue) toWork(representativeCreatorTask(records)).copy(relatedTasks = records)
-    else toWork(records.maxByOrNull(TaskRecord::createdAt))
+private fun CreatorWorkEntity.withTasks(records: List<TaskRecord>): CreatorWork {
+    val taskPublishedAt = records.firstNotNullOfOrNull { task ->
+        task.publishedAt.takeIf { it > 0L }
+    } ?: 0L
+    val work = if (platform == SourcePlatform.BILIBILI.wireValue) {
+        toWork(representativeCreatorTask(records)).copy(relatedTasks = records)
+    } else {
+        toWork(records.maxByOrNull(TaskRecord::createdAt))
+    }
+    return work.copy(
+        publishedAt = work.publishedAt.takeIf { it > 0L } ?: taskPublishedAt,
+    )
+}

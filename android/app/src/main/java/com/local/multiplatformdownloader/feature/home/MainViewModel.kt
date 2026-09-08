@@ -631,6 +631,7 @@ class MainViewModel @Inject internal constructor(
                                 canonicalUrl = result.canonicalUrl,
                                 kind = result.kind,
                                 title = result.description,
+                                publishedAt = result.publishedAt,
                             ),
                             createdAt,
                         )

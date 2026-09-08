@@ -22,6 +22,7 @@ import com.local.multiplatformdownloader.feature.creator.socialMetric
 import com.local.multiplatformdownloader.feature.creator.socialQuery
 import com.local.multiplatformdownloader.core.network.firstString
 import com.local.multiplatformdownloader.core.network.firstValue
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.core.network.values
 
 import java.io.IOException
@@ -195,7 +196,8 @@ internal object InstagramCreatorNormalizer {
             CreatorWork(key = creatorWorkKey(SourcePlatform.INSTAGRAM, code), creatorKey = profile.key,
                 platform = SourcePlatform.INSTAGRAM, contentId = code, canonicalUrl = "https://www.instagram.com/p/$code/",
                 kind = if (video) MediaKind.VIDEO else MediaKind.IMAGE, title = caption.ifBlank { "Instagram 作品 $code" },
-                coverUrl = image, publishedAt = item.optLong("taken_at_timestamp", item.optLong("taken_at")) * 1000L,
+                coverUrl = image,
+                publishedAt = item.firstValue("taken_at_timestamp", "taken_at").jsonEpochMillis(),
                 durationMs = (item.optDouble("video_duration", 0.0) * 1000).toLong(), pageNumber = pageNumber)
         }.distinctBy(CreatorWork::key)
         val hasNext = pageInfo.optBoolean("has_next_page")

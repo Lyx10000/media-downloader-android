@@ -10,6 +10,7 @@ import com.local.multiplatformdownloader.core.network.firstArray
 import com.local.multiplatformdownloader.core.network.firstObject
 import com.local.multiplatformdownloader.core.network.firstString
 import com.local.multiplatformdownloader.core.network.firstValue
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.core.network.jsonLong
 import com.local.multiplatformdownloader.core.network.jsonNumber
 import com.local.multiplatformdownloader.core.network.keysInOrder
@@ -288,6 +289,7 @@ internal object XiaohongshuMediaParser {
             ).firstOrNull().orEmpty(),
             description = note.firstString("title", "displayTitle", "display_title")
                 .ifBlank { note.firstString("desc", "description") },
+            publishedAt = note.firstValue("time", "publishTime", "publish_time").jsonEpochMillis(),
             coverUrl = cover,
             variants = variants,
             imageUrls = images.mapNotNull(List<String>::firstOrNull),

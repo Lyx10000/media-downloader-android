@@ -245,6 +245,7 @@ private fun TaskIndexRow.toRecord(payload: TaskRecordPayload): TaskRecord {
         bilibiliPage = spec.bilibiliPage,
         bilibiliTitle = spec.bilibiliTitle,
         coverUrl = spec.coverUrl,
+        publishedAt = spec.publishedAt,
     )
 }
 
@@ -271,6 +272,7 @@ private data class TaskRecordSpec(
     val bilibiliPage: Int = 0,
     val bilibiliTitle: String = "",
     val coverUrl: String = "",
+    val publishedAt: Long = 0L,
 )
 
 private fun TaskSpec.toRecordSpec() = TaskRecordSpec(
@@ -290,6 +292,7 @@ private fun TaskSpec.toRecordSpec() = TaskRecordSpec(
     bilibiliPage = result.bilibiliParts.firstOrNull { result.contentId.endsWith(":" + it.cid) }?.page ?: 0,
     bilibiliTitle = result.bilibiliTitle.take(120),
     coverUrl = result.coverUrl,
+    publishedAt = result.publishedAt,
 )
 
 private fun TaskPayloadRow.toRecordPayload(): TaskRecordPayload {

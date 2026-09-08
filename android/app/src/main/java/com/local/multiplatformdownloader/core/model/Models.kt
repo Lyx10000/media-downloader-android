@@ -226,6 +226,7 @@ data class ParseResult(
     val authorProfileUrl: String = "",
     val authorAvatarUrl: String = "",
     val description: String = "",
+    val publishedAt: Long = 0L,
     val coverUrl: String = "",
     val variants: List<MediaVariant> = emptyList(),
     val audioUrls: List<String> = emptyList(),
@@ -261,6 +262,7 @@ data class ParseResult(
                 put("author_profile_url", authorProfileUrl)
                 put("author_avatar_url", authorAvatarUrl)
                 put("description", description)
+                put("published_at", publishedAt)
                 put("cover_url", coverUrl)
                 put("variants", JSONArray().apply { variants.forEach { put(it.toJson()) } })
                 put("audio_urls", JSONArray(audioUrls))
@@ -320,6 +322,7 @@ data class ParseResult(
                 authorProfileUrl = root.optString("author_profile_url"),
                 authorAvatarUrl = root.optString("author_avatar_url"),
                 description = root.optString("description"),
+                publishedAt = root.optLong("published_at").coerceAtLeast(0L),
                 coverUrl = root.optString("cover_url"),
                 variants = variants,
                 audioUrls = root.optJSONArray("audio_urls").toStrings(),
@@ -555,6 +558,7 @@ data class TaskRecord(
     val bilibiliPage: Int = 0,
     val bilibiliTitle: String = "",
     val coverUrl: String = "",
+    val publishedAt: Long = 0L,
 ) {
     val outputUris: List<String> get() = outputs.map(TaskOutput::uri)
 }

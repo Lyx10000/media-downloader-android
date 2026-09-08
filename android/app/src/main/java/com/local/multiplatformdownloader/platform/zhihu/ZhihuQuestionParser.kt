@@ -8,6 +8,8 @@ import com.local.multiplatformdownloader.core.model.SourcePlatform
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionAnswer
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionInfo
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionPage
+import com.local.multiplatformdownloader.core.network.firstValue
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.core.network.responseShape
 import com.local.multiplatformdownloader.platform.common.PlatformParseException
 
@@ -35,6 +37,7 @@ internal object ZhihuQuestionParser {
             referer = info.canonicalUrl,
             kind = MediaKind.DOCUMENT,
             description = title,
+            publishedAt = payload.firstValue("created_time", "created", "published_time").jsonEpochMillis(),
             document = DocumentContent(
                 type = DocumentType.QUESTION,
                 title = title,

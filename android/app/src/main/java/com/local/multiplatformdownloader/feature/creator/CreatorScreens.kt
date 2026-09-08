@@ -176,6 +176,7 @@ internal fun LocalDownloadsScreen(
                 showAdaptiveStatus = false,
                 allowPreview = true,
                 showTransferControls = false,
+                showPublishedAt = true,
                 emptyText = "还没有独立作品",
             )
             else -> CreatorLibraryScreen(
@@ -699,6 +700,7 @@ private fun CreatorDetailScreen(
                         onOpen = { openBilibiliGroup = work.contentId.substringBefore(':') },
                         onToggle = { selectedLocalWorkKeys = toggleTaskSelection(selectedLocalWorkKeys, work.key) },
                         showProgress = false,
+                        showPublishedAt = true,
                     )
                     return@items
                 }
@@ -972,6 +974,13 @@ private fun CreatorWorkCard(
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(work.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    work.publishedAt.takeIf { it > 0L }
+                        ?.let { "发布时间：${formatCreatorTime(it)}" }
+                        ?: "发布时间未知",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(mediaKindLabel(work.kind), style = MaterialTheme.typography.labelSmall)
                     Text(
@@ -1336,7 +1345,9 @@ private fun remoteWorkStatusLabel(status: CreatorWorkRemoteStatus): String = whe
 }
 
 private fun formatCreatorTime(value: Long): String =
-    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(value))
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(
+        Date(if (value in 1..99_999_999_999L) value * 1_000L else value),
+    )
 
 internal fun formatBytes(value: Long): String = when {
     value <= 0L -> "0 MB"

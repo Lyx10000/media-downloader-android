@@ -32,6 +32,17 @@ internal fun Any?.jsonLong(): Long = when (this) {
     else -> 0L
 }
 
+/** Normalize the seconds/milliseconds/microseconds used by different platform payloads. */
+internal fun Any?.jsonEpochMillis(): Long {
+    val value = jsonLong()
+    return when {
+        value <= 0L -> 0L
+        value >= 100_000_000_000_000L -> value / 1_000L
+        value >= 100_000_000_000L -> value
+        else -> value * 1_000L
+    }
+}
+
 internal fun JSONObject.keysInOrder(): List<String> = buildList {
     val iterator = keys()
     while (iterator.hasNext()) add(iterator.next())

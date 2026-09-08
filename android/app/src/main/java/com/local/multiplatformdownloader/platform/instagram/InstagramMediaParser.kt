@@ -20,6 +20,7 @@ import com.local.multiplatformdownloader.core.network.firstObject
 import com.local.multiplatformdownloader.core.network.firstString
 import com.local.multiplatformdownloader.core.network.firstValue
 import com.local.multiplatformdownloader.core.network.keysInOrder
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.platform.common.parseFailure
 import com.local.multiplatformdownloader.core.network.responseShape
 import com.local.multiplatformdownloader.core.network.values
@@ -137,7 +138,9 @@ internal object InstagramMediaNormalizer {
             authorProfileUrl = username.takeIf { it.matches(Regex("[A-Za-z0-9_.]+")) }
                 ?.let { "https://www.instagram.com/$it/" }.orEmpty(),
             authorAvatarUrl = user.firstString("profile_pic_url", "profile_pic_url_hd"),
-            description = caption, coverUrl = attachments.first().coverUrl,
+            description = caption,
+            publishedAt = media.firstValue("taken_at_timestamp", "taken_at").jsonEpochMillis(),
+            coverUrl = attachments.first().coverUrl,
             variants = videos.firstOrNull()?.variants.orEmpty(),
             imageUrls = images.mapNotNull { it.imageCandidates.firstOrNull() },
             imageCandidates = images.map { it.imageCandidates }, attachments = attachments,

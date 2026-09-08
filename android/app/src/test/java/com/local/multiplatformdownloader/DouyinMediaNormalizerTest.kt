@@ -17,6 +17,7 @@ class DouyinMediaNormalizerTest {
             """
             {
               "aweme_id":"1234567890123456789",
+              "create_time":1788781816,
               "desc":"测试作品",
               "author":{"nickname":"测试作者","unique_id":"douyin-test"},
               "video":{
@@ -37,6 +38,7 @@ class DouyinMediaNormalizerTest {
         assertEquals("1234567890123456789", result.contentId)
         assertEquals("测试作者", result.author)
         assertEquals("douyin-test", result.authorAccountId)
+        assertEquals(1_788_781_816_000L, result.publishedAt)
         assertEquals(2, result.variants.size)
         assertEquals("H.265", result.variants[0].codec)
         assertEquals(3840, result.variants[0].height)

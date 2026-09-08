@@ -155,6 +155,7 @@ internal fun TasksScreen(
     allowPreview: Boolean = true,
     allowFileActions: Boolean = true,
     showTransferControls: Boolean = true,
+    showPublishedAt: Boolean = false,
     emptyText: String = "暂无进行中的任务",
     creatorGroups: List<ActiveCreatorTaskGroup> = emptyList(),
     onOpenCreatorGroup: (String) -> Unit = {},
@@ -259,7 +260,9 @@ internal fun TasksScreen(
                         val remove = group.all { it.id in selectedTaskIds }
                         group.filter { it.status != TaskStatus.DELETING && ((it.id in selectedTaskIds) == remove) }
                             .forEach { onToggleTaskSelection(it.id) }
-                    })
+                    },
+                    showPublishedAt = showPublishedAt,
+                )
                 return@items
             }
             val recoverable = task.fileState in setOf(
@@ -424,8 +427,15 @@ internal fun TasksScreen(
                     ) {
                         PlatformBrandBadge(task.platform)
                         Text(
-                            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
-                                .format(Date(task.createdAt)),
+                            if (showPublishedAt) {
+                                task.publishedAt.takeIf { it > 0L }?.let { publishedAt ->
+                                    "发布时间：" + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA)
+                                        .format(Date(publishedAt))
+                                } ?: "发布时间未知"
+                            } else {
+                                SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+                                    .format(Date(task.createdAt))
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -648,7 +658,15 @@ internal fun TasksScreen(
         )
     }
     openBilibiliGroup?.let { bv ->
-        BilibiliTaskGroupDialog(bv, null, viewModel, requestAllFilesAccess, onManageTask, { openBilibiliGroup = null })
+        BilibiliTaskGroupDialog(
+            bv,
+            null,
+            viewModel,
+            requestAllFilesAccess,
+            onManageTask,
+            { openBilibiliGroup = null },
+            showPublishedAt = showPublishedAt,
+        )
     }
     pendingRedownload?.let { task ->
         AlertDialog(

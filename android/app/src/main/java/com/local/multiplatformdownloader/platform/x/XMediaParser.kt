@@ -25,6 +25,9 @@ import java.io.IOException
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -106,6 +109,7 @@ internal object XMediaNormalizer {
             authorProfileUrl = screenName.takeIf(String::isNotBlank)?.let { "https://x.com/$it" }.orEmpty(),
             authorAvatarUrl = avatar,
             description = description,
+            publishedAt = createdAtMillis(post),
             coverUrl = cover,
             variants = videos.firstOrNull()?.variants.orEmpty(),
             imageUrls = images.mapNotNull { it.imageCandidates.firstOrNull() },
@@ -119,6 +123,24 @@ internal object XMediaNormalizer {
                 put("gifs", videos.count { it.kind == MediaAttachmentKind.GIF })
             }.toString(),
         )
+    }
+
+    private fun createdAtMillis(post: JSONObject): Long {
+        val value = post.optString("created_at").ifBlank { post.optString("createdAt") }
+        if (value.isBlank()) return 0L
+        val formats = listOf(
+            "EEE MMM dd HH:mm:ss Z yyyy",
+            "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+        )
+        return formats.firstNotNullOfOrNull { pattern ->
+            runCatching {
+                SimpleDateFormat(pattern, Locale.US).apply {
+                    isLenient = false
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }.parse(value)?.time
+            }.getOrNull()
+        } ?: 0L
     }
 
     fun fromGraphQl(root: JSONObject, source: ResolvedXPost): JSONObject {

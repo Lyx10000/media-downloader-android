@@ -7,6 +7,7 @@ import com.local.multiplatformdownloader.core.model.WebPageSnapshot
 import com.local.multiplatformdownloader.core.model.extractSupportedSource
 import com.local.multiplatformdownloader.core.network.BilibiliRequestProfile
 import com.local.multiplatformdownloader.core.network.ParserHttpClient
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.feature.creator.CreatorMetric
 import com.local.multiplatformdownloader.feature.creator.CreatorPage
 import com.local.multiplatformdownloader.feature.creator.CreatorPlatformSource
@@ -142,7 +143,7 @@ internal class BilibiliCreatorSource @Inject constructor(private val http: Parse
             CreatorWork(creatorWorkKey(platform, bv), profile.key, platform, bv, "https://www.bilibili.com/video/$bv",
                 MediaKind.VIDEO, org.jsoup.Jsoup.parse(item.optString("title")).text(),
                 coverUrl = BilibiliMediaParser.mediaUrl(item.optString("pic")).orEmpty(),
-                publishedAt = item.optLong("created") * 1000L, durationMs = seconds * 1000L, pageNumber = page)
+                publishedAt = item.opt("created").jsonEpochMillis(), durationMs = seconds * 1000L, pageNumber = page)
         }.distinctBy { it.key }
         val total = data.optJSONObject("page")?.optLong("count", -1) ?: -1L
         if (total < 0 || (works.isEmpty() && total > (page - 1L) * 20)) {

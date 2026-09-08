@@ -12,6 +12,7 @@ import com.local.multiplatformdownloader.core.model.ParseResult
 import com.local.multiplatformdownloader.core.model.SourcePlatform
 import com.local.multiplatformdownloader.core.network.firstString
 import com.local.multiplatformdownloader.core.network.firstValue
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.core.network.jsonLong
 import com.local.multiplatformdownloader.core.network.jsonNumber
 import com.local.multiplatformdownloader.core.network.keysInOrder
@@ -246,6 +247,9 @@ internal object ZhihuMediaParser {
                 .takeIf(String::isNotBlank)?.let { "https://www.zhihu.com/people/$it" }.orEmpty(),
             authorAvatarUrl = author.firstString("avatar_url", "avatarUrl"),
             description = payload.firstString("title", "description", "excerpt"),
+            publishedAt = payload.firstValue("created_time", "created", "published_time").jsonEpochMillis()
+                .takeIf { it > 0L }
+                ?: video.firstValue("created_time", "created", "published_time").jsonEpochMillis(),
             coverUrl = payload.firstString("image_url", "image_cover").ifBlank {
                 video.firstString("thumbnail", "image_url")
             },
@@ -315,6 +319,7 @@ internal object ZhihuMediaParser {
                 .takeIf(String::isNotBlank)?.let { "https://www.zhihu.com/people/$it" }.orEmpty(),
             authorAvatarUrl = authorObject.firstString("avatar_url", "avatarUrl"),
             description = title,
+            publishedAt = payload.firstValue("created_time", "created", "published_time").jsonEpochMillis(),
             coverUrl = cover,
             document = document,
             responseShape = (responseShape(payload) as JSONObject).toString(),

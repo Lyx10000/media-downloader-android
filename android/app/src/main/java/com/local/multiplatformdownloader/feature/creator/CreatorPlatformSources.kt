@@ -13,6 +13,7 @@ import com.local.multiplatformdownloader.core.network.firstArray
 import com.local.multiplatformdownloader.core.network.firstObject
 import com.local.multiplatformdownloader.core.network.firstString
 import com.local.multiplatformdownloader.core.network.firstValue
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.core.network.jsonLong
 import com.local.multiplatformdownloader.core.network.keysInOrder
 import com.local.multiplatformdownloader.core.network.values
@@ -164,7 +165,7 @@ internal class DouyinCreatorSource @Inject constructor(
                     kind = normalized.kind,
                     title = normalized.description.ifBlank { "抖音作品 $id" },
                     coverUrl = normalized.coverUrl,
-                    publishedAt = detail.optLong("create_time").let { if (it > 0L) it * 1_000L else 0L },
+                    publishedAt = detail.opt("create_time").jsonEpochMillis(),
                     durationMs = detail.optJSONObject("video")?.optLong("duration") ?: 0L,
                     approximateBytes = normalized.variants.maxOfOrNull(MediaVariant::size) ?: 0L,
                     lastSeenAt = now,
@@ -374,7 +375,7 @@ internal class XiaohongshuCreatorSource @Inject constructor(
                 kind = if (type == "video") MediaKind.VIDEO else MediaKind.IMAGE,
                 title = title.ifBlank { "小红书作品 $id" },
                 coverUrl = cover,
-                publishedAt = note.firstValue("time", "publishTime", "publish_time").jsonLong(),
+                publishedAt = note.firstValue("time", "publishTime", "publish_time").jsonEpochMillis(),
                 durationMs = note.firstValue("duration", "durationMs").jsonLong(),
                 lastSeenAt = now,
                 pageNumber = pageNumber,
@@ -682,8 +683,7 @@ internal class ZhihuCreatorSource @Inject constructor(
             kind = kind,
             title = title.take(120).ifBlank { "知乎作品 $id" },
             coverUrl = target.firstString("image_url", "thumbnail", "cover_url"),
-            publishedAt = target.firstValue("created_time", "created", "published_time").jsonLong()
-                .let { if (it in 1..9_999_999_999L) it * 1_000L else it },
+            publishedAt = target.firstValue("created_time", "created", "published_time").jsonEpochMillis(),
             durationMs = target.firstValue("duration", "duration_ms").jsonLong(),
             lastSeenAt = now,
             pageNumber = pageNumber,

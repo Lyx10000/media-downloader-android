@@ -9,6 +9,7 @@ import com.local.multiplatformdownloader.core.network.firstArray
 import com.local.multiplatformdownloader.core.network.firstObject
 import com.local.multiplatformdownloader.core.network.firstString
 import com.local.multiplatformdownloader.core.network.firstValue
+import com.local.multiplatformdownloader.core.network.jsonEpochMillis
 import com.local.multiplatformdownloader.core.network.jsonLong
 import com.local.multiplatformdownloader.core.network.jsonNumber
 import com.local.multiplatformdownloader.core.network.responseShape
@@ -74,6 +75,7 @@ internal object DouyinMediaNormalizer {
                 author.firstValue("avatar_larger", "avatarLarger", "avatar_medium", "avatarMedium"),
             ).firstOrNull().orEmpty(),
             description = detail.firstString("desc", "description"),
+            publishedAt = detail.firstValue("create_time", "createTime").jsonEpochMillis(),
             coverUrl = coverUrl,
             variants = variants,
             audioUrls = audioUrls,

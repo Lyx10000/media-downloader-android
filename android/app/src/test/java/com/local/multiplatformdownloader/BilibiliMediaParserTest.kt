@@ -60,6 +60,7 @@ class BilibiliMediaParserTest {
         assertEquals("https://www.bilibili.com/video/$bv?p=2", result.canonicalUrl)
         assertTrue(result.description.contains("P2 第二集"))
         assertEquals("作者", result.author)
+        assertEquals(1_788_664_150_000L, result.publishedAt)
         assertEquals("99", result.authorStableId)
         assertEquals(SourcePlatform.BILIBILI, result.platform)
         assertEquals(2, result.variants.size)
@@ -176,7 +177,7 @@ class BilibiliMediaParserTest {
     }
 
     private fun part() = BilibiliMediaParser.part(detail(), BilibiliSource(bv, 1))
-    private fun detail() = JSONObject("""{"bvid":"$bv","aid":170001,"title":"标题","pic":"https://i.hdslb.com/cover.jpg",
+    private fun detail() = JSONObject("""{"bvid":"$bv","aid":170001,"title":"标题","pic":"https://i.hdslb.com/cover.jpg","pubdate":1788664150,
         "owner":{"mid":99,"name":"作者"},"rights":{"download":1},"pages":[
         {"page":1,"cid":100,"part":"第一集","duration":20},{"page":2,"cid":200,"part":"第二集","duration":30}]}""")
     private fun play() = JSONObject().put("support_formats", JSONArray().put(JSONObject().put("quality", 120)))

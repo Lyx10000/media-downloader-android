@@ -20,6 +20,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 internal fun BilibiliTaskGroupCard(tasks: List<TaskRecord>, selected: Boolean = false,
@@ -28,6 +31,7 @@ internal fun BilibiliTaskGroupCard(tasks: List<TaskRecord>, selected: Boolean = 
     onOpen: () -> Unit,
     onToggle: () -> Unit = {},
     showProgress: Boolean = true,
+    showPublishedAt: Boolean = false,
 ) {
     if (tasks.isEmpty()) return
     val completed = tasks.count { it.status == TaskStatus.COMPLETE && it.fileState == FileState.AVAILABLE }
@@ -41,6 +45,15 @@ internal fun BilibiliTaskGroupCard(tasks: List<TaskRecord>, selected: Boolean = 
                 PlatformBrandBadge(SourcePlatform.BILIBILI)
             }
             Text("${tasks.first().author} · ${tasks.size} 个分P任务", style = MaterialTheme.typography.bodySmall)
+            if (showPublishedAt) {
+                Text(
+                    tasks.firstNotNullOfOrNull { task -> task.publishedAt.takeIf { it > 0L } }
+                        ?.let { "发布时间：${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(it))}" }
+                        ?: "发布时间未知",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
                 if (showProgress) "$completed 个已完成 · $failed 个失败或取消 · 点击管理分P"
                 else "${tasks.size} 个分P · 点击查看本地内容",
@@ -57,7 +70,8 @@ internal fun BilibiliTaskGroupCard(tasks: List<TaskRecord>, selected: Boolean = 
 
 @Composable
 internal fun BilibiliTaskGroupDialog(bvid: String, authorKey: String?, viewModel: MainViewModel,
-    requestAllFilesAccess: () -> Unit, onManageTask: (String) -> Unit, onDismiss: () -> Unit) {
+    requestAllFilesAccess: () -> Unit, onManageTask: (String) -> Unit, onDismiss: () -> Unit,
+    showPublishedAt: Boolean = true) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val tasks = uiState.allTasks.filter { bilibiliGroupKey(it) == bvid &&
         (if (authorKey == null) !it.creatorChild else it.authorKey == authorKey) }
@@ -84,7 +98,8 @@ internal fun BilibiliTaskGroupDialog(bvid: String, authorKey: String?, viewModel
                 }
                 HorizontalDivider()
                 TasksScreen(tasks, emptyMap(), viewModel, {}, requestAllFilesAccess, onManageTask,
-                    false, emptySet(), null, {}, {}, null, {}, {}, groupBilibili = false)
+                    false, emptySet(), null, {}, {}, null, {}, {}, groupBilibili = false,
+                    showPublishedAt = showPublishedAt)
             }
         }
         if (deleteAll) AlertDialog(onDismissRequest = { deleteAll = false }, title = { Text("删除整个稿件的任务？") },

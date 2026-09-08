@@ -35,6 +35,21 @@ class ModelTypesTest {
         )
 
         assertTrue(result.livePhotos.isEmpty())
+        assertEquals(0L, result.publishedAt)
+    }
+
+    @Test
+    fun `published time survives parse result persistence`() {
+        val result = ParseResult(
+            ok = true,
+            platform = SourcePlatform.DOUYIN,
+            contentId = "published-work",
+            publishedAt = 1_788_781_816_000L,
+        )
+
+        val restored = ParseResult.fromJson(result.toJson().toString())
+
+        assertEquals(result.publishedAt, restored.publishedAt)
     }
 
     @Test

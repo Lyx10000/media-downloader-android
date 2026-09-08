@@ -502,6 +502,7 @@ internal fun LocalContentDetailScreen(
             showAdaptiveStatus = false,
             allowPreview = true,
             showTransferControls = false,
+            showPublishedAt = true,
             emptyText = "本地内容不存在",
         )
     }

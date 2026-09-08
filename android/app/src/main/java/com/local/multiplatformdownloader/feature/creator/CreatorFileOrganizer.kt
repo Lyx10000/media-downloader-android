@@ -96,6 +96,7 @@ internal class CreatorFileOrganizer @Inject constructor(
             canonicalUrl = spec.result.canonicalUrl,
             kind = spec.result.kind,
             title = task.title,
+            publishedAt = spec.result.publishedAt,
         )
         val targetFolder = creatorWorkFolder(profile, work, task.createdAt)
         if (spec.taskFolder == targetFolder) {
