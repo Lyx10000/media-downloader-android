@@ -112,6 +112,9 @@ interface CreatorWorkDao {
     @Query("SELECT * FROM creator_works WHERE creator_key = :creatorKey ORDER BY published_at DESC, last_seen_at DESC")
     fun observeForCreator(creatorKey: String): Flow<List<CreatorWorkEntity>>
 
+    @Query("SELECT * FROM creator_works")
+    fun observeAll(): Flow<List<CreatorWorkEntity>>
+
     @Query("SELECT * FROM creator_works WHERE creator_key = :creatorKey ORDER BY published_at DESC, last_seen_at DESC")
     suspend fun listForCreator(creatorKey: String): List<CreatorWorkEntity>
 
@@ -212,6 +215,9 @@ interface DownloadBatchDao {
 
     @Query("UPDATE batch_works SET status = 'PARSING_HTTP' WHERE batch_id = :batchId AND work_key = :workKey AND status IN ('QUEUED', 'PAUSED')")
     suspend fun claimHttpPreparation(batchId: String, workKey: String): Int
+
+    @Query("UPDATE batch_works SET status = 'QUEUED', error = '' WHERE batch_id = :batchId AND work_key = :workKey AND status = 'PAUSED' AND task_id = ''")
+    suspend fun queuePausedPreparation(batchId: String, workKey: String): Int
 
     @Query("UPDATE batch_works SET status = 'QUEUED' WHERE batch_id = :batchId AND status = 'PARSING_HTTP'")
     suspend fun recoverHttpPreparation(batchId: String)

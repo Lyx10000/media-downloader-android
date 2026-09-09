@@ -29,6 +29,8 @@ internal class CreatorBatchWorker(
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val batchId = inputData.getString(KEY_BATCH_ID).orEmpty()
+        val workKey = inputData.getString(KEY_WORK_KEY).orEmpty()
+        val bypassRiskCooldown = inputData.getBoolean(KEY_BYPASS_RISK_COOLDOWN, false)
         if (batchId.isBlank()) return Result.failure()
         return try {
             setForeground(createForeground(batchId))
@@ -37,12 +39,15 @@ internal class CreatorBatchWorker(
             val cookie = withContext(Dispatchers.Main) {
                 CookieManager.getInstance().getCookie(platform.homeUrl).orEmpty()
             }
-            val result = withContext(Dispatchers.IO) { coordinator.execute(batchId, cookie) }
+            val result = withContext(Dispatchers.IO) {
+                coordinator.execute(batchId, cookie, workKey, bypassRiskCooldown)
+            }
             logger.event(batchId, "BATCH", "BATCH_WORKER_COMPLETE", JSONObject().apply {
                 put("started", result.started)
                 put("failed", result.failed)
                 put("paused", result.paused)
                 put("foreground_required", result.foregroundRequired)
+                put("forced_work", workKey.isNotBlank())
             })
             Result.success()
         } catch (cancelled: CancellationException) {
@@ -81,5 +86,7 @@ internal class CreatorBatchWorker(
 
     companion object {
         const val KEY_BATCH_ID = "batch_id"
+        const val KEY_WORK_KEY = "work_key"
+        const val KEY_BYPASS_RISK_COOLDOWN = "bypass_risk_cooldown"
     }
 }

@@ -25,6 +25,7 @@ data class AppSettings(
     val lastUpdateCheckEpochDay: Long = Long.MIN_VALUE,
     val batchDownloadSettings: BatchDownloadSettings = BatchDownloadSettings(),
     val platformRiskUntil: Map<SourcePlatform, Long> = emptyMap(),
+    val platformRiskCooldownMinutes: Map<SourcePlatform, Int> = defaultPlatformRiskCooldownMinutes(),
 )
 
 @Singleton
@@ -49,6 +50,9 @@ class SettingsRepository @Inject constructor(
                 ),
                 platformRiskUntil = parsePlatformRiskUntil(
                     preferences[PLATFORM_RISK_UNTIL] ?: "{}",
+                ),
+                platformRiskCooldownMinutes = parsePlatformRiskCooldownMinutes(
+                    preferences[PLATFORM_RISK_COOLDOWN_MINUTES] ?: "{}",
                 ),
             )
         }
@@ -84,6 +88,19 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    suspend fun setPlatformRiskCooldownMinutes(platform: SourcePlatform, minutes: Int) {
+        dataStore.edit { preferences ->
+            val current = parsePlatformRiskCooldownMinutes(
+                preferences[PLATFORM_RISK_COOLDOWN_MINUTES] ?: "{}",
+            ).toMutableMap()
+            current[platform] = minutes.coerceIn(
+                MIN_PLATFORM_RISK_COOLDOWN_MINUTES,
+                MAX_PLATFORM_RISK_COOLDOWN_MINUTES,
+            )
+            preferences[PLATFORM_RISK_COOLDOWN_MINUTES] = encodePlatformRiskCooldownMinutes(current)
+        }
+    }
+
     companion object {
         val DEFAULT_MODE = stringPreferencesKey("default_mode")
         val PREFER_H264 = booleanPreferencesKey("prefer_h264")
@@ -91,6 +108,37 @@ class SettingsRepository @Inject constructor(
         val LAST_UPDATE_CHECK_EPOCH_DAY = longPreferencesKey("last_update_check_epoch_day")
         val BATCH_DOWNLOAD_SETTINGS = stringPreferencesKey("batch_download_settings")
         val PLATFORM_RISK_UNTIL = stringPreferencesKey("platform_risk_until")
+        val PLATFORM_RISK_COOLDOWN_MINUTES = stringPreferencesKey("platform_risk_cooldown_minutes")
+    }
+}
+
+const val DEFAULT_PLATFORM_RISK_COOLDOWN_MINUTES = 5
+const val MIN_PLATFORM_RISK_COOLDOWN_MINUTES = 1
+const val MAX_PLATFORM_RISK_COOLDOWN_MINUTES = 30
+
+internal fun defaultPlatformRiskCooldownMinutes(): Map<SourcePlatform, Int> =
+    SourcePlatform.entries.associateWith { DEFAULT_PLATFORM_RISK_COOLDOWN_MINUTES }
+
+internal fun encodePlatformRiskCooldownMinutes(value: Map<SourcePlatform, Int>): String =
+    JSONObject().apply {
+        SourcePlatform.entries.forEach { platform ->
+            put(
+                platform.wireValue,
+                (value[platform] ?: DEFAULT_PLATFORM_RISK_COOLDOWN_MINUTES).coerceIn(
+                    MIN_PLATFORM_RISK_COOLDOWN_MINUTES,
+                    MAX_PLATFORM_RISK_COOLDOWN_MINUTES,
+                ),
+            )
+        }
+    }.toString()
+
+internal fun parsePlatformRiskCooldownMinutes(value: String): Map<SourcePlatform, Int> {
+    val root = runCatching { JSONObject(value) }.getOrNull()
+    return SourcePlatform.entries.associateWith { platform ->
+        root?.optInt(platform.wireValue, DEFAULT_PLATFORM_RISK_COOLDOWN_MINUTES)
+            ?.takeIf { it > 0 }
+            ?.coerceIn(MIN_PLATFORM_RISK_COOLDOWN_MINUTES, MAX_PLATFORM_RISK_COOLDOWN_MINUTES)
+            ?: DEFAULT_PLATFORM_RISK_COOLDOWN_MINUTES
     }
 }
 

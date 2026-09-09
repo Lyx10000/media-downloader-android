@@ -382,6 +382,19 @@ class CreatorLibraryViewModel @Inject internal constructor(
         }
     }
 
+    fun forceStartCreatorBatchWork(batchId: String, workKey: String) {
+        if (batchId.isBlank() || workKey.isBlank()) return
+        viewModelScope.launch {
+            try {
+                notify(creatorBatchCoordinator.forceStart(batchId, workKey))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                notify(Redactor.sanitize(error.message ?: "启动作品失败"))
+            }
+        }
+    }
+
     private suspend fun resolveCandidate(
         platform: SourcePlatform,
         query: String,

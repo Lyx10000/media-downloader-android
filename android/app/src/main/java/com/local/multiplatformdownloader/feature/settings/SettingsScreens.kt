@@ -2,6 +2,9 @@ package com.local.multiplatformdownloader.feature.settings
 
 import com.local.multiplatformdownloader.core.download.formatByteSize
 import com.local.multiplatformdownloader.core.model.UpdateSource
+import com.local.multiplatformdownloader.core.model.SourcePlatform
+import com.local.multiplatformdownloader.core.settings.MAX_PLATFORM_RISK_COOLDOWN_MINUTES
+import com.local.multiplatformdownloader.core.settings.MIN_PLATFORM_RISK_COOLDOWN_MINUTES
 import com.local.multiplatformdownloader.core.model.UpdateStatus
 import com.local.multiplatformdownloader.core.model.UpdateUiState
 import com.local.multiplatformdownloader.feature.home.MainUiState
@@ -30,10 +33,12 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -111,6 +116,7 @@ internal fun SettingsScreen(
 ) {
     var showSourceDialog by rememberSaveable { mutableStateOf(false) }
     var showGithubWarning by rememberSaveable { mutableStateOf(false) }
+    var showRiskCooldownDialog by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -139,6 +145,15 @@ internal fun SettingsScreen(
                 )
                 Text(label)
             }
+        }
+        item {
+            ListItem(
+                headlineContent = { Text("风控冷却时间") },
+                supportingContent = { Text("各平台独立设置，触发限制后自动暂停并恢复") },
+                trailingContent = {
+                    TextButton(onClick = { showRiskCooldownDialog = true }) { Text("设置") }
+                },
+            )
         }
         item { HorizontalDivider() }
         item { Text("保存位置", style = MaterialTheme.typography.titleMedium) }
@@ -237,6 +252,50 @@ internal fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showGithubWarning = false }) { Text("取消") }
+            },
+        )
+    }
+    if (showRiskCooldownDialog) {
+        AlertDialog(
+            onDismissRequest = { showRiskCooldownDialog = false },
+            title = { Text("风控冷却时间") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    SourcePlatform.entries.forEach { platform ->
+                        val minutes = uiState.platformRiskCooldownMinutes[platform] ?: 5
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(platform.displayName, modifier = Modifier.weight(1f))
+                            IconButton(
+                                enabled = minutes > MIN_PLATFORM_RISK_COOLDOWN_MINUTES,
+                                onClick = {
+                                    viewModel.updatePlatformRiskCooldownMinutes(platform, minutes - 1)
+                                },
+                            ) { Icon(Icons.Default.Remove, contentDescription = "减少${platform.displayName}冷却时间") }
+                            Text("$minutes 分钟", style = MaterialTheme.typography.bodyMedium)
+                            IconButton(
+                                enabled = minutes < MAX_PLATFORM_RISK_COOLDOWN_MINUTES,
+                                onClick = {
+                                    viewModel.updatePlatformRiskCooldownMinutes(platform, minutes + 1)
+                                },
+                            ) { Icon(Icons.Default.Add, contentDescription = "增加${platform.displayName}冷却时间") }
+                        }
+                    }
+                    Text(
+                        "可设置 1～30 分钟；修改后的时长在下次触发风控时生效。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showRiskCooldownDialog = false }) { Text("完成") }
             },
         )
     }

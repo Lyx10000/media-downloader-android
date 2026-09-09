@@ -2,6 +2,7 @@ package com.local.multiplatformdownloader.core.download
 
 import com.local.multiplatformdownloader.core.logging.DiagnosticLogger
 import com.local.multiplatformdownloader.core.model.SourcePlatform
+import com.local.multiplatformdownloader.core.settings.DEFAULT_PLATFORM_RISK_COOLDOWN_MINUTES
 import com.local.multiplatformdownloader.core.settings.SettingsRepository
 
 import android.content.Context
@@ -102,6 +103,9 @@ class AdaptiveDownloadController @Inject constructor(
     @Volatile
     private var riskUntil: Map<SourcePlatform, Long> = emptyMap()
 
+    @Volatile
+    private var riskCooldownMinutes: Map<SourcePlatform, Int> = emptyMap()
+
     private val recentRiskAt = ConcurrentHashMap<SourcePlatform, Long>()
     private var policyState = AdaptivePolicyState()
     private var previousCpuMs = Process.getElapsedCpuTime()
@@ -122,6 +126,7 @@ class AdaptiveDownloadController @Inject constructor(
                 val current = settings.platformRiskUntil.filterValues { it > now }
                 riskMutex.withLock {
                     riskUntil = current
+                    riskCooldownMinutes = settings.platformRiskCooldownMinutes
                     _state.update { it.copy(platformRiskUntil = current) }
                 }
                 if (!riskLoaded.isCompleted) riskLoaded.complete(Unit)
@@ -219,30 +224,42 @@ class AdaptiveDownloadController @Inject constructor(
     ) {
         if (code !in RISK_CODES && httpStatuses.none { it in RISK_HTTP_STATUSES }) return
         scope.launch {
-            riskLoaded.await()
-            riskMutex.withLock {
-                val now = System.currentTimeMillis()
-                val repeated = isPlatformBlocked(platform, now) ||
-                    now - (recentRiskAt[platform] ?: Long.MIN_VALUE) <= REPEATED_RISK_WINDOW_MS
-                recentRiskAt[platform] = now
-                val until = now + if (repeated) REPEATED_RISK_COOLDOWN_MS else INITIAL_RISK_COOLDOWN_MS
-                val updated = riskUntil.toMutableMap().apply { put(platform, until) }
-                riskUntil = updated
-                settingsRepository.setPlatformRiskUntil(updated)
-                _state.update {
-                    it.copy(
-                        platformRiskUntil = updated,
-                        reason = "${platform.displayName}触发风控，已暂停该平台新任务",
-                    )
-                }
-                logger.event(LOG_TASK_ID, "SCHEDULER", "PLATFORM_CIRCUIT_OPENED", JSONObject().apply {
-                    put("platform", platform.wireValue)
-                    put("code", code)
-                    put("http_statuses", httpStatuses.joinToString(","))
-                    put("cooldown_ms", until - now)
-                    put("repeated", repeated)
-                })
+            reportPlatformRiskAndGetUntil(platform, code, httpStatuses)
+        }
+    }
+
+    suspend fun reportPlatformRiskAndGetUntil(
+        platform: SourcePlatform,
+        code: String,
+        httpStatuses: Collection<Int> = emptyList(),
+    ): Long {
+        if (code !in RISK_CODES && httpStatuses.none { it in RISK_HTTP_STATUSES }) return 0L
+        riskLoaded.await()
+        return riskMutex.withLock {
+            val now = System.currentTimeMillis()
+            val repeated = isPlatformBlocked(platform, now) ||
+                now - (recentRiskAt[platform] ?: Long.MIN_VALUE) <= REPEATED_RISK_WINDOW_MS
+            recentRiskAt[platform] = now
+            val minutes = riskCooldownMinutes[platform] ?: DEFAULT_PLATFORM_RISK_COOLDOWN_MINUTES
+            val until = now + minutes * 60_000L
+            val updated = riskUntil.toMutableMap().apply { put(platform, until) }
+            riskUntil = updated
+            settingsRepository.setPlatformRiskUntil(updated)
+            _state.update {
+                it.copy(
+                    platformRiskUntil = updated,
+                    reason = "${platform.displayName}触发风控，已暂停该平台新任务",
+                )
             }
+            logger.event(LOG_TASK_ID, "SCHEDULER", "PLATFORM_CIRCUIT_OPENED", JSONObject().apply {
+                put("platform", platform.wireValue)
+                put("code", code)
+                put("http_statuses", httpStatuses.joinToString(","))
+                put("cooldown_ms", until - now)
+                put("configured_minutes", minutes)
+                put("repeated", repeated)
+            })
+            until
         }
     }
 
@@ -443,8 +460,6 @@ class AdaptiveDownloadController @Inject constructor(
         private const val SAMPLE_STALE_MS = 3_500L
         private const val SLOW_FRAME_NANOS = 32_000_000L
         private const val EWMA_ALPHA = 0.3
-        private const val INITIAL_RISK_COOLDOWN_MS = 2 * 60_000L
-        private const val REPEATED_RISK_COOLDOWN_MS = 5 * 60_000L
         private const val REPEATED_RISK_WINDOW_MS = 10 * 60_000L
         val RISK_CODES = setOf("AUTH_OR_RISK", "RATE_LIMITED", "BILIBILI_RISK")
         val RISK_HTTP_STATUSES = setOf(403, 412, 429, 461)

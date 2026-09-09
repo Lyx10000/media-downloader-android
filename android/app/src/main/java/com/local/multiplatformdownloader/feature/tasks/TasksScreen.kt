@@ -161,6 +161,7 @@ internal fun TasksScreen(
     onOpenCreatorGroup: (String) -> Unit = {},
     onResumeCreatorBatch: (String) -> Unit = {},
     onDeleteCreatorBatch: (String) -> Unit = {},
+    onForceCreatorBatchWork: (String, String) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
@@ -609,6 +610,7 @@ internal fun TasksScreen(
                 onManageTask = onManageTask,
                 onResumeCreatorBatch = onResumeCreatorBatch,
                 onDeleteCreatorBatch = onDeleteCreatorBatch,
+                onForceCreatorBatchWork = onForceCreatorBatchWork,
                 onDismiss = { openCreatorGroup = null },
             )
         } else {

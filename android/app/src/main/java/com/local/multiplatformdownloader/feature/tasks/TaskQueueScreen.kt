@@ -6,6 +6,7 @@ import com.local.multiplatformdownloader.core.model.TaskRecord
 import com.local.multiplatformdownloader.core.model.TaskStatus
 import com.local.multiplatformdownloader.feature.creator.CreatorProfile
 import com.local.multiplatformdownloader.feature.creator.CreatorBatchSummary
+import com.local.multiplatformdownloader.feature.creator.CreatorBatchWorkSummary
 import com.local.multiplatformdownloader.feature.creator.CreatorLibraryUiState
 import com.local.multiplatformdownloader.feature.creator.taskCreatorKey
 import com.local.multiplatformdownloader.feature.home.MainUiState
@@ -23,6 +24,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cancel
@@ -116,6 +119,7 @@ internal fun TaskQueueScreen(
     onOpenCreator: (String) -> Unit,
     onResumeCreatorBatch: (String) -> Unit,
     onDeleteCreatorBatch: (String) -> Unit,
+    onForceCreatorBatchWork: (String, String) -> Unit,
 ) {
     val adaptive by viewModel.adaptiveDownloadState.collectAsStateWithLifecycle()
     val peakByAuthor by viewModel.authorTaskPeakBytesPerSecond.collectAsStateWithLifecycle()
@@ -227,6 +231,7 @@ internal fun TaskQueueScreen(
             onOpenCreatorGroup = onOpenCreator,
             onResumeCreatorBatch = onResumeCreatorBatch,
             onDeleteCreatorBatch = onDeleteCreatorBatch,
+            onForceCreatorBatchWork = onForceCreatorBatchWork,
         )
     }
     if (showFilters) {
@@ -288,8 +293,7 @@ internal fun ActiveCreatorTaskGroupCard(
     selected: Boolean = false,
     onToggle: () -> Unit = {},
 ) {
-    val progress = group.batchSummary?.progressFraction?.takeIf { group.tasks.isEmpty() }
-        ?: group.progressFraction.coerceIn(0f, 1f)
+    val progress = group.batchSummary?.progressFraction ?: group.progressFraction.coerceIn(0f, 1f)
     val workCount = maxOf(group.tasks.size, group.batchSummary?.selected ?: 0)
     val hasPendingBatchWork = group.batchSummary?.let {
         it.queued > 0 || it.paused > 0 || it.foregroundRequired > 0
@@ -325,7 +329,11 @@ internal fun ActiveCreatorTaskGroupCard(
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         PlatformBrandBadge(group.profile.platform)
-                        Text("$workCount 个活动作品", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            group.batchSummary?.let { "已完成 ${it.complete}/${it.selected}" }
+                                ?: "$workCount 个活动作品",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             }
@@ -355,6 +363,7 @@ internal fun ActiveCreatorTaskGroupDialog(
     onManageTask: (String) -> Unit,
     onResumeCreatorBatch: (String) -> Unit,
     onDeleteCreatorBatch: (String) -> Unit,
+    onForceCreatorBatchWork: (String, String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var confirmCancel by remember { mutableStateOf(false) }
@@ -410,18 +419,13 @@ internal fun ActiveCreatorTaskGroupDialog(
                     ) { Icon(Icons.Default.Delete, contentDescription = "删除全部") }
                 }
                 HorizontalDivider()
-                if (group.tasks.isEmpty() && hasBatchRecord) {
-                    Column(
-                        Modifier.fillMaxWidth().weight(1f).padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text("作品尚未进入下载队列", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            if (batchPaused) "批量准备已暂停，可等待冷却结束自动继续，或点击右上角继续。"
-                            else "正在准备批量作品。",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                if (group.batchSummary != null) {
+                    CreatorBatchWorkList(
+                        summary = group.batchSummary,
+                        viewModel = viewModel,
+                        onForceStart = onForceCreatorBatchWork,
+                        modifier = Modifier.weight(1f),
+                    )
                 } else {
                     TasksScreen(
                         tasks = group.tasks,
@@ -495,6 +499,119 @@ internal fun ActiveCreatorTaskGroupDialog(
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
         )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CreatorBatchWorkList(
+    summary: CreatorBatchSummary,
+    viewModel: MainViewModel,
+    onForceStart: (String, String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(summary.works, key = CreatorBatchWorkSummary::workKey) { work ->
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AsyncImage(
+                            model = work.coverUrl,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(48.dp).clip(MaterialTheme.shapes.medium),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                work.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                creatorBatchWorkStatusLabel(work),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (work.preparationStatus == "PAUSED") {
+                                    MaterialTheme.colorScheme.error
+                                } else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    if (work.taskStatus == TaskStatus.RUNNING) {
+                        LinearProgressIndicator(
+                            progress = { work.progress.coerceIn(0, 100) / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text("${work.progress.coerceIn(0, 100)}%", style = MaterialTheme.typography.labelSmall)
+                    }
+                    if (work.error.isNotBlank()) {
+                        Text(
+                            work.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (work.canForceStart) {
+                        TextButton(onClick = { onForceStart(summary.batchId, work.workKey) }) {
+                            Text("立即尝试")
+                        }
+                    } else {
+                        work.taskRecords.firstOrNull { task ->
+                            task.status in setOf(
+                                TaskStatus.QUEUED,
+                                TaskStatus.RUNNING,
+                                TaskStatus.PAUSED,
+                                TaskStatus.FAILED,
+                            )
+                        }?.let { task ->
+                            when (task.status) {
+                                TaskStatus.QUEUED, TaskStatus.RUNNING -> {
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(onClick = { viewModel.pauseTask(task) }) { Text("暂停") }
+                                        TextButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
+                                    }
+                                }
+                                TaskStatus.PAUSED -> {
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(onClick = { viewModel.resumeTask(task) }) { Text("继续") }
+                                        TextButton(onClick = { viewModel.cancelTask(task) }) { Text("取消") }
+                                    }
+                                }
+                                TaskStatus.FAILED -> {
+                                    TextButton(onClick = { viewModel.retryTask(task) }) { Text("重试") }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun creatorBatchWorkStatusLabel(work: CreatorBatchWorkSummary): String = when (work.taskStatus) {
+    TaskStatus.COMPLETE -> "已完成"
+    TaskStatus.RUNNING -> work.stage.ifBlank { "下载中" }
+    TaskStatus.QUEUED -> "等待下载"
+    TaskStatus.PAUSED -> "已暂停"
+    TaskStatus.FAILED -> "下载失败"
+    TaskStatus.CANCELLED -> "已取消"
+    TaskStatus.DELETING -> "正在删除"
+    else -> when (work.preparationStatus) {
+        "PAUSED" -> "等待风控冷却"
+        "FAILED" -> "准备失败"
+        "WEB_REQUIRED" -> "等待前台准备"
+        "PARSING", "PARSING_HTTP" -> "正在解析"
+        "PREPARED" -> "等待进入下载队列"
+        "SCHEDULED" -> "已加入下载队列"
+        else -> "等待准备"
     }
 }
 

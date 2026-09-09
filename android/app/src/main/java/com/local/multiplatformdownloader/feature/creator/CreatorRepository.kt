@@ -29,7 +29,24 @@ data class CreatorBatchSummary(
     val foregroundRequired: Int,
     val complete: Int,
     val failed: Int,
+    val works: List<CreatorBatchWorkSummary> = emptyList(),
 )
+
+data class CreatorBatchWorkSummary(
+    val workKey: String,
+    val title: String,
+    val coverUrl: String,
+    val preparationStatus: String,
+    val taskIds: List<String>,
+    val taskRecords: List<TaskRecord>,
+    val taskStatus: TaskStatus?,
+    val progress: Int,
+    val stage: String,
+    val error: String,
+) {
+    val canForceStart: Boolean
+        get() = preparationStatus == CreatorBatchWorkStatus.PAUSED && taskIds.isEmpty()
+}
 
 @Singleton
 class CreatorLibraryRepository @Inject internal constructor(
@@ -47,10 +64,12 @@ class CreatorLibraryRepository @Inject internal constructor(
         batchDao.observeBatches(),
         batchDao.observeWorks(),
         taskRepository.observeAll(),
-    ) { batches, works, tasks ->
-        val latest = actionableCreatorBatches(batches, works)
+        workDao.observeAll(),
+    ) { batches, batchWorks, tasks, creatorWorks ->
+        val latest = actionableCreatorBatches(batches, batchWorks)
+        val creatorWorksByKey = creatorWorks.associateBy(CreatorWorkEntity::workKey)
         latest.associate { batch ->
-            val entries = works.filter { it.batchId == batch.batchId }
+            val entries = batchWorks.filter { it.batchId == batch.batchId }
             val batchTasks = tasks.filter { it.batchId == batch.batchId }
             val batchTasksById = batchTasks.associateBy(TaskRecord::id)
             val batchBiliTasksByWork = batchTasks.filter { it.platform == SourcePlatform.BILIBILI }
@@ -92,6 +111,29 @@ class CreatorLibraryRepository @Inject internal constructor(
                     } / records.size
                 }
             }
+            val workSummaries = entries.map { entry ->
+                val records = entryRecords.getValue(entry)
+                val representative = records.firstOrNull { it.status == TaskStatus.RUNNING }
+                    ?: records.firstOrNull { it.status == TaskStatus.QUEUED }
+                    ?: records.firstOrNull()
+                val indexed = creatorWorksByKey[entry.workKey]
+                CreatorBatchWorkSummary(
+                    workKey = entry.workKey,
+                    title = indexed?.title?.takeIf(String::isNotBlank)
+                        ?: representative?.title?.takeIf(String::isNotBlank)
+                        ?: entry.workKey.substringAfter(':'),
+                    coverUrl = indexed?.coverUrl.orEmpty(),
+                    preparationStatus = entry.status,
+                    taskIds = records.map(TaskRecord::id),
+                    taskRecords = records,
+                    taskStatus = representative?.status,
+                    progress = if (records.isEmpty()) 0 else {
+                        (records.sumOf { it.progress.coerceIn(0, 100) } / records.size)
+                    },
+                    stage = representative?.stage.orEmpty(),
+                    error = entry.error.ifBlank { representative?.error.orEmpty() },
+                )
+            }
             batch.creatorKey to CreatorBatchSummary(
                 batchId = batch.batchId,
                 selected = batch.selectedCount,
@@ -126,6 +168,7 @@ class CreatorLibraryRepository @Inject internal constructor(
                     entry.status == "FAILED" ||
                         currentEntryTasks(entry).any { it.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED) }
                 },
+                works = workSummaries,
             )
         }
     }

@@ -74,7 +74,6 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -284,16 +283,6 @@ internal fun DownloaderApp(
             viewModel.showMessage("该任务已结束且没有可用的本地内容")
         } else {
             destination = 1
-        }
-    }
-
-    LaunchedEffect(viewModel) {
-        viewModel.completedTasks.collectLatest { taskId ->
-            val result = snackbar.showSnackbar(
-                message = "下载完成",
-                actionLabel = "查看",
-            )
-            if (result == SnackbarResult.ActionPerformed) openTaskTarget(taskId)
         }
     }
 
@@ -571,6 +560,7 @@ internal fun DownloaderApp(
                     },
                     onResumeCreatorBatch = creatorViewModel::resumeCreatorBatch,
                     onDeleteCreatorBatch = creatorViewModel::deleteCreatorBatch,
+                    onForceCreatorBatchWork = creatorViewModel::forceStartCreatorBatchWork,
                 )
                 2 -> LocalDownloadsScreen(
                     uiState = uiState,

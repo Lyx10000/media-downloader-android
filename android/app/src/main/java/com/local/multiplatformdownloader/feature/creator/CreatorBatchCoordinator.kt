@@ -112,7 +112,12 @@ class CreatorBatchCoordinator @Inject internal constructor(
         return CreatorBatchStartResult(batchId, works.size, 0, 0)
     }
 
-    suspend fun execute(batchId: String, cookieHeader: String): CreatorBatchStartResult {
+    suspend fun execute(
+        batchId: String,
+        cookieHeader: String,
+        requestedWorkKey: String = "",
+        bypassRiskCooldown: Boolean = false,
+    ): CreatorBatchStartResult {
         val batch = batches.getBatch(batchId)
             ?: return CreatorBatchStartResult(batchId, 0, 1, 0)
         val profile = creators.getCreator(batch.creatorKey)
@@ -131,13 +136,16 @@ class CreatorBatchCoordinator @Inject internal constructor(
             return CreatorBatchStartResult(batchId, 0, 1, 0)
         }
         val settings = BatchDownloadSettings.fromJson(batch.settingsJson)
-        batches.recoverWebParsing(batchId)
-        batches.recoverHttpPreparation(batchId)
+        if (requestedWorkKey.isBlank()) {
+            batches.recoverWebParsing(batchId)
+            batches.recoverHttpPreparation(batchId)
+        }
         val queuedEntries = batches.listWorks(batchId).filter {
-            it.status in setOf(CreatorBatchWorkStatus.QUEUED, CreatorBatchWorkStatus.PAUSED)
+            it.status in setOf(CreatorBatchWorkStatus.QUEUED, CreatorBatchWorkStatus.PAUSED) &&
+                (requestedWorkKey.isBlank() || it.workKey == requestedWorkKey)
         }
         val riskUntil = adaptiveDownloadController.platformRiskUntilAfterLoad(profile.platform)
-        if (riskUntil > System.currentTimeMillis()) {
+        if (!bypassRiskCooldown && riskUntil > System.currentTimeMillis()) {
             queuedEntries.forEach { entry ->
                 batches.updateWork(
                     batchId,
@@ -166,6 +174,7 @@ class CreatorBatchCoordinator @Inject internal constructor(
         var paused = 0
         var foregroundRequired = 0
         var riskTriggered = false
+        var triggeredRiskUntil = 0L
         var consecutiveXiaohongshuDetailFailures = 0
         var refreshedXiaohongshuWorks: Map<String, CreatorWork>? = null
         queuedEntries.forEach { entry ->
@@ -357,14 +366,18 @@ class CreatorBatchCoordinator @Inject internal constructor(
                         CreatorWorkRemoteStatus.UNAVAILABLE
                     } else CreatorWorkRemoteStatus.CHECK_FAILED,
                 )
+                val httpStatuses = result.parserAttempts.map(ParserAttempt::statusCode)
+                val platformRiskFailure = result.errorCode in AdaptiveDownloadController.RISK_CODES ||
+                    httpStatuses.any { it in AdaptiveDownloadController.RISK_HTTP_STATUSES }
+                val retryAfterCooldown = bypassRiskCooldown && platformRiskFailure
                 batches.updateWork(
                     batchId,
                     work.key,
-                    CreatorBatchWorkStatus.FAILED,
+                    if (retryAfterCooldown) CreatorBatchWorkStatus.PAUSED else CreatorBatchWorkStatus.FAILED,
                     "",
                     safeMessage,
                 )
-                failed += 1
+                if (retryAfterCooldown) paused += 1 else failed += 1
                 logger.event(batchId, "BATCH", "WORK_PARSE_FAILED", JSONObject().apply {
                     put("work_key", work.key)
                     put("kind", work.kind.wireValue)
@@ -374,7 +387,7 @@ class CreatorBatchCoordinator @Inject internal constructor(
                     put("code", result.errorCode)
                     put("message", safeMessage)
                     put("http_statuses", org.json.JSONArray().apply {
-                        result.parserAttempts.map(ParserAttempt::statusCode)
+                        httpStatuses
                             .filter { it > 0 }
                             .distinct()
                             .forEach(::put)
@@ -383,10 +396,10 @@ class CreatorBatchCoordinator @Inject internal constructor(
                 if (result.errorCode in setOf("AUTH_OR_RISK", "LOGIN_REQUIRED", "RATE_LIMITED", "BILIBILI_RISK")) {
                     riskTriggered = true
                 }
-                adaptiveDownloadController.reportPlatformRisk(
+                triggeredRiskUntil = adaptiveDownloadController.reportPlatformRiskAndGetUntil(
                     profile.platform,
                     result.errorCode,
-                    result.parserAttempts.map(ParserAttempt::statusCode),
+                    httpStatuses,
                 )
                 return@forEach
             }
@@ -417,6 +430,11 @@ class CreatorBatchCoordinator @Inject internal constructor(
         }
         val finalStatus = batchStatusAfterPreparation(finalEntries)
         batches.updateBatch(batchId, finalStatus)
+        if (triggeredRiskUntil > System.currentTimeMillis() &&
+            finalEntries.any { it.status == CreatorBatchWorkStatus.PAUSED }
+        ) {
+            scheduleAutomaticResume(batchId, triggeredRiskUntil)
+        }
         if (finalStatus == CreatorBatchStatus.WAITING_FOREGROUND) {
             logger.event(batchId, "BATCH", "BATCH_FOREGROUND_REQUIRED", JSONObject().apply {
                 put("remaining", finalEntries.count { it.status == CreatorBatchWorkStatus.WEB_REQUIRED })
@@ -461,6 +479,47 @@ class CreatorBatchCoordinator @Inject internal constructor(
     suspend fun platformRiskUntil(platform: SourcePlatform): Long =
         adaptiveDownloadController.platformRiskUntilAfterLoad(platform)
 
+    suspend fun forceStart(batchId: String, workKey: String): String {
+        val entry = batches.getWork(batchId, workKey) ?: return "该作品的准备记录已不存在"
+        if (entry.status != CreatorBatchWorkStatus.PAUSED || entry.taskId.isNotBlank()) {
+            return "该作品当前不能强制尝试"
+        }
+        // Reserve the row before enqueueing so rapid repeated taps cannot replace a
+        // running force worker and strand the item in PARSING_HTTP.
+        if (batches.queuePausedPreparation(batchId, workKey) == 0) {
+            return "该作品已经开始处理"
+        }
+        val request = OneTimeWorkRequestBuilder<CreatorBatchWorker>()
+            .setInputData(Data.Builder()
+                .putString(CreatorBatchWorker.KEY_BATCH_ID, batchId)
+                .putString(CreatorBatchWorker.KEY_WORK_KEY, workKey)
+                .putBoolean(CreatorBatchWorker.KEY_BYPASS_RISK_COOLDOWN, true)
+                .build())
+            .addTag(batchId)
+            .build()
+        batches.updateBatch(batchId, CreatorBatchStatus.QUEUED)
+        runCatching {
+            workManager.enqueueUniqueWork(
+                forceWorkName(batchId, workKey),
+                ExistingWorkPolicy.KEEP,
+                request,
+            ).await()
+        }.onFailure {
+            batches.updateWork(
+                batchId,
+                workKey,
+                CreatorBatchWorkStatus.PAUSED,
+                "",
+                "启动失败，可再次尝试",
+            )
+            throw it
+        }
+        logger.event(batchId, "BATCH", "WORK_FORCE_START_REQUESTED", JSONObject().apply {
+            put("work_key", workKey)
+        })
+        return "已尝试启动所选作品"
+    }
+
     suspend fun resume(creatorKey: String): String {
         val batch = batches.latestPaused(creatorKey)
             ?: return "没有等待继续的批次"
@@ -499,8 +558,7 @@ class CreatorBatchCoordinator @Inject internal constructor(
     }
 
     suspend fun deleteBatch(batchId: String) = withContext(Dispatchers.IO) {
-        val workName = uniqueWorkName(batchId)
-        workManager.cancelUniqueWork(workName).await()
+        workManager.cancelAllWorkByTag(batchId).await()
         batches.deleteWorksForBatch(batchId)
         batches.deleteBatch(batchId)
         logger.event(batchId, "BATCH", "BATCH_RECORD_DELETED", JSONObject())
@@ -554,6 +612,8 @@ class CreatorBatchCoordinator @Inject internal constructor(
 
         fun uniqueWorkName(batchId: String): String = "creator-batch-$batchId"
         private fun autoResumeTag(batchId: String): String = "creator-batch-auto-resume-$batchId"
+        private fun forceWorkName(batchId: String, workKey: String): String =
+            "creator-batch-force-$batchId-${workKey.hashCode()}"
     }
 }
 

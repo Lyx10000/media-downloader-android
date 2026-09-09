@@ -202,6 +202,8 @@ data class MainUiState(
     val isExportingDiagnostics: Boolean = false,
     val message: String = "",
     val preferH264: Boolean = false,
+    val platformRiskCooldownMinutes: Map<SourcePlatform, Int> =
+        com.local.multiplatformdownloader.core.settings.defaultPlatformRiskCooldownMinutes(),
     val customTreeUri: String? = null,
     val platformCredentialStates: Map<SourcePlatform, PlatformCredentialState> =
         SourcePlatform.entries.associateWith { PlatformCredentialState.NOT_DETECTED },
@@ -253,8 +255,6 @@ class MainViewModel @Inject internal constructor(
     internal val diagnosticExports = diagnosticExportChannel.receiveAsFlow()
     private val updateLaunchChannel = Channel<UpdateLaunchRequest>(Channel.BUFFERED)
     internal val updateLaunchRequests = updateLaunchChannel.receiveAsFlow()
-    private val completedTaskChannel = Channel<String>(Channel.BUFFERED)
-    internal val completedTasks = completedTaskChannel.receiveAsFlow()
     private var updateDownloadJob: Job? = null
 
     var inputText: String
@@ -300,7 +300,6 @@ class MainViewModel @Inject internal constructor(
     private val refreshMutex = Mutex()
     private var taskCapabilities = emptyMap<String, TaskCapabilities>()
     private var tasksVisible = false
-    private var observedTaskStatuses: Map<String, TaskStatus>? = null
 
     init {
         refreshPlatformCredentialStates()
@@ -315,6 +314,9 @@ class MainViewModel @Inject internal constructor(
             settingsRepository.settings.collectLatest { settings ->
                 selectedMode = settings.defaultMode
                 preferH264 = settings.preferH264
+                _uiState.update {
+                    it.copy(platformRiskCooldownMinutes = settings.platformRiskCooldownMinutes)
+                }
                 customTreeUri = settings.customTreeUri
                 refreshTaskMetadata(tasks)
             }
@@ -335,12 +337,6 @@ class MainViewModel @Inject internal constructor(
         }
         viewModelScope.launch {
             store.observeAll().collectLatest { records ->
-                observedTaskStatuses?.let { previous ->
-                    records.filter { task ->
-                        task.status == TaskStatus.COMPLETE && previous[task.id] != TaskStatus.COMPLETE
-                    }.forEach { completedTaskChannel.trySend(it.id) }
-                }
-                observedTaskStatuses = records.associate { it.id to it.status }
                 tasks = records.filterNot(TaskRecord::creatorChild)
                 _uiState.update { state -> state.copy(allTasks = records) }
                 updateAuthorTaskPeaks(adaptiveDownloadController.state.value.taskBytesPerSecond)
@@ -1415,6 +1411,12 @@ class MainViewModel @Inject internal constructor(
     fun updatePreferH264(value: Boolean) {
         preferH264 = value
         viewModelScope.launch { settingsRepository.setPreferH264(value) }
+    }
+
+    fun updatePlatformRiskCooldownMinutes(platform: SourcePlatform, minutes: Int) {
+        viewModelScope.launch {
+            settingsRepository.setPlatformRiskCooldownMinutes(platform, minutes)
+        }
     }
 
     fun setDefaultMode(mode: DownloadMode) {
