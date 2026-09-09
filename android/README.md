@@ -72,6 +72,8 @@ cd android
 
 源码命名空间为 `com.local.multiplatformdownloader`。为兼容已经发布的版本，Android `applicationId` 仍保留为 `com.local.douyindownloader`；修改该值会导致系统将 APK 识别为另一个应用，并且无法直接继承旧版数据。
 
+源码分层、状态所有权和新增平台约束见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
 ## 已知限制
 
 - 可下载内容和清晰度取决于平台当前返回结果、作品权限及登录状态。

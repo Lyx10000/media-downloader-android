@@ -51,13 +51,9 @@ import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionArchi
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionArchiveCoordinator
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionDownloadScope
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionRepository
-import com.local.multiplatformdownloader.platform.bilibili.BilibiliPlatformParser
 import com.local.multiplatformdownloader.platform.bilibili.bilibiliPartResult
 import com.local.multiplatformdownloader.platform.common.ParserGateway
 import com.local.multiplatformdownloader.platform.common.PlatformCredentialState
-import com.local.multiplatformdownloader.platform.common.XiaohongshuCredentialValidationCache
-import com.local.multiplatformdownloader.platform.common.classifyXiaohongshuCredentialSnapshot
-import com.local.multiplatformdownloader.platform.common.detectPlatformCredential
 import com.local.multiplatformdownloader.core.network.responseShape
 import com.local.multiplatformdownloader.platform.xiaohongshu.XiaohongshuMediaParser
 import com.local.multiplatformdownloader.platform.zhihu.ZhihuContentType
@@ -139,7 +135,6 @@ data class MainUiState(
 class MainViewModel @Inject internal constructor(
     application: Application,
     private val parser: ParserGateway,
-    private val bilibiliParser: BilibiliPlatformParser,
     private val store: DownloadTaskRepository,
     private val logger: DiagnosticLogger,
     private val inspector: StorageInspector,
@@ -150,6 +145,7 @@ class MainViewModel @Inject internal constructor(
     private val fileStateRefresher: TaskFileStateRefresher,
     private val taskInteractionCoordinator: TaskInteractionCoordinator,
     private val taskContentCoordinator: TaskContentCoordinator,
+    private val platformCredentialCoordinator: PlatformCredentialCoordinator,
     private val updateRepository: UpdateRepository,
     private val creatorRepository: CreatorLibraryRepository,
     private val zhihuQuestionArchiveCoordinator: ZhihuQuestionArchiveCoordinator,
@@ -158,7 +154,6 @@ class MainViewModel @Inject internal constructor(
     private val adaptiveDownloadController: AdaptiveDownloadController,
 ) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
-    private var bilibiliCredentialJob: Job? = null
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
     internal val expandedTaskId = taskInteractionCoordinator.expandedTaskId
     internal val mediaPreviewState = taskInteractionCoordinator.mediaPreviewState
@@ -207,12 +202,16 @@ class MainViewModel @Inject internal constructor(
         private set(value) = _uiState.update { it.copy(customTreeUri = value) }
 
     private val parseSession = ParseSessionController()
-    private val xiaohongshuCredentialCache = XiaohongshuCredentialValidationCache()
     private val refreshMutex = Mutex()
     private var taskCapabilities = emptyMap<String, TaskCapabilities>()
     private var tasksVisible = false
 
     init {
+        viewModelScope.launch {
+            platformCredentialCoordinator.states.collectLatest { states ->
+                _uiState.update { it.copy(platformCredentialStates = states) }
+            }
+        }
         refreshPlatformCredentialStates()
         refreshLogs()
         viewModelScope.launch {
@@ -898,52 +897,21 @@ class MainViewModel @Inject internal constructor(
     }
 
     fun onLoginEnvironmentOpened(platform: SourcePlatform) {
-        refreshPlatformCredentialStates()
-        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_ENVIRONMENT_OPENED", JSONObject().apply {
-            put("platform", platform.wireValue)
-            put(
-                "credential_detected",
-                _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
-            )
-            put("credential_state", _uiState.value.platformCredentialStates[platform]?.name.orEmpty())
-        })
+        platformCredentialCoordinator.onEnvironmentOpened(viewModelScope, platform)
         refreshLogs()
     }
 
     fun onLoginEnvironmentClosed(platform: SourcePlatform) {
-        CookieManager.getInstance().flush()
-        refreshPlatformCredentialStates(forceXiaohongshuValidation = platform == SourcePlatform.XIAOHONGSHU)
-        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_ENVIRONMENT_CLOSED", JSONObject().apply {
-            put("platform", platform.wireValue)
-            put(
-                "credential_detected",
-                _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
-            )
-            put("credential_state", _uiState.value.platformCredentialStates[platform]?.name.orEmpty())
-        })
+        platformCredentialCoordinator.onEnvironmentClosed(viewModelScope, platform)
         refreshLogs()
     }
 
     fun onLoginPageFinished(platform: SourcePlatform, url: String) {
-        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_PAGE_FINISHED", JSONObject().apply {
-            put("platform", platform.wireValue)
-            put("host", runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault(""))
-            put(
-                "credential_detected",
-                _uiState.value.platformCredentialStates[platform] == PlatformCredentialState.DETECTED,
-            )
-            put("credential_state", _uiState.value.platformCredentialStates[platform]?.name.orEmpty())
-        })
+        platformCredentialCoordinator.onPageFinished(platform, url)
     }
 
     fun onLoginAssistResult(platform: SourcePlatform, url: String, result: String) {
-        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_ASSIST_RESULT", JSONObject().apply {
-            put("platform", platform.wireValue)
-            put("host", runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault(""))
-            put("path", runCatching { Uri.parse(url).path.orEmpty() }.getOrDefault(""))
-            put("result", Redactor.sanitize(result))
-            put("desktop_mode", shouldUseDesktopLoginMode(platform))
-        })
+        platformCredentialCoordinator.onAssistResult(platform, url, result)
     }
 
     fun onLoginPageError(
@@ -952,12 +920,7 @@ class MainViewModel @Inject internal constructor(
         errorCode: Int,
         description: String,
     ) {
-        logger.event("app-login", "LOGIN_WEBVIEW", "LOGIN_PAGE_ERROR", JSONObject().apply {
-            put("platform", platform.wireValue)
-            put("host", runCatching { Uri.parse(url).host.orEmpty() }.getOrDefault(""))
-            put("error_code", errorCode)
-            put("description", Redactor.sanitize(description))
-        })
+        platformCredentialCoordinator.onPageError(platform, url, errorCode, description)
         refreshLogs()
     }
 
@@ -987,76 +950,12 @@ class MainViewModel @Inject internal constructor(
     }
 
     private fun refreshPlatformCredentialStates(forceXiaohongshuValidation: Boolean = false) {
-        val cookieManager = CookieManager.getInstance()
-        if (forceXiaohongshuValidation) xiaohongshuCredentialCache.clear()
-        val cookies = SourcePlatform.entries.associateWith { platform ->
-            cookieManager.getCookie(platform.homeUrl).orEmpty()
-        }
-        val localStates = SourcePlatform.entries.associateWith { platform ->
-            detectPlatformCredential(platform, cookies.getValue(platform))
-        }.toMutableMap()
-        if (localStates[SourcePlatform.XIAOHONGSHU] == PlatformCredentialState.DETECTED) {
-            localStates[SourcePlatform.XIAOHONGSHU] = if (forceXiaohongshuValidation) {
-                PlatformCredentialState.CHECKING
-            } else {
-                xiaohongshuCredentialCache.reusableState(
-                    cookies.getValue(SourcePlatform.XIAOHONGSHU),
-                    System.currentTimeMillis(),
-                ) ?: PlatformCredentialState.CHECKING
-            }
-        } else {
-            xiaohongshuCredentialCache.clear()
-        }
-        bilibiliCredentialJob?.cancel()
-        val bilibiliCookie = cookies.getValue(SourcePlatform.BILIBILI)
-        val checkBilibili = localStates[SourcePlatform.BILIBILI] == PlatformCredentialState.DETECTED
-        if (checkBilibili) localStates[SourcePlatform.BILIBILI] = PlatformCredentialState.CHECKING
-        _uiState.update { it.copy(platformCredentialStates = localStates.toMap()) }
-        if (checkBilibili) {
-            bilibiliCredentialJob = viewModelScope.launch {
-                val validated = withContext(Dispatchers.IO) { bilibiliParser.credentialState(bilibiliCookie) }
-                if (CookieManager.getInstance().getCookie(SourcePlatform.BILIBILI.homeUrl).orEmpty() == bilibiliCookie) {
-                    _uiState.update { current -> current.copy(platformCredentialStates =
-                        current.platformCredentialStates + (SourcePlatform.BILIBILI to validated)) }
-                }
-            }
-        }
+        platformCredentialCoordinator.refresh(viewModelScope, forceXiaohongshuValidation)
     }
 
     fun onXiaohongshuCredentialProbe(snapshot: WebPageSnapshot?) {
-        if (_uiState.value.platformCredentialStates[SourcePlatform.XIAOHONGSHU] !=
-            PlatformCredentialState.CHECKING
-        ) {
-            return
-        }
-        val state = snapshot?.initialData
-            ?.let(::classifyXiaohongshuCredentialSnapshot)
-            ?: PlatformCredentialState.UNVERIFIED
-        val cookieHeader = CookieManager.getInstance()
-            .getCookie(SourcePlatform.XIAOHONGSHU.homeUrl)
-            .orEmpty()
-        if (cookieHeader.isNotBlank()) {
-            xiaohongshuCredentialCache.update(cookieHeader, state, System.currentTimeMillis())
-        } else {
-            xiaohongshuCredentialCache.clear()
-        }
-        _uiState.update { current ->
-            current.copy(
-                platformCredentialStates = current.platformCredentialStates.toMutableMap().apply {
-                    put(SourcePlatform.XIAOHONGSHU, state)
-                },
-            )
-        }
-        logger.event("app-login", "LOGIN_STATUS", "CREDENTIAL_VALIDATED", JSONObject().apply {
-            put("platform", SourcePlatform.XIAOHONGSHU.wireValue)
-            put("state", state.name)
-            put("source", "webview")
-            put("final_path", runCatching {
-                Uri.parse(snapshot?.finalUrl).path.orEmpty()
-            }.getOrDefault(""))
-        })
+        platformCredentialCoordinator.onXiaohongshuProbe(snapshot)
     }
-
     fun refreshLogs() {
         viewModelScope.launch(Dispatchers.IO) {
             val text = logger.readRecent()
@@ -1158,6 +1057,7 @@ class MainViewModel @Inject internal constructor(
 
     override fun onCleared() {
         updateRepository.cancelDownload()
+        platformCredentialCoordinator.cancel()
         taskInteractionCoordinator.stopAndRelease("VIEW_MODEL_CLEARED")
         super.onCleared()
     }
