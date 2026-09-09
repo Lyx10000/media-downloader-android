@@ -3,7 +3,6 @@ package com.local.multiplatformdownloader.feature.home
 
 import com.local.multiplatformdownloader.core.database.DownloadTaskRepository
 import com.local.multiplatformdownloader.feature.download.DownloadScheduler
-import com.local.multiplatformdownloader.core.download.mediaMimeType
 import com.local.multiplatformdownloader.core.download.TrackDownloadProgressRegistry
 import com.local.multiplatformdownloader.core.download.AdaptiveDownloadController
 import com.local.multiplatformdownloader.core.logging.DiagnosticExportResult
@@ -35,26 +34,18 @@ import com.local.multiplatformdownloader.feature.creator.creatorWorkFolder
 import com.local.multiplatformdownloader.feature.creator.creatorWorkKey
 import com.local.multiplatformdownloader.feature.creator.taskCreatorKey
 import com.local.multiplatformdownloader.feature.document.DocumentReaderData
-import com.local.multiplatformdownloader.feature.document.resolveDocumentAssetOutputs
-import com.local.multiplatformdownloader.feature.preview.MediaPreviewCoordinator
-import com.local.multiplatformdownloader.feature.preview.MediaPreviewState
+import com.local.multiplatformdownloader.feature.document.TaskContentCoordinator
 import com.local.multiplatformdownloader.core.settings.SettingsRepository
 import com.local.multiplatformdownloader.feature.tasks.ManagedFileItem
 import com.local.multiplatformdownloader.feature.tasks.ManagedFileOperationResult
 import com.local.multiplatformdownloader.feature.tasks.ManagedTransferMode
-import com.local.multiplatformdownloader.feature.tasks.ShareCoordinator
 import com.local.multiplatformdownloader.feature.tasks.ShareableFile
 import com.local.multiplatformdownloader.feature.tasks.TaskDeleteResult
 import com.local.multiplatformdownloader.feature.tasks.TaskDeletionCoordinator
-import com.local.multiplatformdownloader.feature.tasks.TaskFileOperationCoordinator
 import com.local.multiplatformdownloader.feature.tasks.TaskFileStateRefresher
-import com.local.multiplatformdownloader.feature.tasks.TaskFolderNavigator
+import com.local.multiplatformdownloader.feature.tasks.TaskCommandCoordinator
+import com.local.multiplatformdownloader.feature.tasks.TaskInteractionCoordinator
 import com.local.multiplatformdownloader.feature.tasks.TaskPreviewMedia
-import com.local.multiplatformdownloader.feature.tasks.TaskPreviewResolver
-import com.local.multiplatformdownloader.feature.tasks.TaskRedownloadCoordinator
-import com.local.multiplatformdownloader.feature.tasks.TaskRedownloadResult
-import com.local.multiplatformdownloader.feature.tasks.batchRedownloadSummary
-import com.local.multiplatformdownloader.feature.tasks.isTaskRedownloadEligible
 import com.local.multiplatformdownloader.feature.tasks.isTaskQueueVisible
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionArchive
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionArchiveCoordinator
@@ -75,9 +66,7 @@ import com.local.multiplatformdownloader.platform.zhihu.ZhihuSourceResolver
 import com.local.multiplatformdownloader.R
 
 import android.app.Application
-import android.content.ClipData
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -116,71 +105,6 @@ sealed interface ParseUiState {
     data class Ready(val result: ParseResult) : ParseUiState
     data class Error(val code: String, val message: String) : ParseUiState
 }
-
-enum class CookieReadySource(val wireValue: String) {
-    PAGE_READY("page_ready"),
-    PAGE_ERROR("page_error"),
-    TIMEOUT("timeout"),
-}
-
-internal enum class ParserCredentialMode(val wireValue: String) {
-    ANONYMOUS("anonymous"),
-    STORED_COOKIE("stored_cookie"),
-}
-
-internal fun initialParserCredentialMode(
-    platform: SourcePlatform,
-    hasStoredCookie: Boolean,
-): ParserCredentialMode? = when {
-    platform in setOf(SourcePlatform.XIAOHONGSHU, SourcePlatform.X) ->
-        ParserCredentialMode.ANONYMOUS
-    hasStoredCookie -> ParserCredentialMode.STORED_COOKIE
-    platform.anonymousFirst -> ParserCredentialMode.ANONYMOUS
-    else -> null
-}
-
-internal fun nextParserCredentialMode(
-    platform: SourcePlatform,
-    errorCode: String,
-    currentMode: ParserCredentialMode,
-    hasStoredCookie: Boolean,
-    attemptedModes: Set<ParserCredentialMode>,
-): ParserCredentialMode? {
-    if (platform !in setOf(SourcePlatform.XIAOHONGSHU, SourcePlatform.X, SourcePlatform.INSTAGRAM) ||
-        !isRecoverableParseError(platform, errorCode)
-    ) {
-        return null
-    }
-    val candidate = when (currentMode) {
-        ParserCredentialMode.ANONYMOUS -> ParserCredentialMode.STORED_COOKIE
-            .takeIf { hasStoredCookie }
-        ParserCredentialMode.STORED_COOKIE -> ParserCredentialMode.ANONYMOUS
-    }
-    return candidate?.takeUnless(attemptedModes::contains)
-}
-
-internal fun shouldRefreshCookieEnvironment(
-    errorCode: String,
-    refreshAttempted: Boolean,
-    platform: SourcePlatform = SourcePlatform.DOUYIN,
-    supportsTargetPageSnapshot: Boolean = false,
-): Boolean {
-    if (refreshAttempted || !isRecoverableParseError(platform, errorCode)) {
-        return false
-    }
-    return platform != SourcePlatform.BILIBILI &&
-        (platform != SourcePlatform.ZHIHU || supportsTargetPageSnapshot)
-}
-
-private fun isRecoverableParseError(platform: SourcePlatform, errorCode: String): Boolean =
-    errorCode in COMMON_RECOVERABLE_PARSE_ERRORS ||
-        (platform == SourcePlatform.XIAOHONGSHU && errorCode == "URL_RESOLVE_FAILED")
-
-private val COMMON_RECOVERABLE_PARSE_ERRORS = setOf(
-    "AUTH_OR_RISK",
-    "DETAIL_EMPTY",
-    "LOGIN_REQUIRED",
-)
 
 private const val MAX_MARKDOWN_PREVIEW_CHARS = 2_000_000
 
@@ -221,14 +145,11 @@ class MainViewModel @Inject internal constructor(
     private val inspector: StorageInspector,
     private val deletionCoordinator: TaskDeletionCoordinator,
     private val settingsRepository: SettingsRepository,
-    private val redownloadCoordinator: TaskRedownloadCoordinator,
+    private val taskCommandCoordinator: TaskCommandCoordinator,
     private val scheduler: DownloadScheduler,
     private val fileStateRefresher: TaskFileStateRefresher,
-    private val shareCoordinator: ShareCoordinator,
-    private val mediaPreviewCoordinator: MediaPreviewCoordinator,
-    private val taskPreviewResolver: TaskPreviewResolver,
-    private val taskFolderNavigator: TaskFolderNavigator,
-    private val taskFileOperationCoordinator: TaskFileOperationCoordinator,
+    private val taskInteractionCoordinator: TaskInteractionCoordinator,
+    private val taskContentCoordinator: TaskContentCoordinator,
     private val updateRepository: UpdateRepository,
     private val creatorRepository: CreatorLibraryRepository,
     private val zhihuQuestionArchiveCoordinator: ZhihuQuestionArchiveCoordinator,
@@ -239,18 +160,15 @@ class MainViewModel @Inject internal constructor(
     private val _uiState = MutableStateFlow(MainUiState())
     private var bilibiliCredentialJob: Job? = null
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
-    private val _expandedTaskId = MutableStateFlow<String?>(null)
-    internal val expandedTaskId: StateFlow<String?> = _expandedTaskId.asStateFlow()
-    internal val mediaPreviewState: StateFlow<MediaPreviewState> = mediaPreviewCoordinator.state
-    private val _fullscreenTaskId = MutableStateFlow<String?>(null)
-    internal val fullscreenTaskId: StateFlow<String?> = _fullscreenTaskId.asStateFlow()
+    internal val expandedTaskId = taskInteractionCoordinator.expandedTaskId
+    internal val mediaPreviewState = taskInteractionCoordinator.mediaPreviewState
+    internal val fullscreenTaskId = taskInteractionCoordinator.fullscreenTaskId
     internal val trackDownloadProgress = trackDownloadProgressRegistry.state
     internal val adaptiveDownloadState = adaptiveDownloadController.state
     private val _authorTaskPeakBytesPerSecond = MutableStateFlow<Map<String, Long>>(emptyMap())
     internal val authorTaskPeakBytesPerSecond: StateFlow<Map<String, Long>> =
         _authorTaskPeakBytesPerSecond.asStateFlow()
-    private val _fileOperationTaskId = MutableStateFlow<String?>(null)
-    internal val fileOperationTaskId: StateFlow<String?> = _fileOperationTaskId.asStateFlow()
+    internal val fileOperationTaskId = taskInteractionCoordinator.fileOperationTaskId
     private val diagnosticExportChannel = Channel<DiagnosticExportResult>(Channel.BUFFERED)
     internal val diagnosticExports = diagnosticExportChannel.receiveAsFlow()
     private val updateLaunchChannel = Channel<UpdateLaunchRequest>(Channel.BUFFERED)
@@ -288,14 +206,7 @@ class MainViewModel @Inject internal constructor(
         get() = _uiState.value.customTreeUri
         private set(value) = _uiState.update { it.copy(customTreeUri = value) }
 
-    private var sessionId = ""
-    private var sessionPlatform = SourcePlatform.DOUYIN
-    private var sessionSourceUrl = ""
-    private var sessionSupportsPageSnapshot = false
-    private var sessionStoredCookieHeader = ""
-    private val sessionCredentialAttempts = mutableSetOf<ParserCredentialMode>()
-    private var parsingStarted = false
-    private var environmentRefreshAttempted = false
+    private val parseSession = ParseSessionController()
     private val xiaohongshuCredentialCache = XiaohongshuCredentialValidationCache()
     private val refreshMutex = Mutex()
     private var taskCapabilities = emptyMap<String, TaskCapabilities>()
@@ -343,12 +254,7 @@ class MainViewModel @Inject internal constructor(
                 tasks = records.filterNot(TaskRecord::creatorChild)
                 _uiState.update { state -> state.copy(allTasks = records) }
                 updateAuthorTaskPeaks(adaptiveDownloadController.state.value.taskBytesPerSecond)
-                val expanded = _expandedTaskId.value
-                if (expanded != null && records.none { it.id == expanded }) {
-                    mediaPreviewCoordinator.stopIfTask(expanded, "TASK_REMOVED")
-                    if (_fullscreenTaskId.value == expanded) _fullscreenTaskId.value = null
-                    _expandedTaskId.value = null
-                }
+                taskInteractionCoordinator.reconcileTasks(records)
                 refreshTaskMetadata(records)
             }
         }
@@ -387,9 +293,7 @@ class MainViewModel @Inject internal constructor(
             message = "没有找到抖音、小红书、知乎、X、Instagram 或 B站链接"
             return
         }
-        sessionPlatform = source.platform
-        sessionSourceUrl = source.url
-        sessionSupportsPageSnapshot = when (source.platform) {
+        val supportsPageSnapshot = when (source.platform) {
             SourcePlatform.XIAOHONGSHU -> true
             SourcePlatform.ZHIHU -> runCatching {
                 ZhihuSourceResolver.resolve(source.url).type != ZhihuContentType.VIDEO
@@ -397,21 +301,23 @@ class MainViewModel @Inject internal constructor(
             SourcePlatform.DOUYIN, SourcePlatform.BILIBILI -> false
             SourcePlatform.X, SourcePlatform.INSTAGRAM -> true
         }
-        sessionId = UUID.randomUUID().toString()
-        sessionCredentialAttempts.clear()
-        parsingStarted = false
-        environmentRefreshAttempted = false
-        logger.event(sessionId, "INPUT", "LINK_ACCEPTED", JSONObject().apply {
-            put("host", Uri.parse(source.url).host)
-            put("platform", source.platform.wireValue)
-        })
         val cookieHeader = CookieManager.getInstance()
             .getCookie(source.platform.homeUrl)
             .orEmpty()
-        sessionStoredCookieHeader = cookieHeader
+        parseSession.begin(
+            id = UUID.randomUUID().toString(),
+            platform = source.platform,
+            sourceUrl = source.url,
+            supportsPageSnapshot = supportsPageSnapshot,
+            storedCookieHeader = cookieHeader,
+        )
+        logger.event(parseSession.id, "INPUT", "LINK_ACCEPTED", JSONObject().apply {
+            put("host", Uri.parse(source.url).host)
+            put("platform", source.platform.wireValue)
+        })
         when (val mode = initialParserCredentialMode(source.platform, cookieHeader.isNotBlank())) {
             ParserCredentialMode.ANONYMOUS -> {
-                logger.event(sessionId, "COOKIE", "ANONYMOUS_PARSE_STARTED", JSONObject().apply {
+                logger.event(parseSession.id, "COOKIE", "ANONYMOUS_PARSE_STARTED", JSONObject().apply {
                     put("present", false)
                     put("stored_cookie_present", cookieHeader.isNotBlank())
                 })
@@ -419,7 +325,7 @@ class MainViewModel @Inject internal constructor(
             }
             ParserCredentialMode.STORED_COOKIE -> {
                 logger.event(
-                    sessionId,
+                    parseSession.id,
                     "COOKIE",
                     "COOKIE_REUSED",
                     JSONObject().put("present", true),
@@ -435,9 +341,9 @@ class MainViewModel @Inject internal constructor(
         source: CookieReadySource,
         pageSnapshot: WebPageSnapshot?,
     ) {
-        if (parsingStarted) return
-        sessionStoredCookieHeader = cookieHeader
-        logger.event(sessionId, "COOKIE", "COOKIE_READY", JSONObject().apply {
+        if (parseSession.parsingStarted) return
+        parseSession.storedCookieHeader = cookieHeader
+        logger.event(parseSession.id, "COOKIE", "COOKIE_READY", JSONObject().apply {
             put("present", cookieHeader.isNotBlank())
             put("source", source.wireValue)
             put("page_snapshot", pageSnapshot != null)
@@ -450,20 +356,13 @@ class MainViewModel @Inject internal constructor(
     }
 
     private fun startParse(cookieHeader: String, pageSnapshot: WebPageSnapshot? = null) {
-        if (parsingStarted) return
-        val credentialMode = if (cookieHeader.isBlank()) {
-            ParserCredentialMode.ANONYMOUS
-        } else {
-            ParserCredentialMode.STORED_COOKIE
-        }
-        sessionCredentialAttempts += credentialMode
-        parsingStarted = true
+        val credentialMode = parseSession.tryStartParsing(cookieHeader) ?: return
         parseState = ParseUiState.Parsing
         viewModelScope.launch {
             val result = parser.parse(inputText, cookieHeader, pageSnapshot)
             result.parserAttempts.forEach { attempt ->
                 logger.event(
-                    sessionId,
+                    parseSession.id,
                     "PARSE",
                     if (attempt.selected) "PARSE_STRATEGY_SELECTED" else "PARSE_STRATEGY_FAILED",
                     JSONObject().apply {
@@ -474,34 +373,34 @@ class MainViewModel @Inject internal constructor(
                 )
             }
             if (
-                !result.ok && sessionPlatform == SourcePlatform.XIAOHONGSHU &&
+                !result.ok && parseSession.platform == SourcePlatform.XIAOHONGSHU &&
                 result.canonicalUrl.isNotBlank() &&
                 XiaohongshuMediaParser.noteIdFromUrl(result.canonicalUrl).isNotBlank()
             ) {
-                sessionSourceUrl = result.canonicalUrl
-                logger.event(sessionId, "PARSE", "RESOLVED_TARGET_RETAINED", JSONObject().apply {
+                parseSession.retainSourceUrl(result.canonicalUrl)
+                logger.event(parseSession.id, "PARSE", "RESOLVED_TARGET_RETAINED", JSONObject().apply {
                     put("host", runCatching { Uri.parse(result.canonicalUrl).host }.getOrDefault(""))
                     put("path", runCatching { Uri.parse(result.canonicalUrl).path }.getOrDefault(""))
                     put("content_id", result.contentId)
                 })
             }
             val fallbackMode = nextParserCredentialMode(
-                platform = sessionPlatform,
+                platform = parseSession.platform,
                 errorCode = result.errorCode,
                 currentMode = credentialMode,
-                hasStoredCookie = sessionStoredCookieHeader.isNotBlank(),
-                attemptedModes = sessionCredentialAttempts,
+                hasStoredCookie = parseSession.storedCookieHeader.isNotBlank(),
+                attemptedModes = parseSession.credentialAttempts,
             )
             if (fallbackMode != null) {
-                logger.event(sessionId, "COOKIE", "CREDENTIAL_FALLBACK_STARTED", JSONObject().apply {
+                logger.event(parseSession.id, "COOKIE", "CREDENTIAL_FALLBACK_STARTED", JSONObject().apply {
                     put("code", result.errorCode)
                     put("from", credentialMode.wireValue)
                     put("to", fallbackMode.wireValue)
                 })
-                parsingStarted = false
+                parseSession.stopParsing()
                 startParse(
                     if (fallbackMode == ParserCredentialMode.STORED_COOKIE) {
-                        sessionStoredCookieHeader
+                        parseSession.storedCookieHeader
                     } else {
                         ""
                     },
@@ -511,12 +410,12 @@ class MainViewModel @Inject internal constructor(
             }
             if (shouldRefreshCookieEnvironment(
                     result.errorCode,
-                    environmentRefreshAttempted,
-                    sessionPlatform,
-                    sessionSupportsPageSnapshot,
+                    parseSession.environmentRefreshAttempted,
+                    parseSession.platform,
+                    parseSession.supportsPageSnapshot,
                 )
             ) {
-                logger.event(sessionId, "COOKIE", "COOKIE_REFRESH_REQUIRED", JSONObject().apply {
+                logger.event(parseSession.id, "COOKIE", "COOKIE_REFRESH_REQUIRED", JSONObject().apply {
                     put("code", result.errorCode)
                 })
                 requestEnvironmentRefresh(result.errorCode.lowercase())
@@ -525,7 +424,7 @@ class MainViewModel @Inject internal constructor(
             }
             if (result.ok) {
                 adaptiveDownloadController.reportPlatformSuccess(result.platform)
-                logger.event(sessionId, "PARSE", "DETAIL_PARSED", JSONObject().apply {
+                logger.event(parseSession.id, "PARSE", "DETAIL_PARSED", JSONObject().apply {
                     put("content_id", result.contentId)
                     put("platform", result.platform.wireValue)
                     put("kind", result.kind.wireValue)
@@ -537,7 +436,7 @@ class MainViewModel @Inject internal constructor(
                     put("author_present", result.author.isNotBlank())
                     put("author_account_id_present", result.authorAccountId.isNotBlank())
                 })
-                logger.saveResponseShape(sessionId, result.responseShape)
+                logger.saveResponseShape(parseSession.id, result.responseShape)
                 selectedVariant = preferredVariant(result)
                 _uiState.update { it.copy(selectedBilibiliCids = setOf(result.contentId.substringAfter(':', ""))) }
                 selectedAttachmentVariants = result.attachments
@@ -548,11 +447,11 @@ class MainViewModel @Inject internal constructor(
                 parseState = ParseUiState.Ready(result)
             } else {
                 adaptiveDownloadController.reportPlatformRisk(
-                    sessionPlatform,
+                    parseSession.platform,
                     result.errorCode,
                     result.parserAttempts.map { it.statusCode },
                 )
-                logger.event(sessionId, "PARSE", "PARSE_FAILED", JSONObject().apply {
+                logger.event(parseSession.id, "PARSE", "PARSE_FAILED", JSONObject().apply {
                     put("code", result.errorCode)
                     put("message", result.message)
                 })
@@ -563,14 +462,13 @@ class MainViewModel @Inject internal constructor(
     }
 
     fun retryParse() {
-        parsingStarted = false
+        parseSession.stopParsing()
         beginParse()
     }
 
     fun resetParse() {
         parseState = ParseUiState.Idle
-        parsingStarted = false
-        environmentRefreshAttempted = false
+        parseSession.reset()
     }
 
     fun selectVariant(index: Int) {
@@ -592,7 +490,7 @@ class MainViewModel @Inject internal constructor(
     }
 
     fun queueDownload(result: ParseResult, archiveAuthor: Boolean = false): String {
-        val id = sessionId.ifBlank { UUID.randomUUID().toString() }
+        val id = parseSession.id.ifBlank { UUID.randomUUID().toString() }
         val createdAt = System.currentTimeMillis()
         val storageMode = if (customTreeUri.isNullOrBlank()) StorageMode.DEFAULT else StorageMode.SAF
         val requestedCids = _uiState.value.selectedBilibiliCids.toSet()
@@ -712,7 +610,7 @@ class MainViewModel @Inject internal constructor(
         scope: ZhihuQuestionDownloadScope,
         includeComments: Boolean,
     ): String {
-        val id = sessionId.ifBlank { UUID.randomUUID().toString() }
+        val id = parseSession.id.ifBlank { UUID.randomUUID().toString() }
         viewModelScope.launch {
             try {
                 zhihuQuestionArchiveCoordinator.start(id, result, scope, includeComments)
@@ -743,76 +641,27 @@ class MainViewModel @Inject internal constructor(
 
     fun cancelTask(task: TaskRecord) {
         viewModelScope.launch {
-            runCatching { logger.event(task.id, "DOWNLOAD", "CANCEL_REQUESTED") }
-            try {
-                if (task.questionArchiveId.isNotBlank() && !task.questionChild) {
-                    zhihuQuestionArchiveCoordinator.cancel(task.id)
-                } else {
-                    scheduler.cancel(task.id)
-                    store.update(task.id, TaskStatus.CANCELLED, "已取消", task.progress)
-                }
-                runCatching { logger.event(task.id, "DOWNLOAD", "CANCEL_ACCEPTED") }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                val safeMessage = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
-                runCatching {
-                    logger.event(task.id, "DOWNLOAD", "CANCEL_FAILED", JSONObject().apply {
-                        put("type", error.javaClass.name)
-                        put("message", safeMessage)
-                    })
-                }
-                message = "取消失败：$safeMessage"
-            }
+            taskCommandCoordinator.cancel(task)?.let { message = it }
         }
     }
 
     fun pauseTask(task: TaskRecord) {
         if (task.status !in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING)) return
         viewModelScope.launch {
-            try {
-                runCatching { logger.event(task.id, "DOWNLOAD", "PAUSE_REQUESTED") }
-                store.update(task.id, TaskStatus.PAUSED, "已暂停", task.progress)
-                scheduler.cancel(task.id)
-                runCatching { logger.event(task.id, "DOWNLOAD", "PAUSE_ACCEPTED") }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                val detail = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
-                message = "暂停失败：$detail"
-            }
+            taskCommandCoordinator.pause(task)?.let { message = it }
         }
     }
 
     fun resumeTask(task: TaskRecord) {
         if (task.status != TaskStatus.PAUSED) return
         viewModelScope.launch {
-            try {
-                store.update(task.id, TaskStatus.QUEUED, "等待下载", task.progress)
-                scheduler.enqueue(task.id, ExistingWorkPolicy.REPLACE)
-                runCatching { logger.event(task.id, "DOWNLOAD", "RESUME_ACCEPTED") }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                val detail = Redactor.sanitize(error.message ?: error.javaClass.simpleName)
-                store.update(task.id, TaskStatus.PAUSED, "继续失败", task.progress, detail)
-                message = "继续下载失败：$detail"
-            }
+            taskCommandCoordinator.resume(task)?.let { message = it }
         }
     }
 
     fun retryTask(task: TaskRecord) {
-        if (task.questionArchiveId.isNotBlank() && !task.questionChild) {
-            viewModelScope.launch {
-                message = zhihuQuestionArchiveCoordinator.resume(task.id)
-                refreshTasks()
-            }
-            return
-        }
-        val cookieHeader = CookieManager.getInstance()
-            .getCookie(task.platform.homeUrl).orEmpty()
         viewModelScope.launch {
-            message = redownloadCoordinator.retry(task, cookieHeader, customTreeUri).message
+            message = taskCommandCoordinator.retry(task, customTreeUri)
             refreshTasks()
         }
     }
@@ -820,242 +669,95 @@ class MainViewModel @Inject internal constructor(
     fun continueQuestionArchive(task: TaskRecord) {
         if (task.questionArchiveId.isBlank() || task.questionChild) return
         viewModelScope.launch {
-            message = zhihuQuestionArchiveCoordinator.continueNextPage(task.id)
+            taskCommandCoordinator.continueQuestionArchive(task)?.let { message = it }
             refreshTasks()
         }
     }
 
     fun retryTasks(tasks: List<TaskRecord>) {
-        val uniqueTasks = tasks.distinctBy(TaskRecord::id)
-        if (uniqueTasks.isEmpty()) return
+        if (tasks.isEmpty()) return
         viewModelScope.launch {
-            var started = 0
-            var failed = 0
-            var skipped = 0
-            uniqueTasks.forEach { task ->
-                if (!isTaskRedownloadEligible(task)) {
-                    skipped += 1
-                    return@forEach
-                }
-                if (task.questionArchiveId.isNotBlank() && !task.questionChild) {
-                    val resumed = runCatching {
-                        zhihuQuestionArchiveCoordinator.resume(task.id)
-                    }.isSuccess
-                    if (resumed) started += 1 else failed += 1
-                    return@forEach
-                }
-                val cookieHeader = CookieManager.getInstance()
-                    .getCookie(task.platform.homeUrl).orEmpty()
-                val result = runCatching {
-                    redownloadCoordinator.retry(task, cookieHeader, customTreeUri)
-                }.getOrElse { error ->
-                    runCatching {
-                        logger.event(task.id, "REDOWNLOAD", "BATCH_REDOWNLOAD_FAILED", JSONObject().apply {
-                            put("type", error.javaClass.name)
-                            put("message", Redactor.sanitize(error.message ?: error.javaClass.simpleName))
-                        })
-                    }
-                    TaskRedownloadResult(false, "重新下载失败")
-                }
-                if (result.success) started += 1 else failed += 1
-            }
-            message = batchRedownloadSummary(started, failed, skipped)
+            taskCommandCoordinator.retryAll(tasks, customTreeUri)?.let { message = it }
             refreshTasks()
         }
     }
-
     internal fun shareTaskFiles(context: Context, taskId: String, files: List<ShareableFile>) {
         message = "正在准备分享…"
         viewModelScope.launch {
-            val result = shareCoordinator.share(context, taskId, files)
-            if (result.message.isNotBlank()) message = result.message
+            val resultMessage = taskInteractionCoordinator.share(context, taskId, files)
+            if (resultMessage.isNotBlank()) message = resultMessage
         }
     }
 
     internal fun toggleTaskPreview(taskId: String) {
-        val current = _expandedTaskId.value
-        if (current == taskId) {
-            if (_fullscreenTaskId.value == taskId) _fullscreenTaskId.value = null
-            mediaPreviewCoordinator.stopIfTask(taskId)
-            _expandedTaskId.value = null
-        } else {
-            _fullscreenTaskId.value = null
-            mediaPreviewCoordinator.stopAndRelease("PREVIEW_SWITCHED")
-            _expandedTaskId.value = taskId
-        }
+        taskInteractionCoordinator.togglePreview(taskId)
     }
 
     internal suspend fun resolveTaskPreview(
         taskId: String,
         outputs: List<TaskOutput>,
-    ): List<TaskPreviewMedia> = taskPreviewResolver.resolve(taskId, outputs)
+    ): List<TaskPreviewMedia> = taskInteractionCoordinator.resolvePreview(taskId, outputs)
 
     internal fun toggleMediaPreview(taskId: String, media: TaskPreviewMedia) {
-        if (_expandedTaskId.value != taskId) _expandedTaskId.value = taskId
-        mediaPreviewCoordinator.toggle(taskId, media)
+        taskInteractionCoordinator.toggleMedia(taskId, media)
     }
 
     internal fun seekMediaPreview(taskId: String, positionMs: Long) {
-        mediaPreviewCoordinator.seekTo(taskId, positionMs)
+        taskInteractionCoordinator.seek(taskId, positionMs)
     }
 
     internal fun toggleMediaMute(taskId: String) {
-        mediaPreviewCoordinator.toggleMute(taskId)
+        taskInteractionCoordinator.toggleMute(taskId)
     }
 
     internal fun enterFullscreen(taskId: String, media: TaskPreviewMedia) {
-        if (mediaPreviewState.value.taskId != taskId ||
-            !mediaPreviewState.value.source.samePreviewSource(media)
-        ) {
-            mediaPreviewCoordinator.toggle(taskId, media)
-        }
-        _fullscreenTaskId.value = taskId
+        taskInteractionCoordinator.enterFullscreen(taskId, media)
     }
 
     internal fun exitFullscreen() {
-        if (_fullscreenTaskId.value == null) return
-        mediaPreviewCoordinator.pause("FULLSCREEN_EXITED")
-        _fullscreenTaskId.value = null
+        taskInteractionCoordinator.exitFullscreen()
     }
 
     internal fun stopMediaPreviewIfTask(taskId: String, reason: String = "PREVIEW_DISPOSED") {
-        if (_fullscreenTaskId.value != taskId) {
-            mediaPreviewCoordinator.stopIfTask(taskId, reason)
-        }
+        taskInteractionCoordinator.stopPreviewIfTask(taskId, reason)
     }
 
     internal fun openTaskFolder(context: Context, task: TaskRecord) {
         viewModelScope.launch {
-            val spec = store.getSpec(task.id)
-            if (spec == null) {
-                message = "无法读取该任务的保存目录"
-                return@launch
-            }
-            val result = taskFolderNavigator.open(context, task.id, spec)
-            if (result.message.isNotBlank()) message = result.message
+            val resultMessage = taskInteractionCoordinator.openTaskFolder(context, task)
+            if (resultMessage.isNotBlank()) message = resultMessage
         }
     }
 
     internal fun onFileManagerOpened(taskId: String) {
-        mediaPreviewCoordinator.stopIfTask(taskId, "FILE_MANAGER_OPENED")
-        runCatching {
-            logger.event(taskId, "FILE_MANAGER", "FILE_MANAGER_OPENED")
-        }
+        taskInteractionCoordinator.onFileManagerOpened(taskId)
     }
 
     internal suspend fun describeManagedFiles(outputs: List<TaskOutput>): List<ManagedFileItem> =
-        taskFileOperationCoordinator.describe(outputs)
+        taskInteractionCoordinator.describeFiles(outputs)
 
     internal suspend fun loadDocumentReader(task: TaskRecord): DocumentReaderData? =
-        withContext(Dispatchers.IO) {
-            val document = store.getSpec(task.id)?.result?.document ?: return@withContext null
-            val availableOutputs = task.outputs.filter { inspector.outputExists(it.uri) }
-            val assetOutputs = resolveDocumentAssetOutputs(document, availableOutputs)
-            runCatching {
-                logger.event(task.id, "DOCUMENT_READER", "DOCUMENT_OPENED", JSONObject().apply {
-                    put("assets", document.assets.size)
-                    put("local_assets", assetOutputs.size)
-                    put("missing_assets", document.assets.size - assetOutputs.size)
-                })
-            }
-            DocumentReaderData(document, assetOutputs)
-        }
+        taskContentCoordinator.loadDocumentReader(task)
 
     internal suspend fun loadMarkdownOutput(taskId: String, output: TaskOutput): String? =
-        withContext(Dispatchers.IO) {
-            if (!inspector.outputExists(output.uri)) return@withContext null
-            val uri = runCatching { Uri.parse(output.uri) }.getOrNull() ?: return@withContext null
-            val input = runCatching {
-                if (uri.scheme == "file") {
-                    uri.path?.let { path -> java.io.File(path).inputStream() }
-                } else {
-                    getApplication<Application>().contentResolver.openInputStream(uri)
-                }
-            }.getOrNull() ?: return@withContext null
-            runCatching {
-                input.bufferedReader(Charsets.UTF_8).use { reader ->
-                    val text = StringBuilder()
-                    val buffer = CharArray(8_192)
-                    while (text.length < MAX_MARKDOWN_PREVIEW_CHARS) {
-                        val count = reader.read(
-                            buffer,
-                            0,
-                            minOf(buffer.size, MAX_MARKDOWN_PREVIEW_CHARS - text.length),
-                        )
-                        if (count < 0) break
-                        text.append(buffer, 0, count)
-                    }
-                    text.toString()
-                }
-            }.onFailure { error ->
-                logger.event(taskId, "DOCUMENT_READER", "MARKDOWN_READ_FAILED", JSONObject().apply {
-                    put("name", output.displayName)
-                    put("type", error.javaClass.name)
-                    put("message", Redactor.sanitize(error.message.orEmpty()))
-                })
-            }.getOrNull()
-        }
+        taskContentCoordinator.loadMarkdownOutput(taskId, output)
 
     internal fun openDocumentMedia(context: Context, taskId: String, output: TaskOutput) {
-        val uri = runCatching { Uri.parse(output.uri) }.getOrNull()
-        if (uri == null || !inspector.outputExists(output.uri)) {
-            message = "文件已被删除"
-            return
-        }
-        openOutput(context, taskId, uri, output.displayName, output.mimeType)
+        taskContentCoordinator.openDocumentMedia(context, taskId, output)?.let { message = it }
     }
 
     internal fun openManagedFile(context: Context, taskId: String, item: ManagedFileItem) {
-        if (!item.available) {
-            message = "文件已被删除"
-            return
-        }
-        openOutput(
-            context,
-            taskId,
-            item.uri,
-            item.output.displayName,
-            item.output.mimeType,
-        )
+        taskContentCoordinator.openManagedFile(context, taskId, item)?.let { message = it }
     }
-
-    private fun openOutput(
-        context: Context,
-        taskId: String,
-        uri: Uri,
-        displayName: String,
-        providerType: String,
-    ) {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(
-                uri,
-                mediaMimeType(displayName, providerType),
-            )
-            clipData = ClipData.newRawUri("下载文件", uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        runCatching { context.startActivity(intent) }
-            .onFailure { error ->
-                runCatching {
-                    logger.event(taskId, "FILE_MANAGER", "FILE_OPEN_FAILED", JSONObject().apply {
-                        put("authority", uri.authority.orEmpty())
-                        put("error", error.javaClass.name)
-                        put("message", Redactor.sanitize(error.message.orEmpty()))
-                    })
-                }
-                message = "没有可打开该文件的应用"
-            }
-    }
-
     internal fun renameManagedFile(taskId: String, outputUri: String, requestedBase: String) {
         launchFileOperation(taskId) {
-            taskFileOperationCoordinator.rename(taskId, outputUri, requestedBase)
+            taskInteractionCoordinator.rename(taskId, outputUri, requestedBase)
         }
     }
 
     internal fun deleteManagedFiles(taskId: String, outputUris: Set<String>) {
         launchFileOperation(taskId) {
-            taskFileOperationCoordinator.delete(taskId, outputUris)
+            taskInteractionCoordinator.delete(taskId, outputUris)
         }
     }
 
@@ -1066,7 +768,7 @@ class MainViewModel @Inject internal constructor(
         mode: ManagedTransferMode,
     ) {
         launchFileOperation(taskId) {
-            taskFileOperationCoordinator.transfer(taskId, outputUris, destinationTree, mode)
+            taskInteractionCoordinator.transfer(taskId, outputUris, destinationTree, mode)
         }
     }
 
@@ -1078,12 +780,10 @@ class MainViewModel @Inject internal constructor(
         taskId: String,
         operation: suspend () -> ManagedFileOperationResult,
     ) {
-        if (_fileOperationTaskId.value != null) {
+        if (!taskInteractionCoordinator.beginFileOperation(taskId)) {
             message = "另一个文件操作正在进行"
             return
         }
-        _fileOperationTaskId.value = taskId
-        mediaPreviewCoordinator.stopIfTask(taskId, "FILE_OPERATION_REQUESTED")
         viewModelScope.launch {
             try {
                 message = operation().message
@@ -1100,17 +800,13 @@ class MainViewModel @Inject internal constructor(
                 }
                 message = "文件操作失败：$detail"
             } finally {
-                _fileOperationTaskId.value = null
+                taskInteractionCoordinator.finishFileOperation()
             }
         }
     }
 
     fun deleteTask(task: TaskRecord, deleteFiles: Boolean) {
-        if (_expandedTaskId.value == task.id) {
-            if (_fullscreenTaskId.value == task.id) _fullscreenTaskId.value = null
-            mediaPreviewCoordinator.stopIfTask(task.id, "TASK_DELETE_REQUESTED")
-            _expandedTaskId.value = null
-        }
+        taskInteractionCoordinator.closeTask(task.id, "TASK_DELETE_REQUESTED")
         viewModelScope.launch {
             val result = deleteTaskIncludingQuestionChildren(task, deleteFiles)
             message = result.message
@@ -1122,11 +818,7 @@ class MainViewModel @Inject internal constructor(
         val uniqueTasks = tasks.distinctBy(TaskRecord::id)
         if (uniqueTasks.isEmpty()) return
         uniqueTasks.forEach { task ->
-            if (_expandedTaskId.value == task.id) {
-                if (_fullscreenTaskId.value == task.id) _fullscreenTaskId.value = null
-                mediaPreviewCoordinator.stopIfTask(task.id, "BATCH_DELETE_REQUESTED")
-                _expandedTaskId.value = null
-            }
+            taskInteractionCoordinator.closeTask(task.id, "BATCH_DELETE_REQUESTED")
         }
         viewModelScope.launch {
             val results = uniqueTasks.map { task ->
@@ -1179,15 +871,13 @@ class MainViewModel @Inject internal constructor(
         error: Throwable,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                logger.event(taskId, "DOCUMENT_READER", "IMAGE_LOAD_FAILED", JSONObject().apply {
-                    put("asset_id", assetId)
-                    put("output_name", outputName)
-                    put("source_scheme", sourceScheme)
-                    put("type", error.javaClass.name)
-                    put("message", Redactor.sanitize(error.message ?: error.javaClass.simpleName))
-                })
-            }
+            taskContentCoordinator.recordImageLoadFailed(
+                taskId,
+                assetId,
+                outputName,
+                sourceScheme,
+                error,
+            )
         }
     }
 
@@ -1272,7 +962,7 @@ class MainViewModel @Inject internal constructor(
     }
 
     fun onAppBackground() {
-        mediaPreviewCoordinator.pause("APP_BACKGROUNDED")
+        taskInteractionCoordinator.pause("APP_BACKGROUNDED")
     }
 
     fun onTasksVisible() {
@@ -1282,8 +972,7 @@ class MainViewModel @Inject internal constructor(
 
     fun onTasksHidden() {
         tasksVisible = false
-        _fullscreenTaskId.value = null
-        mediaPreviewCoordinator.stopAndRelease()
+        taskInteractionCoordinator.stopAndRelease()
     }
 
     fun refreshTasks() {
@@ -1469,7 +1158,7 @@ class MainViewModel @Inject internal constructor(
 
     override fun onCleared() {
         updateRepository.cancelDownload()
-        mediaPreviewCoordinator.stopAndRelease("VIEW_MODEL_CLEARED")
+        taskInteractionCoordinator.stopAndRelease("VIEW_MODEL_CLEARED")
         super.onCleared()
     }
 
@@ -1486,13 +1175,16 @@ class MainViewModel @Inject internal constructor(
     }
 
     private fun requestEnvironmentRefresh(reason: String) {
-        environmentRefreshAttempted = true
-        parsingStarted = false
-        logger.event(sessionId, "COOKIE", "COOKIE_WARMUP_STARTED", JSONObject().put("reason", reason))
+        parseSession.markEnvironmentRefreshAttempted()
+        logger.event(parseSession.id, "COOKIE", "COOKIE_WARMUP_STARTED", JSONObject().put("reason", reason))
         parseState = ParseUiState.LoadingWeb(
-            platform = sessionPlatform,
-            url = if (sessionSupportsPageSnapshot) sessionSourceUrl else sessionPlatform.homeUrl,
-            capturePage = sessionSupportsPageSnapshot,
+            platform = parseSession.platform,
+            url = if (parseSession.supportsPageSnapshot) {
+                parseSession.sourceUrl
+            } else {
+                parseSession.platform.homeUrl
+            },
+            capturePage = parseSession.supportsPageSnapshot,
         )
     }
 
@@ -1540,6 +1232,3 @@ internal fun accumulateAuthorTaskPeaks(
     .mapValues { (authorKey, activeTasks) ->
         maxOf(previous[authorKey] ?: 0L, activeTasks.sumOf { taskSpeeds[it.id] ?: 0L })
     }
-
-private fun TaskPreviewMedia?.samePreviewSource(other: TaskPreviewMedia): Boolean =
-    this?.uri == other.uri
