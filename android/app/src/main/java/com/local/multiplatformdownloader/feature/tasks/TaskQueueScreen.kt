@@ -13,6 +13,7 @@ import com.local.multiplatformdownloader.feature.home.MainUiState
 import com.local.multiplatformdownloader.feature.home.MainViewModel
 import com.local.multiplatformdownloader.platform.common.PlatformBrandBadge
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -626,6 +627,7 @@ internal fun LocalContentDetailScreen(
     onOpenQuestionArchive: (String) -> Unit,
     onBack: () -> Unit,
 ) {
+    BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = {

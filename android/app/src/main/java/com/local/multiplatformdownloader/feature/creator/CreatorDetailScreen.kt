@@ -212,6 +212,15 @@ internal fun CreatorDetailScreen(
     val publicListState = rememberLazyListState(publicPosition.index, publicPosition.offset)
     val recordListState = rememberLazyListState(recordPosition.index, recordPosition.offset)
     val listState = if (detailTab == 0) publicListState else recordListState
+    val saveCurrentListPosition = {
+        viewModel.saveDetailTab(profile.key, detailTab)
+        viewModel.saveDetailListPosition(
+            profile.key,
+            detailTab,
+            listState.firstVisibleItemIndex,
+            listState.firstVisibleItemScrollOffset,
+        )
+    }
     val preparation = state.batchPreparations[profile.key]
     val localDownloadBytes = state.taskSummaries[profile.key]?.downloadedBytes ?: 0L
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -488,17 +497,17 @@ internal fun CreatorDetailScreen(
                     },
                     onManage = work.task?.takeIf { !recordSelectionMode }?.let { task ->
                         {
-                            viewModel.saveDetailListPosition(
-                                profile.key,
-                                detailTab,
-                                listState.firstVisibleItemIndex,
-                                listState.firstVisibleItemScrollOffset,
-                            )
+                            saveCurrentListPosition()
                             onManageTask(task.id)
                         }
                     },
                     onOpen = work.task?.takeIf { detailTab == 1 && !recordSelectionMode }
-                        ?.let { task -> { onOpenLocalTask(task.id) } },
+                        ?.let { task ->
+                            {
+                                saveCurrentListPosition()
+                                onOpenLocalTask(task.id)
+                            }
+                        },
                     onRetry = work.task?.takeIf {
                         !recordSelectionMode &&
                             it.status in setOf(TaskStatus.FAILED, TaskStatus.CANCELLED)
@@ -522,7 +531,17 @@ internal fun CreatorDetailScreen(
     }
 
     openBilibiliGroup?.let { bv ->
-        BilibiliTaskGroupDialog(bv, profile.key, mainViewModel, requestAllFilesAccess, onManageTask, { openBilibiliGroup = null })
+        BilibiliTaskGroupDialog(
+            bv,
+            profile.key,
+            mainViewModel,
+            requestAllFilesAccess,
+            { taskId ->
+                saveCurrentListPosition()
+                onManageTask(taskId)
+            },
+            { openBilibiliGroup = null },
+        )
     }
     if (showBatchSettings) {
         BatchSettingsDialog(
