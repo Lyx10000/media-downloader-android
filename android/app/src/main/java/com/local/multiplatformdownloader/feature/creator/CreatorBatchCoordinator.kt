@@ -4,6 +4,7 @@ package com.local.multiplatformdownloader.feature.creator
 import com.local.multiplatformdownloader.core.logging.DiagnosticLogger
 import com.local.multiplatformdownloader.core.logging.Redactor
 import com.local.multiplatformdownloader.core.download.AdaptiveDownloadController
+import com.local.multiplatformdownloader.core.download.WorkloadAdmissionGate
 import com.local.multiplatformdownloader.core.model.FileState
 import com.local.multiplatformdownloader.core.model.ParseResult
 import com.local.multiplatformdownloader.core.model.ParserAttempt
@@ -63,6 +64,7 @@ class CreatorBatchCoordinator @Inject internal constructor(
     private val logger: DiagnosticLogger,
     private val workManager: WorkManager,
     private val adaptiveDownloadController: AdaptiveDownloadController,
+    private val workloadAdmissionGate: WorkloadAdmissionGate,
 ) {
     suspend fun start(
         profile: CreatorProfile,
@@ -117,6 +119,15 @@ class CreatorBatchCoordinator @Inject internal constructor(
         cookieHeader: String,
         requestedWorkKey: String = "",
         bypassRiskCooldown: Boolean = false,
+    ): CreatorBatchStartResult = workloadAdmissionGate.withBatchPreparationPermit {
+        executeAdmitted(batchId, cookieHeader, requestedWorkKey, bypassRiskCooldown)
+    }
+
+    private suspend fun executeAdmitted(
+        batchId: String,
+        cookieHeader: String,
+        requestedWorkKey: String,
+        bypassRiskCooldown: Boolean,
     ): CreatorBatchStartResult {
         val batch = batches.getBatch(batchId)
             ?: return CreatorBatchStartResult(batchId, 0, 1, 0)

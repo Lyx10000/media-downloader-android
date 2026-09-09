@@ -1,6 +1,7 @@
 package com.local.multiplatformdownloader.feature.download
 
 import com.local.multiplatformdownloader.core.download.shouldShowDownloadProgress
+import com.local.multiplatformdownloader.core.download.WorkloadAdmissionGate
 
 import com.local.multiplatformdownloader.app.MainActivity
 import com.local.multiplatformdownloader.core.database.DownloadTaskRepository
@@ -44,8 +45,9 @@ class DownloadWorker internal constructor(
     private val settingsRepository: SettingsRepository,
     private val managedFileGateway: ManagedFileGateway,
     private val taskFolderPruner: TaskFolderPruner,
+    private val workloadAdmissionGate: WorkloadAdmissionGate,
 ) : CoroutineWorker(appContext, params) {
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID)
         if (taskId.isNullOrBlank()) {
             safeEvent(
@@ -54,8 +56,16 @@ class DownloadWorker internal constructor(
                 "WORKER_INPUT_MISSING",
                 JSONObject().put("work_id", id.toString()),
             )
-            return@withContext Result.failure()
+            return Result.failure()
         }
+        safeEvent(taskId, "STARTUP", "WORKER_ADMISSION_WAITING", workerDetails())
+        return workloadAdmissionGate.withDownloadWorkerPermit {
+            safeEvent(taskId, "STARTUP", "WORKER_ADMITTED", workerDetails())
+            runAdmittedTask(taskId)
+        }
+    }
+
+    private suspend fun runAdmittedTask(taskId: String): Result = withContext(Dispatchers.IO) {
         var taskFolder: File? = null
         var originalSpec: TaskSpec? = null
         var executionSpec: TaskSpec? = null

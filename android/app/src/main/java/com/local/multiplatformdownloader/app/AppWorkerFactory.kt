@@ -1,6 +1,7 @@
 package com.local.multiplatformdownloader.app
 
 import com.local.multiplatformdownloader.core.database.DownloadTaskRepository
+import com.local.multiplatformdownloader.core.download.WorkloadAdmissionGate
 import com.local.multiplatformdownloader.feature.download.DownloadExecutor
 import com.local.multiplatformdownloader.feature.download.DownloadWorker
 import com.local.multiplatformdownloader.core.logging.DiagnosticLogger
@@ -30,6 +31,7 @@ class AppWorkerFactory @Inject internal constructor(
     private val settingsRepository: SettingsRepository,
     private val managedFileGateway: ManagedFileGateway,
     private val taskFolderPruner: TaskFolderPruner,
+    private val workloadAdmissionGate: WorkloadAdmissionGate,
     // Keep this lazy: eager creation asks for WorkManager while the Application's
     // WorkerFactory is still being injected, which causes an initialization cycle.
     private val creatorBatchCoordinator: Provider<CreatorBatchCoordinator>,
@@ -90,6 +92,7 @@ class AppWorkerFactory @Inject internal constructor(
             settingsRepository,
             managedFileGateway,
             taskFolderPruner,
+            workloadAdmissionGate,
         )
     }
 }

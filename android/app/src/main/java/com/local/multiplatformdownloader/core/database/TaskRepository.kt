@@ -11,6 +11,7 @@ import com.local.multiplatformdownloader.core.model.TaskRecord
 import com.local.multiplatformdownloader.core.model.TaskSpec
 import com.local.multiplatformdownloader.core.model.TaskStatus
 
+import java.util.LinkedHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -50,7 +51,11 @@ class RoomDownloadTaskRepository @Inject constructor(
     private val dao: TaskDao,
 ) : DownloadTaskRepository {
     private val payloadMutex = Mutex()
-    private val payloadCache = mutableMapOf<String, TaskRecordPayload>()
+    private val payloadCache = object : LinkedHashMap<String, TaskRecordPayload>(128, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, TaskRecordPayload>?,
+        ): Boolean = size > MAX_CACHED_TASK_PAYLOADS
+    }
 
     override suspend fun insert(spec: TaskSpec) {
         val specJson = spec.toJson()
@@ -195,6 +200,12 @@ class RoomDownloadTaskRepository @Inject constructor(
 
     private suspend fun cachePayload(taskId: String, payload: TaskRecordPayload) {
         payloadMutex.withLock { payloadCache[taskId] = payload }
+    }
+
+    private companion object {
+        // TaskRecordPayload is a compact UI projection, but an unbounded process-lifetime
+        // cache can still retain years of output URI lists on devices with a 256 MiB heap.
+        const val MAX_CACHED_TASK_PAYLOADS = 2_048
     }
 
 }
