@@ -5,6 +5,7 @@ import com.local.multiplatformdownloader.core.download.AdaptiveDownloadControlle
 import com.local.multiplatformdownloader.core.download.MediaTrackProcessor
 import com.local.multiplatformdownloader.core.download.MotionPhotoWriter
 import com.local.multiplatformdownloader.core.download.VideoAudioSource
+import com.local.multiplatformdownloader.core.download.calculateSampledTransferSpeed
 import com.local.multiplatformdownloader.core.download.chooseVideoAudioSource
 import com.local.multiplatformdownloader.core.download.downloadFileProgress
 import com.local.multiplatformdownloader.core.download.formatDownloadStatus
@@ -1000,6 +1001,7 @@ class DownloadExecutor @Inject internal constructor(
             repeat(3) { attempt ->
                 currentCoroutineContext().ensureActive()
                 try {
+                    val requestStartedAt = System.nanoTime()
                     val connection = requestProfile.open(address, 20_000, 120_000)
                     try {
                         val status = connection.responseCode
@@ -1019,12 +1021,12 @@ class DownloadExecutor @Inject internal constructor(
                                     val elapsed = now - lastReportedAt
                                     if (downloaded == lastReportedBytes) return
                                     if (!force && elapsed < PROGRESS_REPORT_INTERVAL_NANOS) return
-                                    val bytesPerSecond = if (elapsed > 0L) {
-                                        ((downloaded - lastReportedBytes).toDouble() * 1_000_000_000L /
-                                            elapsed).toLong().coerceAtLeast(0L)
-                                    } else {
-                                        0L
-                                    }
+                                    val bytesPerSecond = calculateSampledTransferSpeed(
+                                        downloadedBytes = downloaded,
+                                        lastReportedBytes = lastReportedBytes,
+                                        intervalElapsedNanos = elapsed,
+                                        requestElapsedNanos = now - requestStartedAt,
+                                    )
                                     report(downloaded, total, bytesPerSecond)
                                     lastReportedBytes = downloaded
                                     lastReportedAt = now

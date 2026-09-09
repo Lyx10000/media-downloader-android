@@ -1,5 +1,6 @@
 package com.local.multiplatformdownloader
 
+import com.local.multiplatformdownloader.core.download.calculateSampledTransferSpeed
 import com.local.multiplatformdownloader.core.download.downloadFileProgress
 import com.local.multiplatformdownloader.core.download.formatDownloadStatus
 import com.local.multiplatformdownloader.core.download.formatOutputSummary
@@ -54,6 +55,30 @@ class DownloadProgressTest {
 
         assertTrue(text, text.contains("已下载 192.0 MB"))
         assertTrue(text, text.contains("2.0 MB/s"))
+    }
+
+    @Test
+    fun firstSampleUsesWholeRequestTimeInsteadOfBufferedReadBurst() {
+        val speed = calculateSampledTransferSpeed(
+            downloadedBytes = 128L * 1024,
+            lastReportedBytes = 0L,
+            intervalElapsedNanos = 500_000L,
+            requestElapsedNanos = 125_000_000L,
+        )
+
+        assertEquals(1_048_576L, speed)
+    }
+
+    @Test
+    fun laterSamplesKeepUsingTheirPeriodicInterval() {
+        val speed = calculateSampledTransferSpeed(
+            downloadedBytes = 2L * 1024 * 1024,
+            lastReportedBytes = 1L * 1024 * 1024,
+            intervalElapsedNanos = 500_000_000L,
+            requestElapsedNanos = 10_000_000_000L,
+        )
+
+        assertEquals(2L * 1024 * 1024, speed)
     }
 
     @Test

@@ -15,6 +15,24 @@ internal fun downloadFileProgress(
         .roundToInt()
 }
 
+internal fun calculateSampledTransferSpeed(
+    downloadedBytes: Long,
+    lastReportedBytes: Long,
+    intervalElapsedNanos: Long,
+    requestElapsedNanos: Long,
+): Long {
+    val transferredBytes = (downloadedBytes - lastReportedBytes).coerceAtLeast(0L)
+    if (transferredBytes == 0L) return 0L
+    // The first read can drain an already-filled HTTP/OS buffer in microseconds. Include
+    // connection setup and time-to-first-byte so tiny files report network throughput,
+    // while subsequent samples retain responsive interval-based speed reporting.
+    val elapsedNanos = if (lastReportedBytes == 0L) requestElapsedNanos else intervalElapsedNanos
+    if (elapsedNanos <= 0L) return 0L
+    return (transferredBytes.toDouble() * 1_000_000_000L / elapsedNanos)
+        .toLong()
+        .coerceAtLeast(0L)
+}
+
 internal fun shouldShowDownloadProgress(stage: String): Boolean =
     stage.startsWith("正在下载") && DETERMINATE_PERCENT.containsMatchIn(stage)
 
