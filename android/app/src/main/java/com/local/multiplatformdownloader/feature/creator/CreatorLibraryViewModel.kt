@@ -318,6 +318,12 @@ class CreatorLibraryViewModel @Inject internal constructor(
         _state.update { it.copy(isStartingBatch = true) }
         viewModelScope.launch {
             try {
+                val riskUntil = creatorBatchCoordinator.platformRiskUntil(profile.platform)
+                val now = System.currentTimeMillis()
+                if (riskUntil > now) {
+                    notify(creatorBatchCoordinator.resume(profile.key))
+                    return@launch
+                }
                 val result = creatorBatchCoordinator.start(profile, eligible, _state.value.batchSettings)
                 notify(result.message)
             } catch (cancelled: CancellationException) {
@@ -342,6 +348,36 @@ class CreatorLibraryViewModel @Inject internal constructor(
                 notify(Redactor.sanitize(error.message ?: "删除准备记录失败"))
             } finally {
                 _state.update { it.copy(isStartingBatch = false) }
+            }
+        }
+    }
+
+    fun resumeCreatorBatch(creatorKey: String) {
+        if (_state.value.isStartingBatch) return
+        _state.update { it.copy(isStartingBatch = true) }
+        viewModelScope.launch {
+            try {
+                notify(creatorBatchCoordinator.resume(creatorKey))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                notify(Redactor.sanitize(error.message ?: "继续批次失败"))
+            } finally {
+                _state.update { it.copy(isStartingBatch = false) }
+            }
+        }
+    }
+
+    fun deleteCreatorBatch(batchId: String) {
+        if (batchId.isBlank()) return
+        viewModelScope.launch {
+            try {
+                creatorBatchCoordinator.deleteBatch(batchId)
+                notify("已删除批量任务")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                notify(Redactor.sanitize(error.message ?: "删除批量任务失败"))
             }
         }
     }

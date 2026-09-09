@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -70,6 +71,47 @@ internal fun TaskHealthStatus(
             value = state.batteryTemperatureCelsius,
             kind = TemperatureKind.BATTERY,
         )
+    }
+}
+
+@Composable
+internal fun PlatformRiskCooldownBanner(
+    state: AdaptiveDownloadState,
+    modifier: Modifier = Modifier,
+) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val active = state.platformRiskUntil
+        .filterValues { it > now }
+        .toList()
+        .sortedBy { it.second }
+    LaunchedEffect(state.platformRiskUntil) {
+        while (state.hasActiveCircuit(System.currentTimeMillis())) {
+            now = System.currentTimeMillis()
+            delay(1_000L)
+        }
+        now = System.currentTimeMillis()
+    }
+    if (active.isEmpty()) return
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            active.forEach { (platform, until) ->
+                val seconds = ((until - now + 999L) / 1_000L).coerceAtLeast(0L)
+                Text(
+                    "${platform.displayName}风控冷却 · 剩余 ${seconds / 60}:" +
+                        (seconds % 60).toString().padStart(2, '0'),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            Text("冷却期间不会发起新的解析请求", style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 

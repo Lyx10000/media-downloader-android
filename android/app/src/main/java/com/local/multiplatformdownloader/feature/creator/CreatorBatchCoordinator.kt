@@ -136,7 +136,8 @@ class CreatorBatchCoordinator @Inject internal constructor(
         val queuedEntries = batches.listWorks(batchId).filter {
             it.status in setOf(CreatorBatchWorkStatus.QUEUED, CreatorBatchWorkStatus.PAUSED)
         }
-        if (adaptiveDownloadController.isPlatformBlockedAfterLoad(profile.platform)) {
+        val riskUntil = adaptiveDownloadController.platformRiskUntilAfterLoad(profile.platform)
+        if (riskUntil > System.currentTimeMillis()) {
             queuedEntries.forEach { entry ->
                 batches.updateWork(
                     batchId,
@@ -147,9 +148,12 @@ class CreatorBatchCoordinator @Inject internal constructor(
                 )
             }
             batches.updateBatch(batchId, CreatorBatchStatus.PAUSED)
+            scheduleAutomaticResume(batchId, riskUntil)
             logger.event(batchId, "BATCH", "PLATFORM_CIRCUIT_BLOCKED_PREPARATION", JSONObject().apply {
                 put("platform", profile.platform.wireValue)
                 put("paused", queuedEntries.size)
+                put("risk_until_ms", riskUntil)
+                put("auto_resume", true)
             })
             return CreatorBatchStartResult(batchId, 0, 0, queuedEntries.size)
         }
@@ -454,9 +458,20 @@ class CreatorBatchCoordinator @Inject internal constructor(
         return creators.getCreator(batch.creatorKey)?.platform
     }
 
+    suspend fun platformRiskUntil(platform: SourcePlatform): Long =
+        adaptiveDownloadController.platformRiskUntilAfterLoad(platform)
+
     suspend fun resume(creatorKey: String): String {
         val batch = batches.latestPaused(creatorKey)
             ?: return "没有等待继续的批次"
+        val platform = creators.getCreator(batch.creatorKey)?.platform
+        val riskUntil = platform?.let { adaptiveDownloadController.platformRiskUntilAfterLoad(it) } ?: 0L
+        val now = System.currentTimeMillis()
+        if (riskUntil > now) {
+            scheduleAutomaticResume(batch.batchId, riskUntil)
+            val seconds = ((riskUntil - now + 999L) / 1_000L).coerceAtLeast(1L)
+            return "${platform?.displayName.orEmpty()}风控冷却中，约 ${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')} 后自动继续"
+        }
         batches.recoverWebParsing(batch.batchId)
         val entries = batches.listWorks(batch.batchId)
         val webRequired = entries.count { it.status == CreatorBatchWorkStatus.WEB_REQUIRED }
@@ -483,6 +498,14 @@ class CreatorBatchCoordinator @Inject internal constructor(
         return "已继续处理 $paused 个作品"
     }
 
+    suspend fun deleteBatch(batchId: String) = withContext(Dispatchers.IO) {
+        val workName = uniqueWorkName(batchId)
+        workManager.cancelUniqueWork(workName).await()
+        batches.deleteWorksForBatch(batchId)
+        batches.deleteBatch(batchId)
+        logger.event(batchId, "BATCH", "BATCH_RECORD_DELETED", JSONObject())
+    }
+
     suspend fun cancelForCreator(creatorKey: String) = withContext(Dispatchers.IO) {
         batches.listForCreator(creatorKey).forEach { batch ->
             val workName = uniqueWorkName(batch.batchId)
@@ -498,11 +521,39 @@ class CreatorBatchCoordinator @Inject internal constructor(
         }
     }
 
+    private suspend fun scheduleAutomaticResume(batchId: String, riskUntil: Long) {
+        val autoResumeTag = autoResumeTag(batchId)
+        val alreadyScheduled = workManager.getWorkInfosForUniqueWork(uniqueWorkName(batchId))
+            .get(5, TimeUnit.SECONDS)
+            .any { info ->
+                autoResumeTag in info.tags && info.state in setOf(
+                    androidx.work.WorkInfo.State.ENQUEUED,
+                    androidx.work.WorkInfo.State.BLOCKED,
+                )
+            }
+        if (alreadyScheduled) return
+        val delayMs = (riskUntil - System.currentTimeMillis() + AUTO_RESUME_GRACE_MS)
+            .coerceAtLeast(AUTO_RESUME_GRACE_MS)
+        val request = OneTimeWorkRequestBuilder<CreatorBatchWorker>()
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
+            .setInputData(Data.Builder().putString(CreatorBatchWorker.KEY_BATCH_ID, batchId).build())
+            .addTag(batchId)
+            .addTag(autoResumeTag)
+            .build()
+        workManager.enqueueUniqueWork(
+            uniqueWorkName(batchId),
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            request,
+        ).await()
+    }
+
     companion object {
         private val XHS_REFRESHABLE_ERRORS = setOf("DETAIL_EMPTY", "URL_RESOLVE_FAILED")
         private const val XHS_DETAIL_FAILURE_CIRCUIT_LIMIT = 2
+        private const val AUTO_RESUME_GRACE_MS = 1_000L
 
         fun uniqueWorkName(batchId: String): String = "creator-batch-$batchId"
+        private fun autoResumeTag(batchId: String): String = "creator-batch-auto-resume-$batchId"
     }
 }
 

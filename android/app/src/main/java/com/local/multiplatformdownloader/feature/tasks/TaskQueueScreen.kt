@@ -114,6 +114,8 @@ internal fun TaskQueueScreen(
     onOpenQuestionArchive: (String) -> Unit,
     onVisibleTaskIdsChanged: (Set<String>) -> Unit,
     onOpenCreator: (String) -> Unit,
+    onResumeCreatorBatch: (String) -> Unit,
+    onDeleteCreatorBatch: (String) -> Unit,
 ) {
     val adaptive by viewModel.adaptiveDownloadState.collectAsStateWithLifecycle()
     val peakByAuthor by viewModel.authorTaskPeakBytesPerSecond.collectAsStateWithLifecycle()
@@ -173,6 +175,10 @@ internal fun TaskQueueScreen(
     LaunchedEffect(displayedTaskIds) { onVisibleTaskIdsChanged(displayedTaskIds) }
 
     Column(Modifier.fillMaxSize()) {
+        PlatformRiskCooldownBanner(
+            state = adaptive,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        )
         OutlinedCard(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
                 .clickable { showFilters = true },
@@ -219,6 +225,8 @@ internal fun TaskQueueScreen(
             emptyText = "暂无进行中的任务",
             creatorGroups = creatorGroups,
             onOpenCreatorGroup = onOpenCreator,
+            onResumeCreatorBatch = onResumeCreatorBatch,
+            onDeleteCreatorBatch = onDeleteCreatorBatch,
         )
     }
     if (showFilters) {
@@ -283,8 +291,11 @@ internal fun ActiveCreatorTaskGroupCard(
     val progress = group.batchSummary?.progressFraction?.takeIf { group.tasks.isEmpty() }
         ?: group.progressFraction.coerceIn(0f, 1f)
     val workCount = maxOf(group.tasks.size, group.batchSummary?.selected ?: 0)
+    val hasPendingBatchWork = group.batchSummary?.let {
+        it.queued > 0 || it.paused > 0 || it.foregroundRequired > 0
+    } == true
     val waitingForRisk = (platformRiskUntil[group.profile.platform] ?: 0L) >
-        System.currentTimeMillis() && group.tasks.any { it.status == TaskStatus.QUEUED }
+        System.currentTimeMillis() && (hasPendingBatchWork || group.tasks.any { it.status == TaskStatus.QUEUED })
     OutlinedCard(
         Modifier.fillMaxWidth().clickable {
             if (selectionMode && group.tasks.isNotEmpty()) onToggle() else onOpen()
@@ -342,6 +353,8 @@ internal fun ActiveCreatorTaskGroupDialog(
     viewModel: MainViewModel,
     requestAllFilesAccess: () -> Unit,
     onManageTask: (String) -> Unit,
+    onResumeCreatorBatch: (String) -> Unit,
+    onDeleteCreatorBatch: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var confirmCancel by remember { mutableStateOf(false) }
@@ -350,6 +363,8 @@ internal fun ActiveCreatorTaskGroupDialog(
     val pausable = group.tasks.filter { it.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING) }
     val resumable = group.tasks.filter { it.status == TaskStatus.PAUSED }
     val failed = group.tasks.filter { it.status == TaskStatus.FAILED }
+    val batchPaused = group.batchSummary?.paused?.let { it > 0 } == true
+    val hasBatchRecord = group.batchSummary != null
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -365,52 +380,72 @@ internal fun ActiveCreatorTaskGroupDialog(
                     }
                     Column(Modifier.weight(1f)) {
                         Text(group.profile.nickname, style = MaterialTheme.typography.titleMedium)
-                        Text("${group.tasks.size} 个活动作品", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "${maxOf(group.tasks.size, group.batchSummary?.selected ?: 0)} 个活动作品",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                     IconButton(
                         enabled = pausable.isNotEmpty(),
                         onClick = { pausable.forEach(viewModel::pauseTask) },
                     ) { Icon(Icons.Default.Pause, contentDescription = "暂停全部") }
                     IconButton(
-                        enabled = resumable.isNotEmpty(),
-                        onClick = { resumable.forEach(viewModel::resumeTask) },
+                        enabled = resumable.isNotEmpty() || batchPaused,
+                        onClick = {
+                            resumable.forEach(viewModel::resumeTask)
+                            if (batchPaused) onResumeCreatorBatch(group.profile.key)
+                        },
                     ) { Icon(Icons.Default.PlayArrow, contentDescription = "继续全部") }
                     IconButton(
                         enabled = failed.isNotEmpty(),
                         onClick = { viewModel.retryTasks(failed) },
                     ) { Icon(Icons.Default.Refresh, contentDescription = "重试失败项") }
                     IconButton(
-                        enabled = group.tasks.isNotEmpty(),
+                        enabled = group.tasks.isNotEmpty() || hasBatchRecord,
                         onClick = { confirmCancel = true },
                     ) { Icon(Icons.Default.Cancel, contentDescription = "取消全部") }
                     IconButton(
-                        enabled = group.tasks.isNotEmpty(),
+                        enabled = group.tasks.isNotEmpty() || hasBatchRecord,
                         onClick = { confirmDelete = true },
                     ) { Icon(Icons.Default.Delete, contentDescription = "删除全部") }
                 }
                 HorizontalDivider()
-                TasksScreen(
-                    tasks = group.tasks,
-                    questionArchives = emptyMap(),
-                    viewModel = viewModel,
-                    chooseFolder = {},
-                    requestAllFilesAccess = requestAllFilesAccess,
-                    onManageTask = onManageTask,
-                    selectionMode = false,
-                    selectedTaskIds = emptySet(),
-                    platformFilter = null,
-                    onPlatformFilter = {},
-                    onToggleTaskSelection = {},
-                    focusedTaskId = null,
-                    onTaskFocused = {},
-                    onOpenQuestionArchive = {},
-                    groupBilibili = false,
-                    modifier = Modifier.weight(1f),
-                    showPlatformFilter = false,
-                    showAdaptiveStatus = false,
-                    allowPreview = false,
-                    allowFileActions = false,
-                )
+                if (group.tasks.isEmpty() && hasBatchRecord) {
+                    Column(
+                        Modifier.fillMaxWidth().weight(1f).padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("作品尚未进入下载队列", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (batchPaused) "批量准备已暂停，可等待冷却结束自动继续，或点击右上角继续。"
+                            else "正在准备批量作品。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    TasksScreen(
+                        tasks = group.tasks,
+                        questionArchives = emptyMap(),
+                        viewModel = viewModel,
+                        chooseFolder = {},
+                        requestAllFilesAccess = requestAllFilesAccess,
+                        onManageTask = onManageTask,
+                        selectionMode = false,
+                        selectedTaskIds = emptySet(),
+                        platformFilter = null,
+                        onPlatformFilter = {},
+                        onToggleTaskSelection = {},
+                        focusedTaskId = null,
+                        onTaskFocused = {},
+                        onOpenQuestionArchive = {},
+                        groupBilibili = false,
+                        modifier = Modifier.weight(1f),
+                        showPlatformFilter = false,
+                        showAdaptiveStatus = false,
+                        allowPreview = false,
+                        allowFileActions = false,
+                    )
+                }
             }
         }
     }
@@ -423,7 +458,9 @@ internal fun ActiveCreatorTaskGroupDialog(
                 Button(onClick = {
                     group.tasks.filter { it.status in setOf(TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PAUSED) }
                         .forEach(viewModel::cancelTask)
+                    group.batchSummary?.batchId?.let(onDeleteCreatorBatch)
                     confirmCancel = false
+                    onDismiss()
                 }) { Text("取消任务") }
             },
             dismissButton = { TextButton(onClick = { confirmCancel = false }) { Text("返回") } },
@@ -435,10 +472,12 @@ internal fun ActiveCreatorTaskGroupDialog(
             title = { Text("删除该作者的活动任务？") },
             text = {
                 Column {
-                    Text("将删除当前卡片内的 ${group.tasks.size} 个任务记录。")
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = deleteFiles, onCheckedChange = { deleteFiles = it })
-                        Text("同时删除已产生的本地文件")
+                    Text("将删除当前卡片内的 ${maxOf(group.tasks.size, group.batchSummary?.selected ?: 0)} 个任务记录。")
+                    if (group.tasks.isNotEmpty()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = deleteFiles, onCheckedChange = { deleteFiles = it })
+                            Text("同时删除已产生的本地文件")
+                        }
                     }
                 }
             },
@@ -448,6 +487,7 @@ internal fun ActiveCreatorTaskGroupDialog(
                         requestAllFilesAccess()
                     } else {
                         viewModel.deleteTasks(group.tasks, deleteFiles)
+                        group.batchSummary?.batchId?.let(onDeleteCreatorBatch)
                         confirmDelete = false
                         onDismiss()
                     }

@@ -172,6 +172,12 @@ interface DownloadBatchDao {
     @Query("DELETE FROM batch_works WHERE work_key IN (:keys) AND status IN ('FAILED', 'PAUSED') AND task_id = '' AND batch_id != :retainedBatchId")
     suspend fun deleteInactivePreparations(keys: List<String>, retainedBatchId: String = "")
 
+    @Query("DELETE FROM batch_works WHERE batch_id = :batchId")
+    suspend fun deleteWorksForBatch(batchId: String)
+
+    @Query("DELETE FROM download_batches WHERE batch_id = :batchId")
+    suspend fun deleteBatch(batchId: String)
+
     @Query("SELECT * FROM download_batches WHERE creator_key = :creatorKey AND status IN ('PAUSED', 'WAITING_FOREGROUND') AND EXISTS (SELECT 1 FROM batch_works WHERE batch_works.batch_id = download_batches.batch_id AND batch_works.status IN ('PAUSED', 'WEB_REQUIRED', 'PARSING')) ORDER BY created_at DESC LIMIT 1")
     suspend fun latestPaused(creatorKey: String): DownloadBatchEntity?
 

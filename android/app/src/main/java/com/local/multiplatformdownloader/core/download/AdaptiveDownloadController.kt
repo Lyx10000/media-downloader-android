@@ -207,6 +207,11 @@ class AdaptiveDownloadController @Inject constructor(
         return isPlatformBlocked(platform)
     }
 
+    suspend fun platformRiskUntilAfterLoad(platform: SourcePlatform): Long {
+        riskLoaded.await()
+        return riskUntil[platform] ?: 0L
+    }
+
     fun reportPlatformRisk(
         platform: SourcePlatform,
         code: String,

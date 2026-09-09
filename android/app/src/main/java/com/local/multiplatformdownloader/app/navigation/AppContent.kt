@@ -569,6 +569,8 @@ internal fun DownloaderApp(
                         localSection = 1
                         destination = 2
                     },
+                    onResumeCreatorBatch = creatorViewModel::resumeCreatorBatch,
+                    onDeleteCreatorBatch = creatorViewModel::deleteCreatorBatch,
                 )
                 2 -> LocalDownloadsScreen(
                     uiState = uiState,

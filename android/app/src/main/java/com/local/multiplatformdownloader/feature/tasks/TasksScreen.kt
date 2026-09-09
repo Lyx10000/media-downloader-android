@@ -159,6 +159,8 @@ internal fun TasksScreen(
     emptyText: String = "暂无进行中的任务",
     creatorGroups: List<ActiveCreatorTaskGroup> = emptyList(),
     onOpenCreatorGroup: (String) -> Unit = {},
+    onResumeCreatorBatch: (String) -> Unit = {},
+    onDeleteCreatorBatch: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val expandedTaskId by viewModel.expandedTaskId.collectAsStateWithLifecycle()
@@ -234,7 +236,7 @@ internal fun TasksScreen(
                 group = group,
                 platformRiskUntil = adaptiveDownloadState.platformRiskUntil,
                 onOpen = {
-                    if (group.tasks.isEmpty()) onOpenCreatorGroup(group.profile.key)
+                    if (group.tasks.isEmpty() && group.batchSummary == null) onOpenCreatorGroup(group.profile.key)
                     else openCreatorGroup = group.profile.key
                 },
                 selectionMode = selectionMode,
@@ -605,6 +607,8 @@ internal fun TasksScreen(
                 viewModel = viewModel,
                 requestAllFilesAccess = requestAllFilesAccess,
                 onManageTask = onManageTask,
+                onResumeCreatorBatch = onResumeCreatorBatch,
+                onDeleteCreatorBatch = onDeleteCreatorBatch,
                 onDismiss = { openCreatorGroup = null },
             )
         } else {
