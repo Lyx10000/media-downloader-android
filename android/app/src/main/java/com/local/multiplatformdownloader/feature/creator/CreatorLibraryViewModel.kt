@@ -119,6 +119,7 @@ class CreatorLibraryViewModel @Inject internal constructor(
     private var nextCursor = ""
     private var customTreeUri: String? = null
     private var observedTasks: List<TaskRecord> = emptyList()
+    private val creatorListPositions = mutableMapOf<String, CreatorDetailListPosition>()
     private val detailListPositions = mutableMapOf<String, CreatorDetailListPosition>()
     private val detailTabs = mutableMapOf<String, Int>()
     private val lastManualRefreshAt = mutableMapOf<String, Long>()
@@ -207,6 +208,20 @@ class CreatorLibraryViewModel @Inject internal constructor(
 
     fun setPlatformFilter(platform: SourcePlatform?) {
         _state.update { it.copy(platformFilter = platform) }
+    }
+
+    internal fun creatorListPosition(platform: SourcePlatform?): CreatorDetailListPosition =
+        creatorListPositions[platform?.wireValue.orEmpty()] ?: CreatorDetailListPosition()
+
+    internal fun saveCreatorListPosition(
+        platform: SourcePlatform?,
+        index: Int,
+        offset: Int,
+    ) {
+        creatorListPositions[platform?.wireValue.orEmpty()] = CreatorDetailListPosition(
+            index = index.coerceAtLeast(0),
+            offset = offset.coerceAtLeast(0),
+        )
     }
 
     internal fun detailListPosition(creatorKey: String, tab: Int): CreatorDetailListPosition =

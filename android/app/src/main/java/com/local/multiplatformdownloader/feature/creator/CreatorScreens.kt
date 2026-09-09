@@ -219,6 +219,18 @@ internal fun CreatorLibraryScreen(
     val selectedActive = selectedProfiles.filterNot(CreatorProfile::archived)
     val selectedArchived = selectedProfiles.filter(CreatorProfile::archived)
     val selectedTaskCount = selectedActive.sumOf { state.taskSummaries[it.key]?.total ?: 0 }
+    val savedListPosition = remember(state.platformFilter) {
+        viewModel.creatorListPosition(state.platformFilter)
+    }
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = savedListPosition.index,
+        initialFirstVisibleItemScrollOffset = savedListPosition.offset,
+    )
+    val listItemCount = 1 +
+        (if (state.isDeletingCreators) 1 else 0) +
+        (if (visibleCreators.isEmpty()) 1 else 0) +
+        active.size +
+        (if (archived.isNotEmpty()) 1 + archived.size else 0)
 
     BackHandler(enabled = selectionMode) {
         onSelectionMode(false)
@@ -232,6 +244,22 @@ internal fun CreatorLibraryScreen(
             onShowDeleteDialog(false)
         }
     }
+    LaunchedEffect(state.platformFilter) {
+        val position = viewModel.creatorListPosition(state.platformFilter)
+        listState.scrollToItem(
+            index = position.index.coerceIn(0, (listItemCount - 1).coerceAtLeast(0)),
+            scrollOffset = position.offset,
+        )
+    }
+    DisposableEffect(state.platformFilter, listState) {
+        onDispose {
+            viewModel.saveCreatorListPosition(
+                platform = state.platformFilter,
+                index = listState.firstVisibleItemIndex,
+                offset = listState.firstVisibleItemScrollOffset,
+            )
+        }
+    }
     if (state.creators.none { it.platform in CREATOR_LIBRARY_PLATFORMS }) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("还没有关注的作者")
@@ -239,6 +267,7 @@ internal fun CreatorLibraryScreen(
         return
     }
     LazyColumn(
+        state = listState,
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
