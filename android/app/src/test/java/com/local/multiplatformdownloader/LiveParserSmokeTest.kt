@@ -1,7 +1,7 @@
 package com.local.multiplatformdownloader
 
 import com.local.multiplatformdownloader.core.network.OkHttpParserClient
-import com.local.multiplatformdownloader.platform.common.DouyinPlatformParser
+import com.local.multiplatformdownloader.platform.douyin.DouyinPlatformParser
 
 
 import org.junit.Assert.assertFalse

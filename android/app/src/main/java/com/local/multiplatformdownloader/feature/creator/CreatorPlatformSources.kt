@@ -8,7 +8,7 @@ import com.local.multiplatformdownloader.core.model.WebPageSnapshot
 import com.local.multiplatformdownloader.core.network.ParserHttpClient
 import com.local.multiplatformdownloader.core.network.ParserHttpResponse
 import com.local.multiplatformdownloader.platform.bilibili.BilibiliCreatorSource
-import com.local.multiplatformdownloader.platform.common.DouyinPlatformParser
+import com.local.multiplatformdownloader.platform.douyin.DouyinPlatformParser
 import com.local.multiplatformdownloader.core.network.firstArray
 import com.local.multiplatformdownloader.core.network.firstObject
 import com.local.multiplatformdownloader.core.network.firstString

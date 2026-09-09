@@ -3,7 +3,7 @@ package com.local.multiplatformdownloader.platform.zhihu
 
 import com.local.multiplatformdownloader.core.network.ParserHttpClient
 import com.local.multiplatformdownloader.feature.zhihuarchive.ZhihuQuestionPage
-import com.local.multiplatformdownloader.platform.common.ZhihuPlatformParser
+import com.local.multiplatformdownloader.platform.zhihu.ZhihuPlatformParser
 import com.local.multiplatformdownloader.platform.common.PlatformParseException
 
 import java.net.URLEncoder

@@ -2,7 +2,7 @@ package com.local.multiplatformdownloader.feature.zhihuarchive
 
 import com.local.multiplatformdownloader.core.logging.Redactor
 import com.local.multiplatformdownloader.core.network.ParserHttpClient
-import com.local.multiplatformdownloader.platform.common.ZhihuPlatformParser
+import com.local.multiplatformdownloader.platform.zhihu.ZhihuPlatformParser
 
 import java.io.File
 import java.text.SimpleDateFormat

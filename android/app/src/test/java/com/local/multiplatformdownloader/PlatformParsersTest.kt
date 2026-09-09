@@ -4,9 +4,9 @@ import com.local.multiplatformdownloader.core.model.MediaKind
 import com.local.multiplatformdownloader.core.model.WebPageSnapshot
 import com.local.multiplatformdownloader.core.network.ParserHttpClient
 import com.local.multiplatformdownloader.core.network.ParserHttpResponse
-import com.local.multiplatformdownloader.platform.common.DouyinPlatformParser
-import com.local.multiplatformdownloader.platform.common.XiaohongshuPlatformParser
-import com.local.multiplatformdownloader.platform.common.ZhihuPlatformParser
+import com.local.multiplatformdownloader.platform.douyin.DouyinPlatformParser
+import com.local.multiplatformdownloader.platform.xiaohongshu.XiaohongshuPlatformParser
+import com.local.multiplatformdownloader.platform.zhihu.ZhihuPlatformParser
 import com.local.multiplatformdownloader.platform.douyin.DouyinFallbackExtractor
 
 
