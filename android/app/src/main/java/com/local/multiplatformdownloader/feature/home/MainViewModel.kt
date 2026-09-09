@@ -336,6 +336,9 @@ class MainViewModel @Inject internal constructor(
             }
         }
         viewModelScope.launch {
+            adaptiveDownloadController.transferSpeedSnapshots.collectLatest(::updateAuthorTaskPeaks)
+        }
+        viewModelScope.launch {
             store.observeAll().collectLatest { records ->
                 tasks = records.filterNot(TaskRecord::creatorChild)
                 _uiState.update { state -> state.copy(allTasks = records) }
@@ -365,13 +368,8 @@ class MainViewModel @Inject internal constructor(
     }
 
     private fun updateAuthorTaskPeaks(taskSpeeds: Map<String, Long>) {
-        val activeByAuthor = _uiState.value.allTasks.asSequence()
-            .filter { taskCreatorKey(it).isNotBlank() && isTaskQueueVisible(it) }
-            .groupBy(::taskCreatorKey)
         _authorTaskPeakBytesPerSecond.update { previous ->
-            activeByAuthor.mapValues { (authorKey, tasks) ->
-                maxOf(previous[authorKey] ?: 0L, tasks.sumOf { taskSpeeds[it.id] ?: 0L })
-            }
+            accumulateAuthorTaskPeaks(previous, _uiState.value.allTasks, taskSpeeds)
         }
     }
 
@@ -1531,6 +1529,17 @@ class MainViewModel @Inject internal constructor(
     }
 
 }
+
+internal fun accumulateAuthorTaskPeaks(
+    previous: Map<String, Long>,
+    tasks: List<TaskRecord>,
+    taskSpeeds: Map<String, Long>,
+): Map<String, Long> = tasks.asSequence()
+    .filter { taskCreatorKey(it).isNotBlank() && isTaskQueueVisible(it) }
+    .groupBy(::taskCreatorKey)
+    .mapValues { (authorKey, activeTasks) ->
+        maxOf(previous[authorKey] ?: 0L, activeTasks.sumOf { taskSpeeds[it.id] ?: 0L })
+    }
 
 private fun TaskPreviewMedia?.samePreviewSource(other: TaskPreviewMedia): Boolean =
     this?.uri == other.uri

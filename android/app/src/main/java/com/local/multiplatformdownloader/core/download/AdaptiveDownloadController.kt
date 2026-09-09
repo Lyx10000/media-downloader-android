@@ -21,9 +21,13 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
@@ -84,6 +88,13 @@ class AdaptiveDownloadController @Inject constructor(
     private val deviceHealthSampler = DeviceHealthSampler(applicationContext)
     private val _state = MutableStateFlow(AdaptiveDownloadState())
     val state: StateFlow<AdaptiveDownloadState> = _state.asStateFlow()
+    private val _transferSpeedSnapshots = MutableSharedFlow<Map<String, Long>>(
+        replay = 1,
+        extraBufferCapacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val transferSpeedSnapshots: SharedFlow<Map<String, Long>> =
+        _transferSpeedSnapshots.asSharedFlow()
     private val riskLoaded = CompletableDeferred<Unit>()
     private val riskMutex = Mutex()
     private val taskGate = AdaptiveTaskGate<SourcePlatform>(
@@ -190,6 +201,11 @@ class AdaptiveDownloadController @Inject constructor(
             totalBytes = totalBytes.coerceAtLeast(0L),
             recordedAtMs = SystemClock.elapsedRealtime(),
         )
+        if (bytesPerSecond > 0L) {
+            // StateFlow may conflate a tiny transfer's final non-zero sample with the
+            // immediate zero-speed cleanup. This event stream preserves that peak sample.
+            _transferSpeedSnapshots.tryEmit(currentTaskSpeeds())
+        }
     }
 
     fun finishTransfer(taskId: String, channel: String) {
@@ -415,6 +431,12 @@ class AdaptiveDownloadController @Inject constructor(
             )
         }
     }
+
+    private fun currentTaskSpeeds(now: Long = SystemClock.elapsedRealtime()): Map<String, Long> =
+        transferSamples.values
+            .filter { now - it.recordedAtMs <= SAMPLE_STALE_MS }
+            .groupBy(TransferSample::taskId)
+            .mapValues { (_, samples) -> samples.sumOf(TransferSample::bytesPerSecond) }
 
     private suspend fun expireCircuits(nowEpochMs: Long) {
         val expired = riskMutex.withLock {

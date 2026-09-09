@@ -13,6 +13,7 @@ import com.local.multiplatformdownloader.feature.tasks.isTaskRedownloadEligible
 import com.local.multiplatformdownloader.feature.tasks.isTaskQueueVisible
 import com.local.multiplatformdownloader.feature.tasks.reconcileTaskSelection
 import com.local.multiplatformdownloader.feature.tasks.toggleTaskSelection
+import com.local.multiplatformdownloader.feature.home.accumulateAuthorTaskPeaks
 
 
 import org.junit.Assert.assertEquals
@@ -118,6 +119,22 @@ class TaskSelectionTest {
 
         assertEquals(false, isTaskQueueVisible(cancelled))
         assertEquals(false, isLocalContentTask(cancelled))
+    }
+
+    @Test
+    fun shortTransferSampleStillUpdatesAuthorPeak() {
+        val running = task(TaskStatus.RUNNING).copy(
+            id = "short-image",
+            authorKey = "douyin:author",
+        )
+
+        val updated = accumulateAuthorTaskPeaks(
+            previous = emptyMap(),
+            tasks = listOf(running),
+            taskSpeeds = mapOf("short-image" to 2_400_000L),
+        )
+
+        assertEquals(2_400_000L, updated["douyin:author"])
     }
 
     private fun task(
