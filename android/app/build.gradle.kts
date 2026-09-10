@@ -22,8 +22,8 @@ android {
         applicationId = "com.local.douyindownloader"
         minSdk = 29
         targetSdk = 34
-        versionCode = 45
-        versionName = "1.8.0"
+        versionCode = 46
+        versionName = "1.8.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
